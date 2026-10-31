@@ -7,6 +7,7 @@ use crate::cdc;
 use crate::entry::{normalize_key, Entry};
 use crate::error::{Error, Result};
 use crate::hash::{self, ZERO_HASH};
+use crate::pack::{self, PackOptions, PackReport};
 use crate::snapshot;
 use crate::store::{self, codec, DB_FILE};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -25,6 +26,7 @@ const VACUUM_THRESHOLD: i64 = 64 * 1024 * 1024;
 pub struct Repo {
     pub(crate) connection: Connection,
     dir: PathBuf,
+    db_path: PathBuf,
 }
 
 /// Result of `import`.
@@ -163,28 +165,56 @@ impl Repo {
         )?;
         let created = chrono_free_now();
         store::set_meta(&connection, "created_at", created.to_string().as_bytes())?;
-        let repo = Self { connection, dir };
+        let repo = Self {
+            connection,
+            dir,
+            db_path,
+        };
         repo.write_genesis()?;
         Ok(repo)
     }
 
     /// Open an existing repository.
-    pub fn open(dir: impl AsRef<Path>) -> Result<Self> {
-        let dir = dir.as_ref().to_path_buf();
-        let db_path = dir.join(DB_FILE);
+    ///
+    /// `path` may be a repository directory (containing [`DB_FILE`]) or a
+    /// single-file export produced by [`Repo::pack`].
+    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        let dir = path.as_ref().to_path_buf();
+        let db_path = if dir.is_file() {
+            dir.clone()
+        } else {
+            dir.join(DB_FILE)
+        };
         if !db_path.exists() {
             return Err(Error::NotARepository(dir.display().to_string()));
         }
         let connection = store::open(&db_path)?;
         store::check_version(&connection)?;
         store::migrate(&connection)?;
-        Ok(Self { connection, dir })
+        Ok(Self {
+            connection,
+            dir,
+            db_path,
+        })
     }
 
-    /// Repository directory.
+    /// Repository directory (or the exported file when opened from a pack).
     #[must_use]
     pub fn dir(&self) -> &Path {
         &self.dir
+    }
+
+    /// Whether this repository starts at HEAD and expects missing parents.
+    pub fn is_shallow(&self) -> Result<bool> {
+        pack::is_shallow(&self.connection)
+    }
+
+    /// Export reachable objects into a single portable file.
+    pub fn pack(&self, out: impl AsRef<Path>, options: PackOptions) -> Result<PackReport> {
+        let head = self.head()?.ok_or_else(|| {
+            Error::InvalidArgument("pack requires at least one commit".to_string())
+        })?;
+        pack::pack(&self.connection, &self.db_path, head, out.as_ref(), options)
     }
 
     fn write_genesis(&self) -> Result<()> {

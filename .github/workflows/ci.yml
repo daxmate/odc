@@ -52,6 +52,24 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: bash scripts/e2e.sh
 
+  apple:
+    name: apple
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          # Every target scripts/build-odc-xcframework.sh builds.
+          targets: aarch64-apple-darwin,x86_64-apple-darwin,aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: apple
+      - name: build XCFramework
+        run: bash scripts/build-odc-xcframework.sh
+      - name: swift test
+        run: swift test --package-path apps/apple/ODictKit
+
   deny:
     name: cargo deny
     runs-on: ubuntu-latest

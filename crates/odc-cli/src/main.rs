@@ -106,6 +106,18 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Export the repository as one portable .odc file.
+    Pack {
+        /// Write only HEAD's commit, without its history.
+        #[arg(long)]
+        shallow: bool,
+        /// Output file (default: `<repo>.odc` next to the repository).
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// Replace an existing output file.
+        #[arg(long)]
+        force: bool,
+    },
     /// Compare two revisions (word level).
     Diff {
         /// Base revision (HEAD, HEAD~1 or a hash prefix).
@@ -317,6 +329,9 @@ fn run() -> odc_core::Result<ExitCode> {
                     );
                 }
             }
+            if repo.is_shallow()? {
+                eprintln!("(shallow)");
+            }
             Ok(ExitCode::SUCCESS)
         }
         Command::Show { word, json } => {
@@ -390,6 +405,25 @@ fn run() -> odc_core::Result<ExitCode> {
             let repo = Repo::open(&cli.repo)?;
             let written = export_entries(&repo, &format, output.as_deref())?;
             eprintln!("exported {written} entries as {format}");
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Pack {
+            shallow,
+            output,
+            force,
+        } => {
+            let repo = Repo::open(&cli.repo)?;
+            let out = output.unwrap_or_else(|| default_pack_path(&cli.repo));
+            let report = repo.pack(&out, odc_core::pack::PackOptions { shallow, force })?;
+            let kind = if report.shallow { "shallow" } else { "full" };
+            println!(
+                "packed {kind}: {} ({} commits, {} blocks, {} entries, {} bytes)",
+                report.path.display(),
+                report.commits,
+                report.blocks,
+                report.entries,
+                report.bytes
+            );
             Ok(ExitCode::SUCCESS)
         }
         Command::Diff { from, to, json } => {
@@ -749,6 +783,24 @@ fn run_patch(repo_dir: &std::path::Path, command: PatchCommand) -> odc_core::Res
         }
     }
 }
+fn default_pack_path(repo: &std::path::Path) -> PathBuf {
+    if repo.is_dir() {
+        let name = repo.file_name().map_or_else(
+            || "packed".to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        let parent = repo.parent().unwrap_or_else(|| std::path::Path::new("."));
+        parent.join(format!("{name}.odc"))
+    } else {
+        let stem = repo.file_stem().map_or_else(
+            || "packed".to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        let parent = repo.parent().unwrap_or_else(|| std::path::Path::new("."));
+        parent.join(format!("{stem}.packed.odc"))
+    }
+}
+
 fn now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

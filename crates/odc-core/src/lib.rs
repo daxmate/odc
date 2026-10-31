@@ -21,6 +21,7 @@ pub mod error;
 pub mod hash;
 pub mod mdx;
 pub mod merge;
+pub mod pack;
 pub mod patch;
 pub mod repo;
 pub mod snapshot;

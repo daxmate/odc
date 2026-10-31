@@ -220,6 +220,8 @@ CREATE TABLE staging(word TEXT PRIMARY KEY, display TEXT NOT NULL,
 * `staging` 是工作区（未提交内容）。它不属于互操作格式。已提交词条只保留指针（`word`、`display`、`content_hash`），`payload` 为 NULL；未提交词条必须携带 payload。需要正文时按 `content_hash` 从 `entries` 定位块、解压并校验。
 * codec：`0` = 原始字节，`1` = zstd（压缩级别 3，实现可调，不影响任何哈希）。
 * `conflicts` 保存未完成的合并中每个冲突词条的决定（见 §10.1 与 `docs/merge.md`）。
+* `meta.shallow = 1`（ASCII `"1"`）标记由 `pack --shallow` 导出的文件：HEAD 的父提交可以缺失，`log` 在边界结束、`verify` 视其为正常终点。缺省 `0`；这是可选元数据，不改变 `format_version`，也不改写提交对象。详见 `docs/shallow.md`。
+* `pack` 的产物是一个独立的 SQLite 数据库文件，可以直接作为 `--repo` 打开；它不包含 `staging`、`conflicts` 或 `meta.merge`。
 
 ## 10. 命令语义
 
@@ -234,6 +236,7 @@ CREATE TABLE staging(word TEXT PRIMARY KEY, display TEXT NOT NULL,
 | `lookup <word>` | 同 `show`，词条不存在时退出码 4 |
 | `search --prefix P [-n N]` | 归一化前缀查询，走 entries 索引，按键升序 |
 | `export --format jsonl\|csv [-o FILE]` | 导出全部已提交词条（display + raw_html 等） |
+| `pack [-o FILE] [--shallow] [--force]` | 导出为单个 .odc 文件：full 写 HEAD 可达的全部提交与快照，`--shallow` 只写 HEAD；`--force` 覆盖已存在的文件 |
 | `diff A B` | 词条级 added / removed / modified；`--json` 输出结构化结果 |
 | `status` | 工作区相对 HEAD 的 added / modified / removed |
 | `verify` | 校验块哈希、块解码、索引偏移、content_hash、field_hashes、commit 哈希链、HEAD 根一致性；逐块流式校验，内存不随词典规模增长 |

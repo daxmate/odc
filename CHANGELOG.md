@@ -35,6 +35,14 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   `scripts/build-odc-xcframework.sh` assembles macOS, iOS device and iOS
   simulator slices into `ODCFFI.xcframework`.
 
+* `odc pack [-o FILE] [--shallow] [--force]`: exports a repository as one
+  portable SQLite `.odc` file. `--shallow` writes only HEAD and records
+  `meta.shallow`; `log` marks the boundary, `verify` and `gc` treat missing
+  parents as expected. `scripts/bench-shallow.sh` reports the size baseline.
+
+* CI: the `apple` job builds every XCFramework slice and runs the
+  `ODictKit` Swift tests on macOS.
+
 * `odc merge A B [--strategy auto|ours|theirs|union] [--json]`: three-way
   merge over the `parent` / `parent2` DAG with a deterministic merge base,
   fast-forward, word-level and field-level automatic merges.
