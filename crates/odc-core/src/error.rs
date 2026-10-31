@@ -69,6 +69,16 @@ pub enum Error {
         /// Configured limit in bytes.
         limit: usize,
     },
+    /// A patch body did not match its trailing checksum.
+    PatchChecksum,
+    /// The patch base is not the repository HEAD.
+    PatchBaseMismatch(String),
+    /// HEAD descends from the base, so applying needs a three-way merge.
+    PatchNeedsMerge(String),
+    /// The patch target commit is already present locally.
+    PatchApplied(String),
+    /// The patch byte stream is structurally invalid.
+    PatchFormat(String),
 }
 
 impl Error {
@@ -98,6 +108,11 @@ impl Error {
             Self::Sqlite(_) => "ODC-E020",
             Self::Mdx(_) => "ODC-E021",
             Self::EntryTooLarge { .. } => "ODC-E022",
+            Self::PatchChecksum => "ODC-E023",
+            Self::PatchBaseMismatch(_) => "ODC-E024",
+            Self::PatchNeedsMerge(_) => "ODC-E025",
+            Self::PatchApplied(_) => "ODC-E026",
+            Self::PatchFormat(_) => "ODC-E027",
         }
     }
 }
@@ -136,6 +151,13 @@ impl fmt::Display for Error {
             Self::EntryTooLarge { word, bytes, limit } => {
                 format!("entry {word} is {bytes} bytes, over the {limit}-byte MDX limit")
             }
+            Self::PatchChecksum => "patch checksum does not match its body".to_string(),
+            Self::PatchBaseMismatch(detail) => format!("patch base does not match HEAD: {detail}"),
+            Self::PatchNeedsMerge(detail) => {
+                format!("patch needs a three-way merge (M4): {detail}")
+            }
+            Self::PatchApplied(detail) => format!("patch is already applied: {detail}"),
+            Self::PatchFormat(detail) => format!("malformed patch: {detail}"),
         };
         write!(f, "{}: {message}", self.code())
     }

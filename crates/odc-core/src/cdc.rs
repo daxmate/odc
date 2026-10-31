@@ -9,6 +9,7 @@
 
 use crate::block::Record;
 use crate::hash;
+use crate::varint;
 use std::ops::Range;
 use std::sync::OnceLock;
 
@@ -51,6 +52,71 @@ fn roll(mut state: u64, bytes: &[u8]) -> (u64, bool) {
         }
     }
     (state, hit)
+}
+
+/// Record identity that is enough to reproduce chunk boundaries without the
+/// payload bytes: key, payload digest and payload length.
+#[derive(Clone, Copy, Debug)]
+pub struct RecordShape<'a> {
+    /// Record key bytes.
+    pub key: &'a [u8],
+    /// BLAKE3 digest of the payload.
+    pub content_hash: &'a [u8; 32],
+    /// Payload length in bytes.
+    pub payload_len: usize,
+}
+
+impl RecordShape<'_> {
+    /// Encoded record size, matching the size used by the chunker.
+    #[must_use]
+    pub fn encoded_len(&self) -> usize {
+        varint::encoded_len(self.key.len() as u64)
+            + self.key.len()
+            + varint::encoded_len(self.payload_len as u64)
+            + self.payload_len
+    }
+}
+
+/// Split records described by `RecordShape` into block ranges of record
+/// indices. Produces exactly the ranges `boundaries` yields for records with
+/// the same keys, payload lengths and payload digests.
+#[must_use]
+pub fn boundaries_shaped(records: &[RecordShape<'_>]) -> Vec<Range<usize>> {
+    let mut ranges = Vec::new();
+    if records.is_empty() {
+        return ranges;
+    }
+    let mut start = 0usize;
+    let mut size = 0usize;
+    let mut state = 0u64;
+    for (index, record) in records.iter().enumerate() {
+        let record_len = record.encoded_len();
+        if size > 0 && size + record_len > MAX_CHUNK {
+            ranges.push(start..index);
+            start = index;
+            size = 0;
+            state = 0;
+        }
+        size += record_len;
+        let mut stream = Vec::with_capacity(record.key.len() + 1 + 32);
+        stream.extend_from_slice(record.key);
+        stream.push(0x00);
+        stream.extend_from_slice(record.content_hash);
+        let (next_state, hit) = roll(state, &stream);
+        state = next_state;
+        let boundary = size >= MIN_CHUNK && hit;
+        let oversized = size >= MAX_CHUNK;
+        if boundary || oversized {
+            ranges.push(start..index + 1);
+            start = index + 1;
+            size = 0;
+            state = 0;
+        }
+    }
+    if start < records.len() {
+        ranges.push(start..records.len());
+    }
+    ranges
 }
 
 /// Split `records` (already sorted by key) into block ranges of record

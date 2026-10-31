@@ -8,7 +8,8 @@
 //! * BLAKE3 hashing and Merkle roots (module `hash`),
 //! * a SQLite-backed repository with commit / log / diff / verify
 //!   (module `repo`),
-//! * an MDX (MDict) import adapter (module `mdx`).
+//! * an MDX (MDict) import adapter (module `mdx`),
+//! * `ODP1` patch creation and application (module `patch`).
 //!
 //! The normative description lives in `docs/odc-spec.md`.
 

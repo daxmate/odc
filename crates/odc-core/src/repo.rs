@@ -19,7 +19,7 @@ pub const DEFAULT_AUTHOR: &str = "odc";
 
 /// A checked-out repository backed by `odc.db`.
 pub struct Repo {
-    connection: Connection,
+    pub(crate) connection: Connection,
     dir: PathBuf,
 }
 
@@ -135,7 +135,7 @@ fn decompress(data: &[u8], raw_size: usize) -> Result<Vec<u8>> {
     zstd::bulk::decompress(data, raw_size).map_err(|error| Error::Io(error.to_string()))
 }
 
-fn hash_from_blob(bytes: &[u8]) -> Result<[u8; 32]> {
+pub(crate) fn hash_from_blob(bytes: &[u8]) -> Result<[u8; 32]> {
     bytes
         .try_into()
         .map_err(|_| Error::Inconsistent("hash column is not 32 bytes".to_string()))
@@ -850,7 +850,7 @@ impl Repo {
         Ok(out)
     }
 
-    fn load_block_raw(&self, block_hash: &[u8]) -> Result<Vec<u8>> {
+    pub(crate) fn load_block_raw(&self, block_hash: &[u8]) -> Result<Vec<u8>> {
         let row = self
             .connection
             .query_row(
@@ -914,7 +914,10 @@ impl Repo {
     ///
     /// The compressed blob is decoded on the fly and only one entry is held in
     /// memory at a time.
-    fn snapshot_reader(&self, hash: &[u8; 32]) -> Result<snapshot::SnapshotReader<impl Read + '_>> {
+    pub(crate) fn snapshot_reader(
+        &self,
+        hash: &[u8; 32],
+    ) -> Result<snapshot::SnapshotReader<impl Read + '_>> {
         let rowid: Option<i64> = self
             .connection
             .query_row(
@@ -955,6 +958,32 @@ impl Repo {
             u64::try_from(raw_size).unwrap_or(u64::MAX),
             reader.bytes_read(),
         ))
+    }
+
+    /// Materialise a commit index and check it against the commit row.
+    ///
+    /// Returns `(word, content_hash)` pairs in index order and fails with
+    /// `ODC-E018` when the snapshot does not reproduce `entry_root` or
+    /// `entry_count`.
+    pub(crate) fn snapshot_pairs(
+        &self,
+        hash: &[u8; 32],
+        commit: &CommitRecord,
+    ) -> Result<Vec<(String, [u8; 32])>> {
+        let mut reader = self.snapshot_reader(hash)?;
+        let mut pairs = Vec::new();
+        let mut accumulator = hash::MerkleAccumulator::new();
+        while let Some((word, digest)) = reader.next_pair()? {
+            accumulator.push(hash::leaf_hash(word.as_bytes(), &digest));
+            pairs.push((word, digest));
+        }
+        if accumulator.finish() != commit.entry_root || pairs.len() as u64 != commit.entry_count {
+            return Err(Error::Inconsistent(format!(
+                "commit {} index does not match its roots",
+                hash::to_hex(hash)
+            )));
+        }
+        Ok(pairs)
     }
 
     /// Word-level diff between two revisions.
@@ -1388,7 +1417,7 @@ impl Repo {
         })
     }
 }
-fn decode_block_data(codec_id: i64, raw_size: usize, data: &[u8]) -> Result<Vec<u8>> {
+pub(crate) fn decode_block_data(codec_id: i64, raw_size: usize, data: &[u8]) -> Result<Vec<u8>> {
     match codec_id {
         codec::RAW => Ok(data.to_vec()),
         codec::ZSTD => decompress(data, raw_size),
@@ -1396,7 +1425,7 @@ fn decode_block_data(codec_id: i64, raw_size: usize, data: &[u8]) -> Result<Vec<
     }
 }
 
-fn field_hashes_of(payload: &[u8]) -> Result<Value> {
+pub(crate) fn field_hashes_of(payload: &[u8]) -> Result<Value> {
     let value = cbor::decode(payload)?;
     let mut pairs = Vec::new();
     for (key, item) in value.entries() {
