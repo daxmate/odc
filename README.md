@@ -25,6 +25,16 @@ cargo build --release
 ./target/release/odc --repo ./demo verify
 ```
 
+增量发布（详见 [`docs/patch.md`](docs/patch.md)）：
+
+```bash
+# 发布方：A、B 两个修订号都取自 `odc log`
+./target/release/odc --repo ./demo patch create <base> <target> -o fix.odp
+# 接收方：HEAD 必须正好是 <base>
+./target/release/odc --repo ./mirror patch verify fix.odp
+./target/release/odc --repo ./mirror patch apply fix.odp
+```
+
 `words.jsonl` 每行一个词条：
 
 ```json
@@ -76,7 +86,9 @@ odc --repo ./demo export --format jsonl -o dump.jsonl
 | `odc diff A B [--json]` | 词条级差异（added / removed / modified） |
 | `odc status` | 工作区状态 |
 | `odc verify` | 全量校验块、索引与提交 |
-| `odc patch create\|apply` | 增量包（M3，M0 返回 ODC-E017） |
+| `odc patch create A B -o FILE [--json]` | 生成增量包（只含目标新增块与索引增量） |
+| `odc patch verify FILE [--json]` | 校验增量包与本地基线 |
+| `odc patch apply FILE [--json]` | 在精确 base 上应用增量包，失败退出码 4 |
 
 全局参数 `--repo DIR` 指定仓库目录（默认当前目录，库文件 `odc.db`）。
 

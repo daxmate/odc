@@ -238,7 +238,7 @@ CREATE TABLE staging(word TEXT PRIMARY KEY, display TEXT NOT NULL,
 | `status` | 工作区相对 HEAD 的 added / modified / removed |
 | `verify` | 校验块哈希、块解码、索引偏移、content_hash、field_hashes、commit 哈希链、HEAD 根一致性；逐块流式校验，内存不随词典规模增长 |
 | `gc --keep-last N [--dry-run] [--vacuum]` | 保留每个 ref 及其 first-parent 链上最近 N 个提交，删除其余 commit、commit_index 与当前索引不再引用的块；`--dry-run` 只报告将释放的条数与字节，`--vacuum` 事后重建数据库文件 |
-| `patch create\|apply` | 见 §11；M0 返回 `ODC-E017` |
+| `patch create \| apply \| verify` | 见 §11 与 `docs/patch.md`；`apply` 只接受精确 base，三方合并属 M4 |
 
 revision 语法：`HEAD`、`HEAD~N`、commit 哈希前缀（≥ 4 个十六进制字符，需唯一）。
 
@@ -288,6 +288,11 @@ index_entry = varint(len(word)) | word | content_hash:32B
 | ODC-E020 | SQLite 错误 |
 | ODC-E021 | MDX 解析错误（头部、key block、记录块、压缩流或加密） |
 | ODC-E022 | 单条 MDX 记录超过 1 MiB 上限 |
+| ODC-E023 | patch 校验和错误 |
+| ODC-E024 | patch 基线不符（base 不存在或不是 HEAD） |
+| ODC-E025 | 需要三方合并（HEAD 是 base 的后代，属 M4） |
+| ODC-E026 | patch 已应用（target 提交已存在） |
+| ODC-E027 | patch 字节流结构非法 |
 
 ## 13. 版本兼容
 

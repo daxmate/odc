@@ -15,6 +15,11 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 * `odc lookup` (exit code 4 when the word is missing), `odc search --prefix`
   over the entries index, and `odc export --format jsonl|csv` with a JSONL
   round-trip back into a fresh repository.
+* `odc patch create|apply|verify` implements the frozen `ODP1` transfer
+  format: patches carry only the target blocks that the base lacks plus the
+  index delta, verify their checksum and Merkle roots, and apply atomically
+  on an exact base. A descendant HEAD is reported as needing the M4
+  three-way merge; `docs/patch.md` documents usage, error codes and limits.
 * `odc status` reports committed entry and block counts.
 * `crates/odc-testkit` generates synthetic MDX 1.2 / 2.0 fixtures for tests
   and the e2e script; `examples/lookup_bench.rs` reports p50/p95 lookup
