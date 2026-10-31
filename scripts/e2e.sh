@@ -138,4 +138,45 @@ if [ "$STATUS" -ne 4 ]; then
 fi
 echo "ok: lookup of a missing word exits 4"
 
+echo "== patch roundtrip =="
+hash_of() {
+  "$ODC" --repo "$1" log --json | awk -v msg="$2" '/"hash":/ { h = $2 } /"message":/ { if (index($0, "\"" msg "\"") > 0) { gsub(/[\",]/, "", h); print h; exit } }'
+}
+PATCH_BASE=$(hash_of "$REPO" "initial 10k entries")
+PATCH_TARGET=$(hash_of "$REPO" "edit one, add one, remove one")
+if [ -z "$PATCH_BASE" ] || [ -z "$PATCH_TARGET" ]; then
+  echo "FAIL: could not resolve the patch revisions"
+  exit 1
+fi
+"$ODC" --repo "$REPO" patch create "$PATCH_BASE" "$PATCH_TARGET" -o "$WORK/fix.odp" | tee "$WORK/patch-create.txt"
+grep -q "target: $PATCH_TARGET" "$WORK/patch-create.txt" || { echo "FAIL: patch create target"; exit 1; }
+MIRROR="$WORK/mirror"
+"$ODC" --repo "$MIRROR" init >/dev/null
+"$ODC" --repo "$MIRROR" import "$DATA/initial.jsonl" --format jsonl >/dev/null
+"$ODC" --repo "$MIRROR" commit -m "initial 10k entries" --author e2e --timestamp 1700000000 >/dev/null
+MIRROR_BASE=$(hash_of "$MIRROR" "initial 10k entries")
+if [ "$MIRROR_BASE" != "$PATCH_BASE" ]; then
+  echo "FAIL: mirror base $MIRROR_BASE != $PATCH_BASE"
+  exit 1
+fi
+"$ODC" --repo "$MIRROR" patch verify "$WORK/fix.odp" | tee "$WORK/patch-verify.txt"
+grep -q "ok: base $PATCH_BASE" "$WORK/patch-verify.txt" || { echo "FAIL: patch verify"; exit 1; }
+"$ODC" --repo "$MIRROR" patch apply "$WORK/fix.odp" | tee "$WORK/patch-apply.txt"
+MIRROR_HEAD=$("$ODC" --repo "$MIRROR" log --json | awk '/"hash":/ { h = $2; gsub(/[\",]/, "", h); print h; exit }')
+if [ "$MIRROR_HEAD" != "$PATCH_TARGET" ]; then
+  echo "FAIL: mirror HEAD $MIRROR_HEAD != $PATCH_TARGET"
+  exit 1
+fi
+"$ODC" --repo "$MIRROR" verify >/dev/null
+echo "ok: patch roundtrip produced the target commit"
+set +e
+"$ODC" --repo "$MIRROR" patch apply "$WORK/fix.odp" >/dev/null 2>&1
+REPLAY=$?
+set -e
+if [ "$REPLAY" -ne 4 ]; then
+  echo "FAIL: replaying a patch exited $REPLAY (expected 4)"
+  exit 1
+fi
+echo "ok: replaying a patch exits 4"
+
 echo "e2e: PASS (workdir $WORK)"

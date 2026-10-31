@@ -75,9 +75,21 @@ fn cli_full_cycle() {
     assert!(verify.status.success(), "{}", stderr(&verify));
     assert!(stdout(&verify).contains("verify: OK"));
 
-    let patch = odc(&repo, &["patch", "create", "HEAD~1", "HEAD"]);
-    assert!(!patch.status.success());
-    assert!(stderr(&patch).contains("ODC-E017"));
+    let patch_path = dir.join("cycle.odp");
+    let patch = odc(
+        &repo,
+        &[
+            "patch",
+            "create",
+            "HEAD~1",
+            "HEAD",
+            "-o",
+            patch_path.to_str().expect("patch path"),
+        ],
+    );
+    assert!(patch.status.success(), "{}", stderr(&patch));
+    assert!(stdout(&patch).contains("wrote"));
+    assert!(patch_path.exists());
 
     let _ = std::fs::remove_dir_all(&dir);
 }
