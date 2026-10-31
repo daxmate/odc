@@ -8,7 +8,7 @@
 
 use crate::entry::{normalize_key, Entry};
 use crate::error::{Error, Result};
-use mdictlib::MdxFile;
+use mdictlib::{ChecksumPolicy, MdxFile, OpenOptions};
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -46,6 +46,7 @@ pub struct MdxRecord {
 }
 
 /// An opened MDX file.
+#[derive(Debug)]
 pub struct MdxSource {
     file: MdxFile,
 }
@@ -59,7 +60,8 @@ impl MdxSource {
     /// unreadable (bad magic, truncated file, unsupported version, broken
     /// encryption or compression stream).
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        let file = MdxFile::open(path).map_err(map_error)?;
+        let options = OpenOptions::new().with_checksum_policy(ChecksumPolicy::Verify);
+        let file = MdxFile::open_with_options(path, &options).map_err(map_error)?;
         Ok(Self { file })
     }
 

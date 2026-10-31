@@ -736,6 +736,7 @@ fn read_csv(path: &std::path::Path) -> odc_core::Result<Vec<Entry>> {
     let display_at = index("display");
     let definition_at = index("definition").or_else(|| index("sense"));
     let pos_at = index("pos");
+    let raw_html_at = index("raw_html");
     let mut entries = Vec::new();
     for line in lines {
         let fields = split_csv_line(line)?;
@@ -763,6 +764,12 @@ fn read_csv(path: &std::path::Path) -> odc_core::Result<Vec<Entry>> {
             ..Def::default()
         };
         entry.defs.push(def);
+        if let Some(html) = raw_html_at
+            .and_then(|position| fields.get(position))
+            .filter(|value| !value.is_empty())
+        {
+            entry.raw_html = Some(html.clone());
+        }
         entries.push(entry);
     }
     Ok(entries)

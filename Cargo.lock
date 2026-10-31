@@ -532,6 +532,7 @@ dependencies = [
  "assert_cmd",
  "clap",
  "odc-core",
+ "odc-testkit",
  "predicates",
  "serde",
  "serde_json",
@@ -544,6 +545,7 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "mdictlib",
+ "odc-testkit",
  "proptest",
  "rusqlite",
  "serde_json",

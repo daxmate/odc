@@ -100,4 +100,42 @@ echo "ok: verify passed"
 grep -q "10000 entries" "$WORK/commit1.txt" || { echo "FAIL: first commit entry count"; exit 1; }
 echo "ok: first commit contains 10000 entries"
 
+echo
+echo "== mdx: synthetic fixture (version 2) =="
+FIXTURE="$WORK/fixture.mdx"
+cargo run --quiet -p odc-testkit --bin gen-mdx -- 2 "$FIXTURE" | tee "$WORK/mdx-fixture.txt"
+
+MDXREPO="$WORK/mdx-repo"
+"$ODC" --repo "$MDXREPO" init
+"$ODC" --repo "$MDXREPO" import "$FIXTURE" --format mdx | tee "$WORK/mdx-import.txt"
+"$ODC" --repo "$MDXREPO" commit -m "mdx import" --author e2e --timestamp 1700000200 | tee "$WORK/mdx-commit.txt"
+"$ODC" --repo "$MDXREPO" lookup bravo --json | tee "$WORK/mdx-lookup.json"
+"$ODC" --repo "$MDXREPO" search --prefix bra | tee "$WORK/mdx-search.txt"
+"$ODC" --repo "$MDXREPO" export --format jsonl -o "$WORK/mdx-export.jsonl"
+"$ODC" --repo "$MDXREPO" verify | tee "$WORK/mdx-verify.txt"
+
+echo "== mdx assertions =="
+grep -q "working set = 4" "$WORK/mdx-import.txt" || { echo "FAIL: mdx import count"; exit 1; }
+echo "ok: mdx import found 4 entries"
+grep -q "4 entries, 1 new blocks" "$WORK/mdx-commit.txt" || { echo "FAIL: mdx commit index"; exit 1; }
+echo "ok: mdx commit indexed 4 entries"
+grep -q '"word": "bravo"' "$WORK/mdx-lookup.json" || { echo "FAIL: mdx lookup"; exit 1; }
+echo "ok: mdx lookup returned the normalised key"
+grep -q "^bravo" "$WORK/mdx-search.txt" || { echo "FAIL: mdx prefix search"; exit 1; }
+echo "ok: mdx prefix search"
+[ "$(wc -l < "$WORK/mdx-export.jsonl" | tr -d ' ')" -eq 4 ] || { echo "FAIL: mdx export line count"; exit 1; }
+echo "ok: mdx export wrote 4 jsonl lines"
+grep -q "^verify: OK" "$WORK/mdx-verify.txt" || { echo "FAIL: mdx verify"; exit 1; }
+echo "ok: mdx verify passed"
+
+set +e
+"$ODC" --repo "$MDXREPO" lookup missing >/dev/null 2>&1
+STATUS=$?
+set -e
+if [ "$STATUS" -ne 4 ]; then
+  echo "FAIL: lookup of a missing word exited $STATUS (expected 4)"
+  exit 1
+fi
+echo "ok: lookup of a missing word exits 4"
+
 echo "e2e: PASS (workdir $WORK)"

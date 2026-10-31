@@ -39,6 +39,18 @@ CSV 也可（表头 `word,display,definition[,pos]`）：
 odc --repo ./demo import words.csv --format csv --prune
 ```
 
+MDict `.mdx` 词典（1.2 / 2.0）可直接导入，词条保留原 HTML：
+
+```bash
+odc --repo ./demo import LDOCE6.mdx --format mdx
+odc --repo ./demo commit -m "import LDOCE6"
+odc --repo ./demo lookup apple --json
+odc --repo ./demo search --prefix app
+odc --repo ./demo export --format jsonl -o dump.jsonl
+```
+
+兼容范围、实测数据与已知缺口见 [docs/mdx-compat.md](docs/mdx-compat.md)。
+
 ## 非技术用户的工作流（目标形态）
 
 1. 在 Excel / Numbers / 在线表格里维护 `word / 释义 / 词性 / 例句`；
@@ -54,10 +66,13 @@ odc --repo ./demo import words.csv --format csv --prune
 | 命令 | 作用 |
 | --- | --- |
 | `odc init` | 新建仓库（含 genesis 提交） |
-| `odc import FILE --format jsonl\|csv [--prune]` | 导入 / 更新工作区 |
+| `odc import FILE --format jsonl\|csv\|mdx [--prune] [--limit N] [--progress]` | 导入 / 更新工作区（MDX 支持限量与进度） |
 | `odc commit -m MSG` | 提交工作区 |
 | `odc log [-n N] [--json]` | 历史 |
 | `odc show WORD [--json]` | 查询词条 |
+| `odc lookup WORD [--json]` | 点查已提交词条，缺失时退出码 4 |
+| `odc search --prefix P [-n N] [--json]` | 前缀查询（走索引） |
+| `odc export --format jsonl\|csv [-o FILE]` | 导出全部已提交词条 |
 | `odc diff A B [--json]` | 词条级差异（added / removed / modified） |
 | `odc status` | 工作区状态 |
 | `odc verify` | 全量校验块、索引与提交 |
@@ -72,6 +87,7 @@ docs/odc-spec.md          规范性文档（格式的唯一权威）
 spec/testvectors/         机器可读测试向量
 crates/odc-core/          切块、编码、哈希、SQLite、commit/diff/verify
 crates/odc-cli/           odc 命令行
+crates/odc-testkit/       测试用合成 MDX 夹具（不发布）
 scripts/e2e.sh            10k 词条端到端演示
 ```
 

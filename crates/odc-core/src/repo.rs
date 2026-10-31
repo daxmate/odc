@@ -368,11 +368,10 @@ impl Repo {
             progress(written);
         }
         let removed = if prune {
-            usize::try_from(self.connection.execute(
+            self.connection.execute(
                 "DELETE FROM staging WHERE word NOT IN (SELECT word FROM imported)",
                 [],
-            )?)
-            .unwrap_or(0)
+            )?
         } else {
             0
         };

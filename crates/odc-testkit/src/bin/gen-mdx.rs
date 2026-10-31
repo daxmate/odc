@@ -1,4 +1,4 @@
-//! Generate a synthetic MDX fixture: gen-mdx <1|2> <path>.
+//! Generate a synthetic MDX fixture: gen-mdx 1-or-2 PATH.
 
 use std::path::PathBuf;
 

@@ -227,9 +227,13 @@ CREATE TABLE staging(word TEXT PRIMARY KEY, display TEXT NOT NULL,
 | --- | --- |
 | `init` | 建库并写入 genesis commit（空树） |
 | `import --format jsonl\|csv [--prune]` | 将词条写入工作区；`--prune` 删除文件中不存在的词条 |
+| `import --format mdx [--limit N] [--progress]` | 流式导入 MDX 词典，映射规则见 §16 |
 | `commit -m …` | 工作区与 HEAD 不同才允许；生成新块（已存在的块复用）、重建索引、提交 |
 | `log` | 从 HEAD 沿 first parent 逆序输出 |
 | `show <word>` | 按键查词条，返回 payload |
+| `lookup <word>` | 同 `show`，词条不存在时退出码 4 |
+| `search --prefix P [-n N]` | 归一化前缀查询，走 entries 索引，按键升序 |
+| `export --format jsonl\|csv [-o FILE]` | 导出全部已提交词条（display + raw_html 等） |
 | `diff A B` | 词条级 added / removed / modified；`--json` 输出结构化结果 |
 | `status` | 工作区相对 HEAD 的 added / modified / removed |
 | `verify` | 校验块哈希、块解码、索引偏移、content_hash、field_hashes、commit 哈希链、HEAD 根一致性 |
@@ -281,6 +285,8 @@ index_entry = varint(len(word)) | word | content_hash:32B
 | ODC-E018 | 索引不一致 |
 | ODC-E019 | I/O 错误 |
 | ODC-E020 | SQLite 错误 |
+| ODC-E021 | MDX 解析错误（头部、key block、记录块、压缩流或加密） |
+| ODC-E022 | 单条 MDX 记录超过 1 MiB 上限 |
 
 ## 13. 版本兼容
 
@@ -310,3 +316,25 @@ index_entry = varint(len(word)) | word | content_hash:32B
 * 合并（`parent2`）、patch、索引压缩策略调优、并发写入控制留待后续里程碑。
 * `conflicts` 表暂未使用。
 * 未对大块做内存映射；verify 会解压所有块，超大库需分片执行。
+* `commit` 一次性装载全部工作区 payload，峰值内存随内容线性增长（MDX 大词典可达 GB 级），流式 commit 留待后续里程碑。
+* MDX 导入不解析 HTML 结构，`defs` 为空；需要结构化词条时应由外部工具生成 JSONL。
+
+## 16. MDX 导入映射
+
+`odc import --format mdx` 将 MDict `.mdx` 词典（1.2 / 2.0）映射为 ODC 词条：
+
+* **读取**：底层解析器 mdictlib 0.2.8，逐块解码并校验 adler32；头部、key block、
+  记录块或压缩流损坏时报 `ODC-E021`。
+* **payload**：`display` = 词典中的原始词形，`raw_html` = 记录正文；
+  `defs`、`phonetic` 留空，`extra` 为空。导入不做 HTML 结构化解析。
+* **键**：按 §4.1 归一化（NFKC + casefold）。
+* **重复键**：同一次导入内归一化键重复时，第一次保留归一化键本身，后续出现
+  按文件顺序追加 `U+001F<n>`（n = 2、3…）；`display` 保留各次的原词形。
+* **上限**：单条记录正文超过 1 MiB（1 048 576 字节）时报 `ODC-E022`；
+  导入命令跳过该词条并计数。trim 后为空的键同样跳过并计数。
+* **流式**：词条按 1024 条一批写入工作区，进程内存与会话大小无关；
+  `--limit N` 在读取 N 条后停止，`--progress` 每 10 000 条向 stderr 报告一次。
+* **后续命令**：词条在 `commit` 后进入 `entries` 索引，`lookup`、`search`、
+  `export` 只读取已提交索引。
+
+兼容范围、实测数据与已知缺口见 [mdx-compat.md](mdx-compat.md)。
