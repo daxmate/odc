@@ -79,6 +79,12 @@ pub enum Error {
     PatchApplied(String),
     /// The patch byte stream is structurally invalid.
     PatchFormat(String),
+    /// A merge is already in progress.
+    MergeInProgress(String),
+    /// `merge --continue` was asked to finish while conflicts remain.
+    UnresolvedConflicts(usize),
+    /// `resolve` or `merge --continue` found no merge to work on.
+    NoMergeInProgress,
 }
 
 impl Error {
@@ -113,6 +119,9 @@ impl Error {
             Self::PatchNeedsMerge(_) => "ODC-E025",
             Self::PatchApplied(_) => "ODC-E026",
             Self::PatchFormat(_) => "ODC-E027",
+            Self::MergeInProgress(_) => "ODC-E028",
+            Self::UnresolvedConflicts(_) => "ODC-E029",
+            Self::NoMergeInProgress => "ODC-E030",
         }
     }
 }
@@ -158,6 +167,13 @@ impl fmt::Display for Error {
             }
             Self::PatchApplied(detail) => format!("patch is already applied: {detail}"),
             Self::PatchFormat(detail) => format!("malformed patch: {detail}"),
+            Self::MergeInProgress(detail) => {
+                format!("a merge is already in progress: {detail}")
+            }
+            Self::UnresolvedConflicts(remaining) => {
+                format!("merge has {remaining} unresolved conflict(s)")
+            }
+            Self::NoMergeInProgress => "no merge is in progress".to_string(),
         };
         write!(f, "{}: {message}", self.code())
     }

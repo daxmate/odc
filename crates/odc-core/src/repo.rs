@@ -10,7 +10,7 @@ use crate::hash::{self, ZERO_HASH};
 use crate::snapshot;
 use crate::store::{self, codec, DB_FILE};
 use rusqlite::{params, Connection, OptionalExtension};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -68,7 +68,7 @@ pub struct CommitRecord {
     pub hash: [u8; 32],
     /// First parent (zero for genesis).
     pub parent: [u8; 32],
-    /// Second parent (zero in M0: merges are not produced yet).
+    /// Second parent (zero unless the commit is a merge).
     pub parent2: [u8; 32],
     /// Merkle root over entries.
     pub entry_root: [u8; 32],
@@ -1552,5 +1552,448 @@ impl GcReport {
     #[must_use]
     pub fn freed_bytes(&self) -> u64 {
         self.freed_block_bytes + self.freed_index_bytes
+    }
+}
+
+/// One row of a merged tree that is about to become a commit.
+///
+/// Rows normally point at an existing block record (the slice); payloads that
+/// only exist as a result of the merge (field-level combinations, union copies,
+/// file resolutions) carry their bytes inline and get packed into new blocks.
+pub(crate) struct MergeRow {
+    /// Normalised key.
+    pub word: String,
+    /// Display form; decoded from the payload when absent.
+    pub display: Option<String>,
+    /// BLAKE3 of the canonical payload.
+    pub content_hash: [u8; 32],
+    /// Existing block record that stores this payload.
+    pub slice: Option<([u8; 32], i64, i64)>,
+    /// Payload bytes for rows that need a new block.
+    pub payload: Option<Vec<u8>>,
+}
+
+/// Load and decompress one block.
+pub(crate) fn load_block_raw_from(connection: &Connection, block_hash: &[u8]) -> Result<Vec<u8>> {
+    let row = connection
+        .query_row(
+            "SELECT codec, raw_size, data FROM blocks WHERE block_hash = ?1",
+            params![block_hash],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((codec_id, raw_size, data)) = row else {
+        return Err(Error::UnknownBlock(hash::to_hex(&hash_from_blob(
+            block_hash,
+        )?)));
+    };
+    let raw_size = usize::try_from(raw_size)
+        .map_err(|_| Error::Inconsistent("negative raw_size".to_string()))?;
+    decode_block_data(codec_id, raw_size, &data)
+}
+
+/// Reader over block records with a single-block cache.
+pub(crate) struct BlockReader<'a> {
+    connection: &'a Connection,
+    cache: Option<([u8; 32], Vec<u8>)>,
+}
+
+impl<'a> BlockReader<'a> {
+    pub(crate) fn new(connection: &'a Connection) -> Self {
+        Self {
+            connection,
+            cache: None,
+        }
+    }
+
+    fn raw(&mut self, block: &[u8; 32]) -> Result<&[u8]> {
+        let stale = self
+            .cache
+            .as_ref()
+            .is_none_or(|(cached, _)| cached != block);
+        if stale {
+            let raw = load_block_raw_from(self.connection, block.as_slice())?;
+            self.cache = Some((*block, raw));
+        }
+        Ok(&self
+            .cache
+            .as_ref()
+            .expect("block cache is populated before use")
+            .1)
+    }
+
+    /// Decode the record stored at the given slice.
+    pub(crate) fn record(&mut self, slice: &([u8; 32], i64, i64)) -> Result<Record> {
+        let (block_hash, offset, length) = *slice;
+        let raw = self.raw(&block_hash)?;
+        let start = usize::try_from(offset)
+            .map_err(|_| Error::Inconsistent("negative record offset".to_string()))?;
+        let length = usize::try_from(length)
+            .map_err(|_| Error::Inconsistent("negative record length".to_string()))?;
+        let end = start
+            .checked_add(length)
+            .ok_or_else(|| Error::Inconsistent("record slice overflow".to_string()))?;
+        let bytes = raw
+            .get(start..end)
+            .ok_or_else(|| Error::Inconsistent("record slice outside block".to_string()))?;
+        block::decode_record(bytes)
+    }
+}
+
+fn flush_merge_records(
+    exists: &mut rusqlite::Statement<'_>,
+    insert: &mut rusqlite::Statement<'_>,
+    records: &mut Vec<Record>,
+    locations: &mut HashMap<String, ([u8; 32], i64, i64)>,
+    new_blocks: &mut usize,
+    reused_blocks: &mut usize,
+) -> Result<()> {
+    if records.is_empty() {
+        return Ok(());
+    }
+    let raw = block::encode(records)?;
+    let block_hash = hash::blake3(&raw);
+    let present: Option<i64> = exists
+        .query_row(params![block_hash.as_slice()], |row| row.get(0))
+        .optional()?;
+    if present.is_some() {
+        *reused_blocks += 1;
+    } else {
+        let data = compress(&raw)?;
+        insert.execute(params![
+            block_hash.as_slice(),
+            codec::ZSTD,
+            i64::try_from(raw.len())
+                .map_err(|_| Error::Inconsistent("block too large".to_string()))?,
+            data,
+        ])?;
+        *new_blocks += 1;
+    }
+    let decoded = block::decode(&raw)?;
+    for (index, record) in records.iter().enumerate() {
+        let word = String::from_utf8(record.key.clone())
+            .map_err(|_| Error::Inconsistent("record key is not utf-8".to_string()))?;
+        let offset = i64::try_from(decoded.offsets[index])
+            .map_err(|_| Error::Inconsistent("block offset overflow".to_string()))?;
+        let length = i64::try_from(record.encoded_len())
+            .map_err(|_| Error::Inconsistent("record length overflow".to_string()))?;
+        locations.insert(word, (block_hash, offset, length));
+    }
+    records.clear();
+    Ok(())
+}
+
+/// Replace the entry index and the working set with the merged rows, packing
+/// the payloads that have no block record of their own.
+fn stage_merge_rows(connection: &Connection, rows: &mut [MergeRow]) -> Result<(usize, usize)> {
+    {
+        let mut reader = BlockReader::new(connection);
+        for row in rows.iter_mut() {
+            let Some(slice) = row.slice else {
+                continue;
+            };
+            let record = reader.record(&slice)?;
+            let key_matches = record.key == row.word.as_bytes();
+            let hash_matches = hash::blake3(&record.payload) == row.content_hash;
+            if !key_matches || !hash_matches {
+                row.slice = None;
+                row.payload = Some(record.payload);
+            }
+        }
+    }
+    for row in rows.iter() {
+        if row.slice.is_none() && row.payload.is_none() {
+            return Err(Error::Inconsistent(format!(
+                "merge row {} has neither a slice nor a payload",
+                row.word
+            )));
+        }
+    }
+
+    let mut new_blocks = 0usize;
+    let mut reused_blocks = 0usize;
+    let mut locations: HashMap<String, ([u8; 32], i64, i64)> = HashMap::new();
+    {
+        let mut exists = connection.prepare("SELECT 1 FROM blocks WHERE block_hash = ?1")?;
+        let mut insert = connection.prepare(
+            "INSERT INTO blocks(block_hash, codec, raw_size, data) VALUES (?1, ?2, ?3, ?4)",
+        )?;
+        let mut records: Vec<Record> = Vec::new();
+        let mut chunker = cdc::StreamChunker::new();
+        for row in rows.iter() {
+            if row.slice.is_some() {
+                continue;
+            }
+            let payload = row.payload.clone().ok_or_else(|| {
+                Error::Inconsistent(format!("merge row {} has no payload", row.word))
+            })?;
+            let record = Record::new(row.word.clone(), payload);
+            loop {
+                match chunker.push(&record) {
+                    cdc::Cut::Before => flush_merge_records(
+                        &mut exists,
+                        &mut insert,
+                        &mut records,
+                        &mut locations,
+                        &mut new_blocks,
+                        &mut reused_blocks,
+                    )?,
+                    cdc::Cut::None => {
+                        records.push(record);
+                        break;
+                    }
+                    cdc::Cut::After => {
+                        records.push(record);
+                        flush_merge_records(
+                            &mut exists,
+                            &mut insert,
+                            &mut records,
+                            &mut locations,
+                            &mut new_blocks,
+                            &mut reused_blocks,
+                        )?;
+                        break;
+                    }
+                }
+            }
+        }
+        flush_merge_records(
+            &mut exists,
+            &mut insert,
+            &mut records,
+            &mut locations,
+            &mut new_blocks,
+            &mut reused_blocks,
+        )?;
+    }
+
+    connection.execute("DELETE FROM entries", [])?;
+    connection.execute("DELETE FROM staging", [])?;
+    {
+        let mut insert_entry = connection.prepare(
+            "INSERT INTO entries(word, display, block_hash, offset, length, content_hash, field_hashes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        )?;
+        let mut insert_staging = connection.prepare(
+            "INSERT INTO staging(word, display, payload, content_hash) VALUES (?1, ?2, ?3, ?4)",
+        )?;
+        let mut reader = BlockReader::new(connection);
+        for row in rows.iter() {
+            let payload = match row.slice {
+                Some(slice) => reader.record(&slice)?.payload,
+                None => row.payload.clone().ok_or_else(|| {
+                    Error::Inconsistent(format!("merge row {} has no payload", row.word))
+                })?,
+            };
+            if hash::blake3(&payload) != row.content_hash {
+                return Err(Error::Inconsistent(format!(
+                    "merge row {} has a payload that does not match its hash",
+                    row.word
+                )));
+            }
+            let display = match &row.display {
+                Some(display) => display.clone(),
+                None => Entry::decode_payload(&payload)?.display,
+            };
+            let display = if display.is_empty() {
+                row.word.clone()
+            } else {
+                display
+            };
+            let field_hashes = cbor::encode(&field_hashes_of(&payload)?);
+            let (block_hash, offset, length) = row
+                .slice
+                .or_else(|| locations.get(&row.word).copied())
+                .ok_or_else(|| {
+                    Error::Inconsistent(format!("merge row {} has no block location", row.word))
+                })?;
+            insert_entry.execute(params![
+                &row.word,
+                &display,
+                block_hash.as_slice(),
+                offset,
+                length,
+                row.content_hash.as_slice(),
+                field_hashes,
+            ])?;
+            insert_staging.execute(params![
+                &row.word,
+                &display,
+                payload,
+                row.content_hash.as_slice(),
+            ])?;
+        }
+    }
+    Ok((new_blocks, reused_blocks))
+}
+
+impl Repo {
+    /// Write a merge commit whose parents are the two given commits.
+    pub(crate) fn write_merge_commit(
+        &mut self,
+        parent: &[u8; 32],
+        parent2: &[u8; 32],
+        rows: &mut [MergeRow],
+        message: &str,
+        author: &str,
+        ts: i64,
+    ) -> Result<CommitOutcome> {
+        let entry_count = u64::try_from(rows.len())
+            .map_err(|_| Error::Inconsistent("too many entries".to_string()))?;
+        let temp = TempPath::new(&self.dir, "merge-index");
+        let transaction = self.connection.transaction()?;
+        let (new_blocks, reused_blocks) = stage_merge_rows(&transaction, rows)?;
+
+        let (entry_root, observed) = {
+            let mut accumulator = hash::MerkleAccumulator::new();
+            let mut select =
+                transaction.prepare("SELECT word, content_hash FROM entries ORDER BY word ASC")?;
+            let mut rows = select.query([])?;
+            let mut count = 0u64;
+            while let Some(row) = rows.next()? {
+                let word: String = row.get(0)?;
+                let digest = hash_from_blob(&row.get::<_, Vec<u8>>(1)?)?;
+                accumulator.push(hash::leaf_hash(word.as_bytes(), &digest));
+                count += 1;
+            }
+            (accumulator.finish(), count)
+        };
+        if observed != entry_count {
+            return Err(Error::Inconsistent(
+                "merged index does not match the planned entry count".to_string(),
+            ));
+        }
+        let block_root = {
+            let mut accumulator = hash::MerkleAccumulator::new();
+            let mut select = transaction
+                .prepare("SELECT DISTINCT block_hash FROM entries ORDER BY block_hash ASC")?;
+            let mut rows = select.query([])?;
+            while let Some(row) = rows.next()? {
+                let digest = hash_from_blob(&row.get::<_, Vec<u8>>(0)?)?;
+                accumulator.push(digest);
+            }
+            accumulator.finish()
+        };
+
+        let commit_hash = hash::commit_hash(parent, parent2, &entry_root, &block_root, entry_count);
+        let commit = CommitRecord {
+            hash: commit_hash,
+            parent: *parent,
+            parent2: *parent2,
+            entry_root,
+            block_root,
+            entry_count,
+            ts,
+            author: author.to_string(),
+            message: message.to_string(),
+        };
+        transaction.execute(
+            "INSERT INTO commits(commit_hash, parent, parent2, entry_root, block_root,
+             entry_count, ts, author, message) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                commit.hash.as_slice(),
+                commit.parent.as_slice(),
+                commit.parent2.as_slice(),
+                commit.entry_root.as_slice(),
+                commit.block_root.as_slice(),
+                commit.entry_count as i64,
+                commit.ts,
+                commit.author,
+                commit.message,
+            ],
+        )?;
+
+        let (raw_size, compressed_size) = {
+            let file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(temp.path())?;
+            let encoder = zstd::stream::write::Encoder::new(std::io::BufWriter::new(file), 3)
+                .map_err(|error| Error::Io(error.to_string()))?;
+            let mut writer = snapshot::SnapshotWriter::new(encoder, entry_count)?;
+            {
+                let mut select = transaction
+                    .prepare("SELECT word, content_hash FROM staging ORDER BY word ASC")?;
+                let mut rows = select.query([])?;
+                while let Some(row) = rows.next()? {
+                    let word: String = row.get(0)?;
+                    let digest = hash_from_blob(&row.get::<_, Vec<u8>>(1)?)?;
+                    writer.push(&word, &digest)?;
+                }
+            }
+            let (encoder, raw_size) = writer.finish()?;
+            let mut buffered = encoder
+                .finish()
+                .map_err(|error| Error::Io(error.to_string()))?;
+            buffered.flush()?;
+            let compressed_size = std::fs::metadata(temp.path())?.len();
+            (raw_size, compressed_size)
+        };
+        transaction.execute(
+            "INSERT INTO commit_index(commit_hash, codec, raw_size, data)
+             VALUES (?1, ?2, ?3, zeroblob(?4))",
+            params![
+                commit.hash.as_slice(),
+                codec::ZSTD,
+                raw_size as i64,
+                compressed_size as i64,
+            ],
+        )?;
+        {
+            let rowid = transaction.last_insert_rowid();
+            let mut blob = transaction.blob_open("main", "commit_index", "data", rowid, false)?;
+            let mut source = std::fs::File::open(temp.path())?;
+            let mut buffer = vec![0u8; 64 * 1024];
+            let mut position = 0usize;
+            loop {
+                let read = source.read(&mut buffer)?;
+                if read == 0 {
+                    break;
+                }
+                blob.write_all(&buffer[..read])?;
+                position += read;
+            }
+            if position != usize::try_from(compressed_size).unwrap_or(0) {
+                return Err(Error::Inconsistent(
+                    "merge snapshot was not copied completely".to_string(),
+                ));
+            }
+        }
+        transaction.execute(
+            "INSERT INTO refs(name, commit_hash) VALUES ('HEAD', ?1)
+             ON CONFLICT(name) DO UPDATE SET commit_hash = excluded.commit_hash",
+            params![commit.hash.as_slice()],
+        )?;
+        transaction.commit()?;
+
+        Ok(CommitOutcome {
+            commit,
+            new_blocks,
+            reused_blocks,
+            entries: usize::try_from(entry_count).unwrap_or(usize::MAX),
+        })
+    }
+
+    /// Move HEAD to an existing commit and rebuild the index from its snapshot.
+    pub(crate) fn fast_forward_tree(
+        &mut self,
+        rows: &mut [MergeRow],
+        target: &[u8; 32],
+    ) -> Result<()> {
+        let transaction = self.connection.transaction()?;
+        stage_merge_rows(&transaction, rows)?;
+        transaction.execute(
+            "INSERT INTO refs(name, commit_hash) VALUES ('HEAD', ?1)
+             ON CONFLICT(name) DO UPDATE SET commit_hash = excluded.commit_hash",
+            params![target.as_slice()],
+        )?;
+        transaction.commit()?;
+        Ok(())
     }
 }
