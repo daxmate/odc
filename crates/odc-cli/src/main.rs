@@ -141,9 +141,34 @@ enum Command {
 #[derive(Subcommand, Debug)]
 enum PatchCommand {
     /// Create a patch between two revisions.
-    Create { base: String, target: String },
+    Create {
+        /// Base revision the receiver must have checked out.
+        base: String,
+        /// Target revision the patch advances to.
+        target: String,
+        /// Where to write the patch file.
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Print a JSON report.
+        #[arg(long)]
+        json: bool,
+    },
     /// Apply a patch file.
-    Apply { file: PathBuf },
+    Apply {
+        /// Patch file to apply.
+        file: PathBuf,
+        /// Print a JSON report.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Verify a patch file against this repository.
+    Verify {
+        /// Patch file to verify.
+        file: PathBuf,
+        /// Print a JSON report.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -433,24 +458,117 @@ fn run() -> odc_core::Result<ExitCode> {
             );
             Ok(ExitCode::SUCCESS)
         }
-        Command::Patch { command } => {
-            let mut repo = Repo::open(&cli.repo)?;
-            match command {
-                PatchCommand::Create { base, target } => {
-                    let plan = patch::create(&repo, &base, &target)?;
-                    println!("patch plan with {} blocks", plan.new_blocks.len());
-                    Ok(ExitCode::SUCCESS)
-                }
-                PatchCommand::Apply { file } => {
-                    let bytes = std::fs::read(&file)?;
-                    patch::apply(&mut repo, &bytes)?;
-                    Ok(ExitCode::SUCCESS)
-                }
+        Command::Patch { command } => match run_patch(&cli.repo, command) {
+            Ok(code) => Ok(code),
+            Err(error) => {
+                // Patch failures use the same exit code as a failed lookup.
+                eprintln!("error: {error}");
+                Ok(ExitCode::from(4))
             }
-        }
+        },
     }
 }
 
+fn run_patch(repo_dir: &std::path::Path, command: PatchCommand) -> odc_core::Result<ExitCode> {
+    match command {
+        PatchCommand::Create {
+            base,
+            target,
+            output,
+            json,
+        } => {
+            let repo = Repo::open(repo_dir)?;
+            let plan = patch::create(&repo, &base, &target)?;
+            let bytes = patch::encode(&plan)?;
+            std::fs::write(&output, &bytes)?;
+            let base_hex = hash::to_hex(&plan.base);
+            let target_hex = hash::to_hex(&plan.target);
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json!({
+                        "file": output.display().to_string(),
+                        "base": base_hex,
+                        "target": target_hex,
+                        "base_blocks": plan.base_blocks.len(),
+                        "new_blocks": plan.new_blocks.len(),
+                        "index_changes": plan.index_rows.len(),
+                        "bytes": bytes.len(),
+                    }))
+                    .unwrap_or_default()
+                );
+            } else {
+                println!(
+                    "wrote {}: {} new blocks, {} base blocks, {} index changes, {} bytes",
+                    output.display(),
+                    plan.new_blocks.len(),
+                    plan.base_blocks.len(),
+                    plan.index_rows.len(),
+                    bytes.len()
+                );
+                println!("target: {target_hex}");
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        PatchCommand::Apply { file, json } => {
+            let mut repo = Repo::open(repo_dir)?;
+            let bytes = std::fs::read(&file)?;
+            let outcome = patch::apply(&mut repo, &bytes)?;
+            let target = hash::to_hex(&outcome.target);
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json!({
+                        "target": target,
+                        "base_blocks": outcome.base_blocks,
+                        "new_blocks": outcome.new_blocks,
+                        "index_changes": outcome.index_changes,
+                        "bytes": outcome.bytes,
+                    }))
+                    .unwrap_or_default()
+                );
+            } else {
+                println!(
+                    "applied {} blocks, {} index changes, {} bytes",
+                    outcome.new_blocks, outcome.index_changes, outcome.bytes
+                );
+                println!("target: {target}");
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        PatchCommand::Verify { file, json } => {
+            let repo = Repo::open(repo_dir)?;
+            let bytes = std::fs::read(&file)?;
+            let report = patch::verify(&repo, &bytes)?;
+            let base = hash::to_hex(&report.base);
+            let target = hash::to_hex(&report.target);
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json!({
+                        "base": base,
+                        "target": target,
+                        "base_blocks": report.base_blocks,
+                        "new_blocks": report.new_blocks,
+                        "index_changes": report.index_changes,
+                        "target_present": report.target_present,
+                    }))
+                    .unwrap_or_default()
+                );
+            } else {
+                println!("ok: base {base} target {target}");
+                println!(
+                    "{} base blocks, {} new blocks, {} index changes, target present: {}",
+                    report.base_blocks,
+                    report.new_blocks,
+                    report.index_changes,
+                    if report.target_present { "yes" } else { "no" }
+                );
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+    }
+}
 fn now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
