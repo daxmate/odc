@@ -1,0 +1,60 @@
+#AOCI-CODE-VOLUME: 1
+
+===/Users/dax/codes/odc/===
+.gitattributes[FG5T]: F:Pins repository-wide text normalization and line endings | R:code:.gitignore | A:text=auto eol=lf | S:Windows checkouts must keep LF or the byte-exact spec vectors stop matching on that machine
+.gitignore[FG4T]: F:Keeps build output, SQLite databases and the e2e scratch directory out of Git | R:code:Cargo.toml | A:target odc-e2e | S:Databases are ignored by extension, so an intentionally committed fixture needs an override or it stays untracked
+AGENTS.md[SG6S]: F:Records repository-specific agent rules and the AOCI managed cognition block | R:code:aoci.txt | A:AOCI managed block | S:An aoci run rewrites only the managed block; hand edits inside it are replaced without warning
+CHANGELOG.md[SG5S]: F:Tracks user-visible changes in Keep-a-Changelog form | R:code:Cargo.toml | A:Unreleased 0.1.0 | S:Entries must land under Unreleased before a release, otherwise the version section no longer matches Cargo.toml
+CONTRIBUTING.md[SG6M]: F:Explains build, test, commit conventions and how to add spec vectors | R:code:docs/odc-spec.md | A:Adding a test vector | S:Vectors must be derived from the spec, not the encoder; copying encoder output hides format drift
+Cargo.lock[FG6L]: F:Locks exact dependency versions and checksums for reproducible builds | R:code:Cargo.toml | A:[[package]] | S:Workspace members appear without checksums; regenerating with a different Cargo version can reorder the file and create noisy diffs
+Cargo.toml[FG6T]: F:Defines the Cargo workspace, shared package metadata, licence and lint configuration | R:code:crates/odc-core/Cargo.toml | A:workspace.package workspace.lints | S:Members inherit licence and repository values from the workspace table; editing it changes every crate at once
+LICENSE[SG4T]: F:Holds the full GNU GPL v3 text that governs distribution and modification | R:code:README.md | A:GNU GENERAL PUBLIC LICENSE | S:Modifying the licence text would make the repository licensing ambiguous; the version must stay verbatim
+README.md[SG7M]: F:Introduces the format, commands, roadmap and the non-technical editing workflow | R:code:docs/odc-spec.md | A:命令 路线图 | S:The command table and roadmap are duplicated in docs/odc-spec.md and must be updated together or they drift
+SECURITY.md[SG5T]: F:Documents supported versions and the private vulnerability reporting channel | R:code:README.md | A:Reporting a vulnerability | S:Reports must not go to public issues; the advisory link is the only accepted channel and works only for the maintainer account
+deny.toml[OG6M]: F:Configures cargo-deny advisories, licence allow-list, bans and source policy | R:code:.github/workflows/ci.yml | A:[licenses] [advisories] | S:The allow-list must cover every licence actually linked; a new dependency under an unknown licence fails CI until the list is updated deliberately
+rustfmt.toml[FG4T]: F:Pins the rustfmt edition used by fmt checks in CI and locally | R:code:rust-toolchain.toml | A:edition | S:Options must stay minimal; adding unstable options would make cargo fmt fail on the stable toolchain CI uses
+rust-toolchain.toml[FG5T]: F:Requests the stable toolchain with rustfmt and clippy for rustup users | R:code:rustfmt.toml | A:[toolchain] | S:Homebrew Cargo ignores this file; only rustup honours it
+
+===/Users/dax/codes/odc/.github/workflows/===
+ci.yml[OV7S]: F:Runs format, lint, test, doc and dependency-policy gates on Linux and macOS | R:code:deny.toml | A:jobs.test jobs.deny | S:Release tests and rustdoc run only on Linux, so a macOS-only failure in those steps is not caught here
+
+===/Users/dax/codes/odc/crates/odc-cli/===
+Cargo.toml[FG5T]: F:Declares the odc binary target and its CLI dependencies | R:code:crates/odc-cli/src/main.rs | A:[[bin]] dev-dependencies | S:assert_cmd and tempfile are dev-only; moving them into dependencies would ship the test harness with the binary
+
+===/Users/dax/codes/odc/crates/odc-cli/src/===
+main.rs[EA7L]: F:Implements every odc subcommand and maps core errors to stable ODC-E codes on stderr | R:code:crates/odc-core/src/repo.rs | A:Command main | S:Import merges into the staged set unless --prune is given; without it entries missing from the file stay and the status mixes old and new rows
+
+===/Users/dax/codes/odc/crates/odc-core/===
+Cargo.toml[FG5T]: F:Declares core crate dependencies, bundled SQLite and dev-only proptest | R:code:crates/odc-core/src/lib.rs | A:dependencies dev-dependencies | S:rusqlite uses the bundled feature; dropping it links the host SQLite and changes behaviour across macOS and Linux
+
+===/Users/dax/codes/odc/crates/odc-core/examples/===
+gen_testvectors.rs[XG6M]: F:Regenerates the machine-readable spec vectors from the current implementation | R:code:spec/testvectors/block_encoding.json | A:fn main | S:This tool mirrors the encoder, so its output cannot prove conformance; the hand-computed vectors in tests/vectors_extra.rs are the independent check
+
+===/Users/dax/codes/odc/crates/odc-core/src/===
+cbor.rs[KG8L]: F:Implements the deterministic CBOR subset used for entry payloads and hash maps | R:code:crates/odc-core/src/varint.rs | A:Value encode decode validate_canonical | S:Map keys are ordered by canonical encoding, not lexical order; comparing decoded maps by vector order fails when key lengths differ
+cdc.rs[KG7M]: F:Cuts the record stream into content-defined chunks with a gear hash and size bounds | R:code:crates/odc-core/src/block.rs | A:boundaries block_sizes gear_table | S:The rolling state resets at every boundary and at the maximum chunk size; without both resets one insert shifts every later boundary
+entry.rs[DB7L]: F:Normalises dictionary keys and encodes entry payloads with forward-compatible extra fields | R:code:crates/odc-core/src/cbor.rs | A:Entry Def normalize_key decode_payload | S:Unknown payload fields are preserved in extra but duplicate keys are collapsed; accepting them would make payload hashes depend on input order
+error.rs[CR7M]: F:Defines every typed error and its stable ODC-E0xx code for the CLI and other implementations | R:code:docs/odc-spec.md | A:Error code | S:Codes are a public contract; renumbering a variant breaks scripts that branch on the printed code even though Rust callers still compile
+hash.rs[KG8M]: F:Implements BLAKE3 leaf, node, entry-root and commit hashing with explicit domains | R:code:crates/odc-core/src/cdc.rs | A:leaf_hash commit_hash to_hex | S:The commit domain string is hashed before any parent bytes; plain concatenation would allow a commit hash to collide with a leaf hash
+lib.rs[EB6T]: F:Re-exports the core modules and format constants that define the public surface | R:code:crates/odc-core/src/repo.rs | A:FORMAT_VERSION BLOCK_MAGIC | S:Constants must stay in sync with the on-disk format version; changing one alone makes verify accept files the spec rejects
+patch.rs[DG6S]: F:Reserves the ODP1 patch constants and returns a not-implemented error in M0 | R:code:docs/odc-spec.md | A:MAGIC create apply | S:Every entry point returns ODC-E017 today; callers must treat that code as a milestone marker, not as malformed input
+repo.rs[PB8L]: F:Implements the SQLite repository: import, commit, log, show, diff, resolve and verify | R:code:crates/odc-core/src/store.rs | A:Repo import commit verify diff | S:verify reports corruption in the returned report instead of failing the call, so callers must inspect report.ok and not treat Ok as success
+store.rs[PD7M]: F:Defines the SQLite schema, connection pragmas and format-version metadata | R:code:crates/odc-core/src/repo.rs | A:SCHEMA open create_schema | S:Blocks store the raw blob with its codec tag; changing what the codec column means makes existing repositories unreadable without a migration
+varint.rs[KG7S]: F:Encodes and decodes minimal base-128 varints up to ten bytes | R:code:crates/odc-core/src/block.rs | A:encode decode encoded_len | S:Non-minimal encodings are rejected; a decoder that accepted them would give two byte strings the same value and break block identity
+block.rs[DB7M]: F:Encodes and decodes ODB1 blocks with canonical record ordering and an optional offset index | R:code:crates/odc-core/src/varint.rs | A:encode decode decode_record | S:decode_record expects a slice ending exactly at the record; passing the block remainder yields TrailingData instead of parsing
+
+===/Users/dax/codes/odc/docs/===
+design-rationale.md[SG7M]: F:Explains why the format uses CDC, raw-byte hashing, content-only commit hashes and SQLite | R:code:docs/odc-spec.md | A:Content-defined chunking | S:Rationale must not be rewritten to justify later changes; if a decision is reversed the section needs an explicit new entry
+odc-spec.md[SG9L]: F:Normative specification for blocks, payloads, chunking, hashing, storage and error codes | R:code:crates/odc-core/src/block.rs | A:块格式 错误码 | S:This document outranks the implementation; when code and spec disagree the code is fixed unless the spec is amended first
+
+===/Users/dax/codes/odc/scripts/===
+e2e.sh[XG7M]: F:Builds the CLI and runs a 10k-entry import, commit, diff and verify end to end | R:code:crates/odc-cli/src/main.rs | A:e2e: PASS | S:It writes into a fresh temporary directory; reusing a fixed path would make a second run measure stale data
+
+===/Users/dax/codes/odc/spec/testvectors/===
+block_encoding.json[TG6S]: F:Vector for block framing, offsets and payload bytes of a three-record block | R:code:crates/odc-core/tests/vectors.rs | A:raw_block_hex offsets | S:The vector is consumed by tests only; editing it to match a changed encoder removes the independent check it exists for
+block_encoding_edges.json[TG5T]: F:Hand-computed block vector for empty payloads, two records and the trailing offset index | R:code:spec/testvectors/varint_encoding.json | A:raw_block_hex trailing_index_hex | S:Computed from the spec byte rules, not the encoder; if it fails after a code change the encoder, not the vector, is the suspect
+cdc_boundaries.json[TG6M]: F:Pins gear-hash chunk boundaries for 400 synthetic records | R:code:crates/odc-core/src/cdc.rs | A:record_count sizes | S:The gear table is derived from BLAKE3; changing that derivation invalidates every boundary while leaving the rest of the format intact
+commit_hash.json[TG6S]: F:Vector linking a content tree to its expected commit hash | R:code:crates/odc-core/src/hash.rs | A:commit_hash | S:Author and timestamp must not influence the hash; this vector would change if that rule were broken
+genesis.json[TG5T]: F:Pins the hash of the empty genesis commit | R:code:crates/odc-core/src/repo.rs | A:genesis | S:Every repository starts from this hash; changing it silently forks the history of all existing repositories
+payload_encoding.json[TG6M]: F:Vectors of canonical CBOR entry payloads with expected bytes | R:code:crates/odc-core/src/entry.rs | A:payload_hex | S:Each payload must decode and re-encode to identical bytes; a vector that only decodes would not catch non-canonical output
+varint_encoding.json[TG5T]: F:Hand-computed base-128 encodings for boundary values up to u64::MAX | R:code:crates/odc-core/src/varint.rs | A:value_dec hex length | S:Values above 2^32 are carried as decimal strings because JSON numbers cannot represent them exactly
