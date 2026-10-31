@@ -11,6 +11,9 @@ yanked = "deny"
 [licenses]
 version = 2
 confidence-threshold = 0.93
+# Keep a forward-looking allow-list; an allowance that no dependency needs yet
+# is not an error.
+unused-allowed-license = "allow"
 allow = [
     "MIT",
     "MIT-0",
@@ -31,6 +34,8 @@ allow = [
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# Workspace path dependencies carry no version requirement by design.
+allow-wildcard-paths = true
 deny = []
 
 [sources]
