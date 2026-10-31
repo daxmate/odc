@@ -28,7 +28,8 @@ pub mod varint;
 pub use entry::{Def, Entry};
 pub use error::{Error, Result};
 pub use repo::{
-    CommitOutcome, CommitRecord, Diff, ImportReport, Repo, Status, VerifyReport, DEFAULT_AUTHOR,
+    CommitOutcome, CommitRecord, Diff, GcReport, ImportReport, Repo, Status, VerifyReport,
+    DEFAULT_AUTHOR,
 };
 
 /// Container format version implemented by this crate.

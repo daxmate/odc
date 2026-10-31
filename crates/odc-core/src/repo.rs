@@ -10,6 +10,7 @@ use crate::hash::{self, ZERO_HASH};
 use crate::snapshot;
 use crate::store::{self, codec, DB_FILE};
 use rusqlite::{params, Connection, OptionalExtension};
+use std::collections::HashSet;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -1246,6 +1247,129 @@ impl Repo {
             errors,
         })
     }
+
+    /// Delete blocks and commit indexes that no reachable commit needs.
+    ///
+    /// The retained set is every ref target plus the most recent keep_last
+    /// commits of its first-parent chain. Blocks survive when the current
+    /// entry index references them. `dry_run` reports what would be freed
+    /// without writing; `vacuum` rebuilds the database file afterwards.
+    pub fn gc(&mut self, keep_last: usize, dry_run: bool, vacuum: bool) -> Result<GcReport> {
+        if keep_last == 0 {
+            return Err(Error::InvalidArgument(
+                "gc requires --keep-last of at least 1".to_string(),
+            ));
+        }
+        let mut retained: HashSet<[u8; 32]> = HashSet::new();
+        {
+            let mut tips = Vec::new();
+            {
+                let mut statement = self.connection.prepare("SELECT commit_hash FROM refs")?;
+                let mut rows = statement.query([])?;
+                while let Some(row) = rows.next()? {
+                    tips.push(hash_from_blob(&row.get::<_, Vec<u8>>(0)?)?);
+                }
+            }
+            for tip in tips {
+                let mut current = Some(tip);
+                let mut steps = 0usize;
+                while let Some(hash) = current {
+                    if steps >= keep_last || !retained.insert(hash) {
+                        break;
+                    }
+                    steps += 1;
+                    current = match self.commit_record(&hash)? {
+                        Some(record) if record.parent != ZERO_HASH => Some(record.parent),
+                        _ => None,
+                    };
+                }
+            }
+        }
+
+        let mut removed_commits = Vec::new();
+        {
+            let mut statement = self.connection.prepare("SELECT commit_hash FROM commits")?;
+            let mut rows = statement.query([])?;
+            while let Some(row) = rows.next()? {
+                let hash = hash_from_blob(&row.get::<_, Vec<u8>>(0)?)?;
+                if !retained.contains(&hash) {
+                    removed_commits.push(hash);
+                }
+            }
+        }
+
+        let mut removed_indexes = Vec::new();
+        let mut freed_index_bytes = 0u64;
+        {
+            let mut statement = self
+                .connection
+                .prepare("SELECT commit_hash, LENGTH(data) FROM commit_index")?;
+            let mut rows = statement.query([])?;
+            while let Some(row) = rows.next()? {
+                let hash = hash_from_blob(&row.get::<_, Vec<u8>>(0)?)?;
+                if !retained.contains(&hash) {
+                    freed_index_bytes += u64::try_from(row.get::<_, i64>(1)?).unwrap_or(0);
+                    removed_indexes.push(hash);
+                }
+            }
+        }
+
+        let mut removed_blocks = Vec::new();
+        let mut freed_block_bytes = 0u64;
+        {
+            let mut statement = self.connection.prepare(
+                "SELECT block_hash, LENGTH(data) FROM blocks
+                 WHERE NOT EXISTS (
+                     SELECT 1 FROM entries WHERE entries.block_hash = blocks.block_hash
+                 )",
+            )?;
+            let mut rows = statement.query([])?;
+            while let Some(row) = rows.next()? {
+                let hash = hash_from_blob(&row.get::<_, Vec<u8>>(0)?)?;
+                freed_block_bytes += u64::try_from(row.get::<_, i64>(1)?).unwrap_or(0);
+                removed_blocks.push(hash);
+            }
+        }
+
+        if !dry_run {
+            let transaction = self.connection.transaction()?;
+            {
+                let mut delete =
+                    transaction.prepare("DELETE FROM commit_index WHERE commit_hash = ?1")?;
+                for hash in &removed_indexes {
+                    delete.execute(params![hash.as_slice()])?;
+                }
+            }
+            {
+                let mut delete =
+                    transaction.prepare("DELETE FROM commits WHERE commit_hash = ?1")?;
+                for hash in &removed_commits {
+                    delete.execute(params![hash.as_slice()])?;
+                }
+            }
+            {
+                let mut delete = transaction.prepare("DELETE FROM blocks WHERE block_hash = ?1")?;
+                for hash in &removed_blocks {
+                    delete.execute(params![hash.as_slice()])?;
+                }
+            }
+            transaction.commit()?;
+            if vacuum {
+                self.connection.execute_batch("VACUUM")?;
+            }
+        }
+
+        Ok(GcReport {
+            dry_run,
+            kept_commits: retained.len(),
+            removed_commits: removed_commits.len(),
+            removed_indexes: removed_indexes.len(),
+            removed_blocks: removed_blocks.len(),
+            freed_block_bytes,
+            freed_index_bytes,
+            vacuumed: vacuum && !dry_run,
+        })
+    }
 }
 fn decode_block_data(codec_id: i64, raw_size: usize, data: &[u8]) -> Result<Vec<u8>> {
     match codec_id {
@@ -1353,5 +1477,34 @@ impl TempPath {
 impl Drop for TempPath {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// Result of a [`Repo::gc`] run.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GcReport {
+    /// True when nothing was written.
+    pub dry_run: bool,
+    /// Commits kept on the first-parent chains of the refs.
+    pub kept_commits: usize,
+    /// Commit rows removed.
+    pub removed_commits: usize,
+    /// Commit indexes removed.
+    pub removed_indexes: usize,
+    /// Stored blocks removed.
+    pub removed_blocks: usize,
+    /// Bytes of block data removed.
+    pub freed_block_bytes: u64,
+    /// Bytes of commit index data removed.
+    pub freed_index_bytes: u64,
+    /// True when the database was vacuumed.
+    pub vacuumed: bool,
+}
+
+impl GcReport {
+    /// Total payload bytes the run removed (or would remove).
+    #[must_use]
+    pub fn freed_bytes(&self) -> u64 {
+        self.freed_block_bytes + self.freed_index_bytes
     }
 }
