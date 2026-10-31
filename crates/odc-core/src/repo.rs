@@ -7,9 +7,10 @@ use crate::cdc;
 use crate::entry::{normalize_key, Entry};
 use crate::error::{Error, Result};
 use crate::hash::{self, ZERO_HASH};
+use crate::snapshot;
 use crate::store::{self, codec, DB_FILE};
 use rusqlite::{params, Connection, OptionalExtension};
-use std::collections::{BTreeMap, HashMap};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 /// Default author recorded when none is supplied.
@@ -193,7 +194,11 @@ impl Repo {
             message: "genesis".to_string(),
         };
         self.insert_commit(&commit)?;
-        let snapshot = encode_snapshot(&[]);
+        let snapshot = {
+            let writer = snapshot::SnapshotWriter::new(Vec::new(), 0)?;
+            let (buffer, _) = writer.finish()?;
+            buffer
+        };
         let compressed = compress(&snapshot)?;
         self.connection.execute(
             "INSERT INTO commit_index(commit_hash, codec, raw_size, data) VALUES (?1, ?2, ?3, ?4)",
@@ -511,85 +516,151 @@ impl Repo {
     }
 
     /// Commit the working set.
+    /// Record the working set as a new commit.
+    ///
+    /// Nothing is bulk-loaded: the staging table is read once in word order,
+    /// blocks are cut and written as soon as they are complete, the entry
+    /// root is folded incrementally and the commit index is compressed
+    /// straight into the database file. Peak memory is one block plus that
+    /// block's entry metadata, never the whole dictionary.
     pub fn commit(&mut self, message: &str, author: &str, ts: i64) -> Result<CommitOutcome> {
         let status = self.status()?;
         if status.is_clean() {
             return Err(Error::NoChanges);
         }
         let parent = self.head()?.unwrap_or(ZERO_HASH);
+        let temp = TempPath::new(&self.dir, "commit-index");
 
-        struct Staged {
-            word: String,
-            display: String,
-            payload: Vec<u8>,
-            content_hash: [u8; 32],
-        }
+        let transaction = self.connection.transaction()?;
+        transaction.execute("DELETE FROM entries", [])?;
 
-        let staged: Vec<Staged> = {
-            let mut statement = self.connection.prepare(
+        let mut new_blocks = 0usize;
+        let mut reused_blocks = 0usize;
+        let mut entry_count = 0u64;
+        let mut entries_root = hash::MerkleAccumulator::new();
+        let mut records: Vec<Record> = Vec::new();
+        let mut staged: Vec<Staged> = Vec::new();
+        let mut chunker = cdc::StreamChunker::new();
+
+        {
+            let mut select = transaction.prepare(
                 "SELECT word, display, payload, content_hash FROM staging ORDER BY word ASC",
             )?;
-            let rows = statement.query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, Vec<u8>>(2)?,
-                    row.get::<_, Vec<u8>>(3)?,
-                ))
-            })?;
-            let mut out = Vec::new();
-            for row in rows {
-                let (word, display, payload, content_hash) = row?;
-                out.push(Staged {
+            let mut insert_entry = transaction.prepare(
+                "INSERT INTO entries(word, display, block_hash, offset, length,
+                                     content_hash, field_hashes)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            )?;
+            let mut block_exists =
+                transaction.prepare("SELECT 1 FROM blocks WHERE block_hash = ?1")?;
+            let mut insert_block = transaction.prepare(
+                "INSERT INTO blocks(block_hash, codec, raw_size, data) VALUES (?1, ?2, ?3, ?4)",
+            )?;
+
+            let mut rows = select.query([])?;
+            while let Some(row) = rows.next()? {
+                let word: String = row.get(0)?;
+                let display: String = row.get(1)?;
+                let payload: Vec<u8> = row.get(2)?;
+                let content_hash = hash_from_blob(&row.get::<_, Vec<u8>>(3)?)?;
+                let field_hashes = cbor::encode(&field_hashes_of(&payload)?);
+                entries_root.push(hash::leaf_hash(word.as_bytes(), &content_hash));
+                entry_count += 1;
+
+                let record = Record::new(word.as_bytes().to_vec(), payload);
+                let mut cut = chunker.push(&record);
+                if cut == cdc::Cut::Before {
+                    write_block(
+                        &mut insert_entry,
+                        &mut block_exists,
+                        &mut insert_block,
+                        &records,
+                        &staged,
+                        &mut new_blocks,
+                        &mut reused_blocks,
+                    )?;
+                    records.clear();
+                    staged.clear();
+                    cut = chunker.push(&record);
+                }
+                records.push(record);
+                staged.push(Staged {
                     word,
                     display,
-                    payload,
-                    content_hash: hash_from_blob(&content_hash)?,
+                    content_hash,
+                    field_hashes,
                 });
+                if cut == cdc::Cut::After {
+                    write_block(
+                        &mut insert_entry,
+                        &mut block_exists,
+                        &mut insert_block,
+                        &records,
+                        &staged,
+                        &mut new_blocks,
+                        &mut reused_blocks,
+                    )?;
+                    records.clear();
+                    staged.clear();
+                }
             }
-            out
+            if !records.is_empty() {
+                write_block(
+                    &mut insert_entry,
+                    &mut block_exists,
+                    &mut insert_block,
+                    &records,
+                    &staged,
+                    &mut new_blocks,
+                    &mut reused_blocks,
+                )?;
+                records.clear();
+                staged.clear();
+            }
+        }
+
+        let block_root = {
+            let mut accumulator = hash::MerkleAccumulator::new();
+            let mut select = transaction
+                .prepare("SELECT DISTINCT block_hash FROM entries ORDER BY block_hash ASC")?;
+            let mut rows = select.query([])?;
+            while let Some(row) = rows.next()? {
+                let digest = hash_from_blob(&row.get::<_, Vec<u8>>(0)?)?;
+                accumulator.push(digest);
+            }
+            accumulator.finish()
         };
-
-        let records: Vec<Record> = staged
-            .iter()
-            .map(|item| Record::new(item.word.as_bytes().to_vec(), item.payload.clone()))
-            .collect();
-        let ranges = cdc::boundaries(&records);
-
-        struct EncodedBlock {
-            hash: [u8; 32],
-            data: Vec<u8>,
-            raw_size: usize,
-            offsets: Vec<u64>,
-            start: usize,
-        }
-
-        let mut encoded = Vec::with_capacity(ranges.len());
-        for range in &ranges {
-            let raw = block::encode(&records[range.clone()])?;
-            let hash = hash::blake3(&raw);
-            let data = compress(&raw)?;
-            let decoded = block::decode(&raw)?;
-            encoded.push(EncodedBlock {
-                hash,
-                raw_size: raw.len(),
-                data,
-                offsets: decoded.offsets,
-                start: range.start,
-            });
-        }
-
-        let leaves: Vec<[u8; 32]> = staged
-            .iter()
-            .map(|item| hash::leaf_hash(item.word.as_bytes(), &item.content_hash))
-            .collect();
-        let entry_root = hash::merkle_root(&leaves);
-        let mut block_hashes: Vec<[u8; 32]> = encoded.iter().map(|item| item.hash).collect();
-        block_hashes.sort_unstable();
-        let block_root = hash::merkle_root(&block_hashes);
-        let entry_count = u64::try_from(staged.len()).unwrap_or(u64::MAX);
+        let entry_root = entries_root.finish();
         let commit_hash =
             hash::commit_hash(&parent, &ZERO_HASH, &entry_root, &block_root, entry_count);
+
+        let (raw_size, compressed_size) = {
+            let file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(temp.path())?;
+            let encoder = zstd::stream::write::Encoder::new(std::io::BufWriter::new(file), 3)
+                .map_err(|error| Error::Io(error.to_string()))?;
+            let mut writer = snapshot::SnapshotWriter::new(encoder, entry_count)?;
+            {
+                let mut select = transaction
+                    .prepare("SELECT word, content_hash FROM entries ORDER BY word ASC")?;
+                let mut rows = select.query([])?;
+                while let Some(row) = rows.next()? {
+                    let word: String = row.get(0)?;
+                    let digest = hash_from_blob(&row.get::<_, Vec<u8>>(1)?)?;
+                    writer.push(&word, &digest)?;
+                }
+            }
+            let (encoder, raw_size) = writer.finish()?;
+            let mut buffered = encoder
+                .finish()
+                .map_err(|error| Error::Io(error.to_string()))?;
+            buffered.flush()?;
+            let compressed_size = std::fs::metadata(temp.path())?.len();
+            (raw_size, compressed_size)
+        };
+
         let commit = CommitRecord {
             hash: commit_hash,
             parent,
@@ -601,62 +672,10 @@ impl Repo {
             author: author.to_string(),
             message: message.to_string(),
         };
-        let snapshot_rows: Vec<(String, [u8; 32])> = staged
-            .iter()
-            .map(|item| (item.word.clone(), item.content_hash))
-            .collect();
-        let snapshot = encode_snapshot(&snapshot_rows);
-        let snapshot_compressed = compress(&snapshot)?;
-        let transaction = self.connection.transaction()?;
-        transaction.execute("DELETE FROM entries", [])?;
-        let mut new_blocks = 0usize;
-        let mut reused_blocks = 0usize;
-        for encoded_block in &encoded {
-            let exists: Option<i64> = transaction
-                .query_row(
-                    "SELECT 1 FROM blocks WHERE block_hash = ?1",
-                    params![encoded_block.hash.as_slice()],
-                    |row| row.get(0),
-                )
-                .optional()?;
-            if exists.is_some() {
-                reused_blocks += 1;
-            } else {
-                transaction.execute(
-                    "INSERT INTO blocks(block_hash, codec, raw_size, data) VALUES (?1, ?2, ?3, ?4)",
-                    params![
-                        encoded_block.hash.as_slice(),
-                        codec::ZSTD,
-                        encoded_block.raw_size as i64,
-                        encoded_block.data
-                    ],
-                )?;
-                new_blocks += 1;
-            }
-            for (index, offset) in encoded_block.offsets.iter().enumerate() {
-                let record_index = encoded_block.start + index;
-                let item = &staged[record_index];
-                let length = records[record_index].encoded_len();
-                transaction.execute(
-                    "INSERT INTO entries(word, display, block_hash, offset, length,
-                                         content_hash, field_hashes)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                    params![
-                        item.word,
-                        item.display,
-                        encoded_block.hash.as_slice(),
-                        *offset as i64,
-                        length as i64,
-                        item.content_hash.as_slice(),
-                        cbor::encode(&field_hashes_of(&item.payload)?)
-                    ],
-                )?;
-            }
-        }
+
         transaction.execute(
             "INSERT INTO commits(commit_hash, parent, parent2, entry_root, block_root,
-                                 entry_count, ts, author, message)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+             entry_count, ts, author, message) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 commit.hash.as_slice(),
                 commit.parent.as_slice(),
@@ -670,25 +689,42 @@ impl Repo {
             ],
         )?;
         transaction.execute(
-            "INSERT INTO commit_index(commit_hash, codec, raw_size, data) VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO commit_index(commit_hash, codec, raw_size, data)
+             VALUES (?1, ?2, ?3, zeroblob(?4))",
             params![
                 commit.hash.as_slice(),
                 codec::ZSTD,
-                snapshot.len() as i64,
-                snapshot_compressed
+                raw_size as i64,
+                compressed_size as i64,
             ],
         )?;
+        {
+            // Copy the compressed snapshot into the database in fixed-size
+            // chunks so the whole index never has to sit in memory.
+            let rowid = transaction.last_insert_rowid();
+            let mut blob = transaction.blob_open("main", "commit_index", "data", rowid, false)?;
+            let mut source = std::fs::File::open(temp.path())?;
+            let mut buffer = vec![0u8; 64 * 1024];
+            loop {
+                let read = source.read(&mut buffer)?;
+                if read == 0 {
+                    break;
+                }
+                blob.write_all(&buffer[..read])?;
+            }
+        }
         transaction.execute(
             "INSERT INTO refs(name, commit_hash) VALUES ('HEAD', ?1)
              ON CONFLICT(name) DO UPDATE SET commit_hash = excluded.commit_hash",
             params![commit.hash.as_slice()],
         )?;
         transaction.commit()?;
+
         Ok(CommitOutcome {
             commit,
             new_blocks,
             reused_blocks,
-            entries: staged.len(),
+            entries: usize::try_from(entry_count).unwrap_or(usize::MAX),
         })
     }
 
@@ -755,6 +791,10 @@ impl Repo {
                 }
                 current = record.parent;
             }
+            if self.commit_record(&current)?.is_none() {
+                // The commit exists only as a parent link: `gc` removed it.
+                return Err(Error::UnknownCommit(hash::to_hex(&current)));
+            }
             return Ok(current);
         }
         let needle = revision.to_lowercase();
@@ -796,9 +836,10 @@ impl Repo {
             if limit.is_some_and(|limit| out.len() >= limit) {
                 break;
             }
-            let record = self
-                .commit_record(&hash)?
-                .ok_or_else(|| Error::UnknownCommit(hash::to_hex(&hash)))?;
+            let Some(record) = self.commit_record(&hash)? else {
+                // History was truncated by `gc`: the parent row is gone.
+                break;
+            };
             current = if record.parent == ZERO_HASH {
                 None
             } else {
@@ -869,49 +910,91 @@ impl Repo {
         Ok(Some(entry))
     }
 
-    fn snapshot(&self, hash: &[u8; 32]) -> Result<BTreeMap<String, [u8; 32]>> {
-        let row = self
+    /// Open a streaming reader over the commit index stored for `hash`.
+    ///
+    /// The compressed blob is decoded on the fly and only one entry is held in
+    /// memory at a time.
+    fn snapshot_reader(&self, hash: &[u8; 32]) -> Result<snapshot::SnapshotReader<impl Read + '_>> {
+        let rowid: Option<i64> = self
             .connection
             .query_row(
-                "SELECT codec, raw_size, data FROM commit_index WHERE commit_hash = ?1",
+                "SELECT rowid FROM commit_index WHERE commit_hash = ?1",
                 params![hash.as_slice()],
-                |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, i64>(1)?,
-                        row.get::<_, Vec<u8>>(2)?,
-                    ))
-                },
+                |row| row.get(0),
             )
             .optional()?;
-        let (codec_id, raw_size, data) = row.ok_or_else(|| {
+        let rowid = rowid.ok_or_else(|| {
             Error::Inconsistent(format!("missing commit_index for {}", hash::to_hex(hash)))
         })?;
-        let raw_size = usize::try_from(raw_size)
-            .map_err(|_| Error::Inconsistent("negative raw_size".to_string()))?;
-        let raw = decode_block_data(codec_id, raw_size, &data)?;
-        decode_snapshot(&raw)
+        let blob = self
+            .connection
+            .blob_open("main", "commit_index", "data", rowid, true)?;
+        let decoder =
+            zstd::stream::read::Decoder::new(blob).map_err(|error| Error::Io(error.to_string()))?;
+        snapshot::SnapshotReader::new(decoder)
+    }
+
+    /// Merkle root and entry count of the snapshot stored for `hash`, folded
+    /// while streaming.
+    fn snapshot_summary(&self, hash: &[u8; 32]) -> Result<([u8; 32], u64)> {
+        let mut reader = self.snapshot_reader(hash)?;
+        let mut accumulator = hash::MerkleAccumulator::new();
+        let mut count = 0u64;
+        while let Some((word, digest)) = reader.next_pair()? {
+            accumulator.push(hash::leaf_hash(word.as_bytes(), &digest));
+            count += 1;
+        }
+        Ok((accumulator.finish(), count))
     }
 
     /// Word-level diff between two revisions.
+    ///
+    /// Both commit indexes are decompressed and merged as streams in word
+    /// order and neither side is ever materialised as a map.
     pub fn diff(&self, from: &str, to: &str) -> Result<Diff> {
         let from_hash = self.resolve(from)?;
         let to_hash = self.resolve(to)?;
-        let left = self.snapshot(&from_hash)?;
-        let right = self.snapshot(&to_hash)?;
         let mut added = Vec::new();
         let mut removed = Vec::new();
         let mut modified = Vec::new();
-        for (word, digest) in &right {
-            match left.get(word) {
-                None => added.push(word.clone()),
-                Some(previous) if previous != digest => modified.push(word.clone()),
-                Some(_) => {}
-            }
-        }
-        for word in left.keys() {
-            if !right.contains_key(word) {
-                removed.push(word.clone());
+        if from_hash != to_hash {
+            let mut left = self.snapshot_reader(&from_hash)?;
+            let mut right = self.snapshot_reader(&to_hash)?;
+            let mut left_item = left.next_pair()?;
+            let mut right_item = right.next_pair()?;
+            loop {
+                match (left_item.take(), right_item.take()) {
+                    (None, None) => break,
+                    (None, Some((word, _))) => {
+                        added.push(word);
+                        right_item = right.next_pair()?;
+                    }
+                    (Some((word, _)), None) => {
+                        removed.push(word);
+                        left_item = left.next_pair()?;
+                    }
+                    (Some((left_word, left_digest)), Some((right_word, right_digest))) => {
+                        match left_word.cmp(&right_word) {
+                            std::cmp::Ordering::Less => {
+                                removed.push(left_word);
+                                left_item = left.next_pair()?;
+                                right_item = Some((right_word, right_digest));
+                            }
+                            std::cmp::Ordering::Greater => {
+                                added.push(right_word);
+                                right_item = right.next_pair()?;
+                                left_item = Some((left_word, left_digest));
+                            }
+                            std::cmp::Ordering::Equal => {
+                                if left_digest != right_digest {
+                                    modified.push(right_word);
+                                }
+                                left_item = left.next_pair()?;
+                                right_item = right.next_pair()?;
+                            }
+                        }
+                    }
+                }
             }
         }
         Ok(Diff {
@@ -929,7 +1012,6 @@ impl Repo {
         let mut blocks = 0usize;
         let mut entries = 0usize;
         let mut commits = 0usize;
-        let mut block_cache: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
 
         {
             let mut statement = self
@@ -976,15 +1058,15 @@ impl Repo {
                 if let Err(error) = block::decode(&raw) {
                     errors.push(format!("block decode: {error}"));
                 }
-                block_cache.insert(block_hash, raw);
             }
         }
 
         {
             let mut statement = self.connection.prepare(
                 "SELECT word, display, block_hash, offset, length, content_hash, field_hashes
-                 FROM entries",
+                 FROM entries ORDER BY block_hash",
             )?;
+            let mut loaded: Option<(Vec<u8>, Option<Vec<u8>>)> = None;
             let rows = statement.query_map([], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -999,7 +1081,15 @@ impl Repo {
             for row in rows {
                 let (word, display, block_hash, offset, length, content_hash, field_hashes) = row?;
                 entries += 1;
-                let Some(raw) = block_cache.get(&block_hash) else {
+                if loaded
+                    .as_ref()
+                    .map(|(hash, _)| hash != &block_hash)
+                    .unwrap_or(true)
+                {
+                    let raw = self.load_block_raw(&block_hash).ok();
+                    loaded = Some((block_hash.clone(), raw));
+                }
+                let Some(raw) = loaded.as_ref().and_then(|(_, raw)| raw.as_ref()) else {
                     errors.push(format!("entry {word}: block missing"));
                     continue;
                 };
@@ -1053,14 +1143,14 @@ impl Repo {
             let rows = statement.query_map([], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
             })?;
-            let mut leaves = Vec::new();
+            let mut accumulator = hash::MerkleAccumulator::new();
             for row in rows {
                 let (word, content_hash) = row?;
                 if let Ok(digest) = hash_from_blob(&content_hash) {
-                    leaves.push(hash::leaf_hash(word.as_bytes(), &digest));
+                    accumulator.push(hash::leaf_hash(word.as_bytes(), &digest));
                 }
             }
-            hash::merkle_root(&leaves)
+            accumulator.finish()
         };
 
         {
@@ -1117,19 +1207,15 @@ impl Repo {
                     )),
                     Err(_) => errors.push("commit hash column is not 32 bytes".to_string()),
                 }
-                match self.snapshot(&recomputed) {
-                    Ok(snapshot) => {
-                        let leaves: Vec<[u8; 32]> = snapshot
-                            .iter()
-                            .map(|(word, digest)| hash::leaf_hash(word.as_bytes(), digest))
-                            .collect();
-                        if hash::merkle_root(&leaves) != entry_root {
+                match self.snapshot_summary(&recomputed) {
+                    Ok((snapshot_root, snapshot_count)) => {
+                        if snapshot_root != entry_root {
                             errors.push(format!(
                                 "commit {}: entry_root does not match snapshot",
                                 hash::to_hex(&recomputed)
                             ));
                         }
-                        if snapshot.len() as u64 != count {
+                        if snapshot_count != count {
                             errors.push(format!(
                                 "commit {}: entry_count does not match snapshot",
                                 hash::to_hex(&recomputed)
@@ -1161,7 +1247,6 @@ impl Repo {
         })
     }
 }
-
 fn decode_block_data(codec_id: i64, raw_size: usize, data: &[u8]) -> Result<Vec<u8>> {
     match codec_id {
         codec::RAW => Ok(data.to_vec()),
@@ -1184,46 +1269,89 @@ fn field_hashes_of(payload: &[u8]) -> Result<Value> {
     Ok(Value::Map(pairs))
 }
 
-fn encode_snapshot(rows: &[(String, [u8; 32])]) -> Vec<u8> {
-    let array = rows
-        .iter()
-        .map(|(word, digest)| {
-            Value::Array(vec![
-                Value::Text(word.clone()),
-                Value::Bytes(digest.to_vec()),
-            ])
-        })
-        .collect();
-    cbor::encode(&Value::Array(array))
-}
-
-fn decode_snapshot(raw: &[u8]) -> Result<BTreeMap<String, [u8; 32]>> {
-    let value = cbor::decode(raw)?;
-    let items = value
-        .as_array()
-        .ok_or(Error::Inconsistent("snapshot is not an array".to_string()))?;
-    let mut out = BTreeMap::new();
-    for item in items {
-        let pair = item.as_array().ok_or(Error::Inconsistent(
-            "snapshot row is not an array".to_string(),
-        ))?;
-        let word = pair
-            .first()
-            .and_then(Value::as_text)
-            .ok_or(Error::Inconsistent("snapshot row without word".to_string()))?;
-        let digest = pair
-            .get(1)
-            .and_then(Value::as_bytes)
-            .ok_or(Error::Inconsistent("snapshot row without hash".to_string()))?;
-        out.insert(word.to_string(), hash_from_blob(digest)?);
-    }
-    Ok(out)
-}
-
 fn chrono_free_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |duration| {
             i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
         })
+}
+
+/// One entry awaiting insertion into the new commit index.
+struct Staged {
+    word: String,
+    display: String,
+    content_hash: [u8; 32],
+    field_hashes: Vec<u8>,
+}
+
+/// Encode one cut block, store it if new and index its entries.
+fn write_block(
+    entries: &mut rusqlite::Statement<'_>,
+    exists: &mut rusqlite::Statement<'_>,
+    insert: &mut rusqlite::Statement<'_>,
+    records: &[Record],
+    staged: &[Staged],
+    new_blocks: &mut usize,
+    reused_blocks: &mut usize,
+) -> Result<()> {
+    if records.is_empty() {
+        return Ok(());
+    }
+    let raw = block::encode(records)?;
+    let block_hash = hash::blake3(&raw);
+    let decoded = block::decode(&raw)?;
+    let present: Option<i64> = exists
+        .query_row(params![block_hash.as_slice()], |row| row.get(0))
+        .optional()?;
+    if present.is_some() {
+        *reused_blocks += 1;
+    } else {
+        let data = compress(&raw)?;
+        insert.execute(params![
+            block_hash.as_slice(),
+            codec::ZSTD,
+            raw.len() as i64,
+            data,
+        ])?;
+        *new_blocks += 1;
+    }
+    for (index, offset) in decoded.offsets.iter().enumerate() {
+        let item = &staged[index];
+        entries.execute(params![
+            item.word,
+            item.display,
+            block_hash.as_slice(),
+            *offset as i64,
+            records[index].encoded_len() as i64,
+            item.content_hash.as_slice(),
+            item.field_hashes,
+        ])?;
+    }
+    Ok(())
+}
+
+/// Scratch file removed when it goes out of scope.
+struct TempPath {
+    path: PathBuf,
+}
+
+impl TempPath {
+    fn new(dir: &Path, label: &str) -> Self {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_nanos());
+        let path = dir.join(format!(".odc-{label}-{}-{nanos}.tmp", std::process::id()));
+        Self { path }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TempPath {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
 }
