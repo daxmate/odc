@@ -102,3 +102,35 @@ Every failure maps to a stable code (`ODC-E001` ... ) printed by the CLI and
 documented in the spec. Without that, scripts cannot distinguish "malformed
 block" from "I/O error", and alternative implementations cannot be tested
 against the same expectations.
+
+## 8. The working set does not cache committed payloads
+
+`staging` used to keep the uncompressed CBOR payload of every entry, including
+entries already stored in `blocks`. On a 148k-entry dictionary that duplicated
+~790 MiB of text next to a ~115 MiB block store, so half of `odc.db` was a
+redundant cache.
+
+Committed entries already have an exact location (`entries.word` →
+`block_hash`, `offset`, `length`) and a `content_hash`. Keeping the body a
+second time buys nothing: the only thing the working set needs for those rows
+is the key, the display form and the content hash that `status` compares.
+Uncommitted rows still carry their payload, because no block holds them yet.
+
+When a payload is needed (commit re-chunks the whole stream, `working_entry`
+serves a working-set read), it is materialised from the block and checked
+against `content_hash`; a slice that does not decode to the expected record is
+an `Inconsistent` error instead of silently returning the wrong word. Commit
+snapshots those slices into a temporary table before rebuilding `entries`, then
+reads them back through a one-block cache, so peak memory stays bounded by a
+single block plus one record, as before.
+
+Commit rebuilds `staging` after clearing the payloads, so the freed bytes leave
+the table's b-tree instead of lingering as in-page free space. When a commit
+frees at least 64 MiB of cached payloads it also runs `VACUUM`: a dictionary
+import that used to leave half of `odc.db` as dead cache would otherwise keep
+the file at its peak size, and paying for one rewrite after a bulk import is
+cheaper than carrying that space forever. Small edits stay vacuum-free.
+
+The same layout is preserved for old databases: opening one rebuilds `staging`
+with a nullable `payload` column and copies every row, including uncommitted
+payloads.

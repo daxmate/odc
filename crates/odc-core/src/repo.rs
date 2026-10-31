@@ -17,6 +17,10 @@ use std::path::{Path, PathBuf};
 /// Default author recorded when none is supplied.
 pub const DEFAULT_AUTHOR: &str = "odc";
 
+/// Cached payload bytes a commit must free before it rewrites the database to
+/// give the space back to the file system.
+const VACUUM_THRESHOLD: i64 = 64 * 1024 * 1024;
+
 /// A checked-out repository backed by `odc.db`.
 pub struct Repo {
     pub(crate) connection: Connection,
@@ -173,6 +177,7 @@ impl Repo {
         }
         let connection = store::open(&db_path)?;
         store::check_version(&connection)?;
+        store::migrate(&connection)?;
         Ok(Self { connection, dir })
     }
 
@@ -532,6 +537,22 @@ impl Repo {
         let temp = TempPath::new(&self.dir, "commit-index");
 
         let transaction = self.connection.transaction()?;
+        // Committed entries keep only a pointer in `staging`. Snapshot the
+        // slices before the index is rebuilt so their payloads can be
+        // materialised while the new blocks are chunked.
+        transaction.execute_batch(
+            "CREATE TEMP TABLE IF NOT EXISTS staging_location(
+                 word TEXT PRIMARY KEY,
+                 block_hash BLOB NOT NULL,
+                 offset INTEGER NOT NULL,
+                 length INTEGER NOT NULL
+             );
+             DELETE FROM staging_location;
+             INSERT INTO staging_location(word, block_hash, offset, length)
+                 SELECT s.word, e.block_hash, e.offset, e.length
+                 FROM staging s JOIN entries e ON e.word = s.word
+                 WHERE s.payload IS NULL;",
+        )?;
         transaction.execute("DELETE FROM entries", [])?;
 
         let mut new_blocks = 0usize;
@@ -556,13 +577,42 @@ impl Repo {
             let mut insert_block = transaction.prepare(
                 "INSERT INTO blocks(block_hash, codec, raw_size, data) VALUES (?1, ?2, ?3, ?4)",
             )?;
+            let mut select_location = transaction.prepare(
+                "SELECT block_hash, offset, length FROM staging_location WHERE word = ?1",
+            )?;
+            let mut reader = BlockReader::new(&transaction);
 
             let mut rows = select.query([])?;
             while let Some(row) = rows.next()? {
                 let word: String = row.get(0)?;
                 let display: String = row.get(1)?;
-                let payload: Vec<u8> = row.get(2)?;
                 let content_hash = hash_from_blob(&row.get::<_, Vec<u8>>(3)?)?;
+                let payload: Vec<u8> = match row.get::<_, Option<Vec<u8>>>(2)? {
+                    Some(payload) => payload,
+                    None => {
+                        let location = select_location
+                            .query_row(params![word], |row| {
+                                Ok((
+                                    row.get::<_, Vec<u8>>(0)?,
+                                    row.get::<_, i64>(1)?,
+                                    row.get::<_, i64>(2)?,
+                                ))
+                            })
+                            .optional()?
+                            .ok_or_else(|| {
+                                Error::Inconsistent(format!(
+                                    "working entry {word} has no payload and no committed slice"
+                                ))
+                            })?;
+                        let block_hash = hash_from_blob(&location.0)?;
+                        hydrate_payload(
+                            &mut reader,
+                            &(block_hash, location.1, location.2),
+                            &word,
+                            &content_hash,
+                        )?
+                    }
+                };
                 let field_hashes = cbor::encode(&field_hashes_of(&payload)?);
                 entries_root.push(hash::leaf_hash(word.as_bytes(), &content_hash));
                 entry_count += 1;
@@ -618,6 +668,28 @@ impl Repo {
                 staged.clear();
             }
         }
+
+        // Every working-set row now points into the new index, so the cached
+        // payloads are redundant. Keep word/display/content_hash for `status`
+        // and rebuild the table so the freed payload pages leave its b-tree.
+        let cached_payloads: i64 = transaction.query_row(
+            "SELECT COALESCE(SUM(length(payload)), 0) FROM staging",
+            [],
+            |row| row.get(0),
+        )?;
+        transaction.execute_batch(
+            "DROP TABLE IF EXISTS staging_compact;
+             CREATE TABLE staging_compact(
+                 word TEXT PRIMARY KEY,
+                 display TEXT NOT NULL,
+                 payload BLOB,
+                 content_hash BLOB NOT NULL
+             );
+             INSERT INTO staging_compact(word, display, content_hash)
+                 SELECT word, display, content_hash FROM staging;
+             DROP TABLE staging;
+             ALTER TABLE staging_compact RENAME TO staging;",
+        )?;
 
         let block_root = {
             let mut accumulator = hash::MerkleAccumulator::new();
@@ -719,6 +791,13 @@ impl Repo {
             params![commit.hash.as_slice()],
         )?;
         transaction.commit()?;
+
+        // Dropping the payloads empties pages inside staging but leaves them in
+        // the file. Large working sets are worth compacting once the commit is
+        // durable; small edits should not pay for a full rewrite.
+        if cached_payloads >= VACUUM_THRESHOLD {
+            self.connection.execute_batch("VACUUM")?;
+        }
 
         Ok(CommitOutcome {
             commit,
@@ -908,6 +987,73 @@ impl Repo {
         let mut entry = Entry::decode_payload(&record.payload)?;
         entry.word = key;
         Ok(Some(entry))
+    }
+
+    /// Read the working-set payload for `word`.
+    ///
+    /// Committed entries keep only a pointer in `staging`; their payload is
+    /// materialised from the committed block and verified against the stored
+    /// content hash. Uncommitted entries carry their payload inline.
+    pub fn working_payload(&self, word: &str) -> Result<Option<Vec<u8>>> {
+        let key = normalize_key(word);
+        let row = self
+            .connection
+            .query_row(
+                "SELECT payload, content_hash FROM staging WHERE word = ?1",
+                params![key],
+                |row| Ok((row.get::<_, Option<Vec<u8>>>(0)?, row.get::<_, Vec<u8>>(1)?)),
+            )
+            .optional()?;
+        let Some((payload, content_hash)) = row else {
+            return Ok(None);
+        };
+        let content_hash = hash_from_blob(&content_hash)?;
+        match payload {
+            Some(payload) => Ok(Some(payload)),
+            None => Ok(Some(self.payload_from_index(&key, &content_hash)?)),
+        }
+    }
+
+    /// Read the working-set entry for `word`, materialising its payload when
+    /// the working set only holds a pointer into the committed index.
+    pub fn working_entry(&self, word: &str) -> Result<Option<Entry>> {
+        let key = normalize_key(word);
+        let Some(payload) = self.working_payload(&key)? else {
+            return Ok(None);
+        };
+        let mut entry = Entry::decode_payload(&payload)?;
+        entry.word = key;
+        Ok(Some(entry))
+    }
+
+    fn payload_from_index(&self, word: &str, content_hash: &[u8; 32]) -> Result<Vec<u8>> {
+        let row = self
+            .connection
+            .query_row(
+                "SELECT block_hash, offset, length FROM entries WHERE word = ?1",
+                params![word],
+                |row| {
+                    Ok((
+                        row.get::<_, Vec<u8>>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((block_hash, offset, length)) = row else {
+            return Err(Error::Inconsistent(format!(
+                "working entry {word} has no payload and no committed slice"
+            )));
+        };
+        let block_hash = hash_from_blob(&block_hash)?;
+        let mut reader = BlockReader::new(&self.connection);
+        hydrate_payload(
+            &mut reader,
+            &(block_hash, offset, length),
+            word,
+            content_hash,
+        )
     }
 
     /// Open a streaming reader over the commit index stored for `hash`.
@@ -1646,6 +1792,28 @@ impl<'a> BlockReader<'a> {
     }
 }
 
+/// Materialise one record from a committed block and verify it against the
+/// working set's `content_hash`.
+pub(crate) fn hydrate_payload(
+    reader: &mut BlockReader<'_>,
+    slice: &([u8; 32], i64, i64),
+    word: &str,
+    content_hash: &[u8; 32],
+) -> Result<Vec<u8>> {
+    let record = reader.record(slice)?;
+    if record.key != word.as_bytes() {
+        return Err(Error::Inconsistent(format!(
+            "block record does not match working entry {word}"
+        )));
+    }
+    if hash::blake3(&record.payload) != *content_hash {
+        return Err(Error::Inconsistent(format!(
+            "block record for {word} does not match its content hash"
+        )));
+    }
+    Ok(record.payload)
+}
+
 fn flush_merge_records(
     exists: &mut rusqlite::Statement<'_>,
     insert: &mut rusqlite::Statement<'_>,
@@ -1780,9 +1948,8 @@ fn stage_merge_rows(connection: &Connection, rows: &mut [MergeRow]) -> Result<(u
             "INSERT INTO entries(word, display, block_hash, offset, length, content_hash, field_hashes)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         )?;
-        let mut insert_staging = connection.prepare(
-            "INSERT INTO staging(word, display, payload, content_hash) VALUES (?1, ?2, ?3, ?4)",
-        )?;
+        let mut insert_staging = connection
+            .prepare("INSERT INTO staging(word, display, content_hash) VALUES (?1, ?2, ?3)")?;
         let mut reader = BlockReader::new(connection);
         for row in rows.iter() {
             let payload = match row.slice {
@@ -1822,12 +1989,7 @@ fn stage_merge_rows(connection: &Connection, rows: &mut [MergeRow]) -> Result<(u
                 row.content_hash.as_slice(),
                 field_hashes,
             ])?;
-            insert_staging.execute(params![
-                &row.word,
-                &display,
-                payload,
-                row.content_hash.as_slice(),
-            ])?;
+            insert_staging.execute(params![&row.word, &display, row.content_hash.as_slice(),])?;
         }
     }
     Ok((new_blocks, reused_blocks))

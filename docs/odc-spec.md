@@ -212,12 +212,12 @@ CREATE TABLE commit_index(commit_hash BLOB PRIMARY KEY, codec INTEGER NOT NULL,
 CREATE TABLE refs(name TEXT PRIMARY KEY, commit_hash BLOB NOT NULL);
 CREATE TABLE conflicts(id INTEGER PRIMARY KEY, word TEXT NOT NULL, detail TEXT NOT NULL);
 CREATE TABLE staging(word TEXT PRIMARY KEY, display TEXT NOT NULL,
-                     payload BLOB NOT NULL, content_hash BLOB NOT NULL);
+                     payload BLOB, content_hash BLOB NOT NULL);
 ```
 
 * `entries` 是 HEAD 的物化索引；`offset`/`length` 指向块内该 record 的字节区间。
 * `commit_index` 存 zstd 压缩的 CBOR 快照：按 key 升序的 `[[word, content_hash], …]` 数组，用于历史 diff。写入与读取都按条流式进行（数组头给出条目数），实现不得要求整表驻留内存；`raw_size` 记录未压缩字节数，`verify` 会与实际解码字节数比对。
-* `staging` 是工作区（未提交内容）。它不属于互操作格式。
+* `staging` 是工作区（未提交内容）。它不属于互操作格式。已提交词条只保留指针（`word`、`display`、`content_hash`），`payload` 为 NULL；未提交词条必须携带 payload。需要正文时按 `content_hash` 从 `entries` 定位块、解压并校验。
 * codec：`0` = 原始字节，`1` = zstd（压缩级别 3，实现可调，不影响任何哈希）。
 * `conflicts` 保存未完成的合并中每个冲突词条的决定（见 §10.1 与 `docs/merge.md`）。
 

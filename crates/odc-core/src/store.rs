@@ -64,7 +64,7 @@ CREATE TABLE conflicts(id INTEGER PRIMARY KEY, word TEXT NOT NULL, detail TEXT N
 CREATE TABLE staging(
     word TEXT PRIMARY KEY,
     display TEXT NOT NULL,
-    payload BLOB NOT NULL,
+    payload BLOB,
     content_hash BLOB NOT NULL
 );
 ";
@@ -114,6 +114,40 @@ pub fn get_meta(connection: &Connection, key: &str) -> Result<Option<Vec<u8>>> {
         })
         .optional()?;
     Ok(value)
+}
+
+/// Bring an existing database up to the current working-set schema.
+///
+/// Databases written before the working set stopped caching committed
+/// payloads declare `staging.payload` as `NOT NULL`. SQLite cannot drop a
+/// column constraint in place, so the table is rebuilt and its rows are
+/// copied verbatim. Uncommitted payloads survive the migration unchanged.
+pub fn migrate(connection: &Connection) -> Result<()> {
+    let not_null: Option<i64> = connection
+        .query_row(
+            "SELECT \"notnull\" FROM pragma_table_info('staging') WHERE name = 'payload'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if not_null != Some(1) {
+        return Ok(());
+    }
+    let transaction = connection.unchecked_transaction()?;
+    transaction.execute_batch(
+        "ALTER TABLE staging RENAME TO staging_not_null;
+         CREATE TABLE staging(
+             word TEXT PRIMARY KEY,
+             display TEXT NOT NULL,
+             payload BLOB,
+             content_hash BLOB NOT NULL
+         );
+         INSERT INTO staging(word, display, payload, content_hash)
+             SELECT word, display, payload, content_hash FROM staging_not_null;
+         DROP TABLE staging_not_null;",
+    )?;
+    transaction.commit()?;
+    Ok(())
 }
 
 /// Reject a database whose major version is not supported.

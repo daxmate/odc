@@ -50,6 +50,12 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 * `patch::apply` returns `ApplyOutcome` (`Applied` or `Merged`) and no longer
   rejects a descendant HEAD.
 * CSV import accepts an optional `raw_html` column.
+* The working set no longer caches the uncompressed payload of committed
+  entries: `staging.payload` is nullable, `commit` clears it after rebuilding
+  the index, and reads materialise the body from the block when needed
+  (verified against `content_hash`). Databases written with the old schema are
+  migrated on open. A commit that frees at least 64 MiB of cached payloads also
+  vacuums the database so the file shrinks back.
 
 ## [0.1.0] - 2026-10-31
 

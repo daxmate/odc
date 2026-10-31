@@ -12,7 +12,7 @@ use crate::entry::Entry;
 use crate::error::{Error, Result};
 use crate::hash;
 use crate::merge::{self, Strategy};
-use crate::repo::{self, BlockReader, CommitRecord, Repo, DEFAULT_AUTHOR};
+use crate::repo::{self, CommitRecord, Repo, DEFAULT_AUTHOR};
 use crate::snapshot;
 use crate::store::codec;
 use crate::varint;
@@ -701,17 +701,12 @@ fn write_target(
         // Keep the working set identical to the freshly written index.
         transaction.execute("DELETE FROM staging", [])?;
         {
-            let mut reader = BlockReader::new(&transaction);
-            let mut insert_staging = transaction.prepare(
-                "INSERT INTO staging(word, display, payload, content_hash) VALUES (?1, ?2, ?3, ?4)",
-            )?;
+            let mut insert_staging = transaction
+                .prepare("INSERT INTO staging(word, display, content_hash) VALUES (?1, ?2, ?3)")?;
             for row in &state.rows {
-                let slice = (row.block_hash, row.offset, row.length);
-                let payload = reader.record(&slice)?.payload;
                 insert_staging.execute(params![
                     &row.word,
                     &row.display,
-                    payload,
                     row.content_hash.as_slice(),
                 ])?;
             }
