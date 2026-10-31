@@ -1,0 +1,13 @@
+{
+  "format": "odc-testvector-v1",
+  "kind": "block_encoding",
+  "note": "Hand-computed from spec section 3: magic 'ODB1', flags 0x01 (offset index), varint record count, records as varint(key_len) key varint(payload_len) payload, then one varint offset per record. Not derived from the Rust implementation.",
+  "raw_block_hex": "4f44423101020161000162000609",
+  "count": 2,
+  "records": [
+    { "key": "a", "payload_hex": "" },
+    { "key": "b", "payload_hex": "" }
+  ],
+  "offsets": [6, 9],
+  "trailing_index_hex": "0609"
+}

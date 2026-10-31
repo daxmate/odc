@@ -1,0 +1,19 @@
+{
+  "format": "odc-testvector-v1",
+  "kind": "varint_encoding",
+  "note": "Hand-computed from spec section 2 (base-128, little-endian groups, continuation bit 0x80, minimal encoding). Not derived from the Rust implementation.",
+  "cases": [
+    { "value_dec": "0", "hex": "00", "length": 1 },
+    { "value_dec": "1", "hex": "01", "length": 1 },
+    { "value_dec": "127", "hex": "7f", "length": 1 },
+    { "value_dec": "128", "hex": "8001", "length": 2 },
+    { "value_dec": "255", "hex": "ff01", "length": 2 },
+    { "value_dec": "300", "hex": "ac02", "length": 2 },
+    { "value_dec": "16383", "hex": "ff7f", "length": 2 },
+    { "value_dec": "16384", "hex": "808001", "length": 3 },
+    { "value_dec": "2097151", "hex": "ffff7f", "length": 3 },
+    { "value_dec": "2097152", "hex": "80808001", "length": 4 },
+    { "value_dec": "4294967296", "hex": "8080808010", "length": 5 },
+    { "value_dec": "18446744073709551615", "hex": "ffffffffffffffffff01", "length": 10 }
+  ]
+}
