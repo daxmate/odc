@@ -24,6 +24,7 @@ workspace = true
 
 [dev-dependencies]
 odc-testkit = { path = "../odc-testkit" }
+rusqlite = { version = "0.41.1", features = ["blob", "bundled"] }
 assert_cmd = "2"
 predicates = "3"
 tempfile = "3"

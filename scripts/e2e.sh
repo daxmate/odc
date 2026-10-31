@@ -179,4 +179,76 @@ if [ "$REPLAY" -ne 4 ]; then
 fi
 echo "ok: replaying a patch exits 4"
 
+echo "== merge: fork, conflict, resolve, continue =="
+MERGE="$WORK/merge"
+FORK="$WORK/merge-fork"
+"$ODC" --repo "$MERGE" init >/dev/null
+cat > "$WORK/m-base.jsonl" <<'JSONL'
+{"word":"alpha","display":"Alpha","defs":[{"pos":"noun","sense":"base alpha"}]}
+{"word":"beta","display":"Beta","defs":[{"pos":"noun","sense":"base beta"}]}
+JSONL
+"$ODC" --repo "$MERGE" import "$WORK/m-base.jsonl" >/dev/null
+"$ODC" --repo "$MERGE" commit -m base --timestamp 1700000300 >/dev/null
+python3 - "$MERGE/odc.db" "$FORK/odc.db" <<'PY'
+import os, sqlite3, sys
+source, target = sys.argv[1], sys.argv[2]
+os.makedirs(os.path.dirname(target), exist_ok=True)
+connection = sqlite3.connect(source)
+connection.execute("VACUUM INTO ?", (target,))
+connection.close()
+PY
+cat > "$WORK/m-ours.jsonl" <<'JSONL'
+{"word":"alpha","display":"Alpha","defs":[{"pos":"noun","sense":"ours alpha"}]}
+{"word":"beta","display":"Beta","defs":[{"pos":"noun","sense":"base beta"}]}
+JSONL
+"$ODC" --repo "$MERGE" import "$WORK/m-ours.jsonl" >/dev/null
+"$ODC" --repo "$MERGE" commit -m ours --timestamp 1700000310 >/dev/null
+cat > "$WORK/m-theirs.jsonl" <<'JSONL'
+{"word":"alpha","display":"Alpha","defs":[{"pos":"noun","sense":"theirs alpha"}]}
+{"word":"beta","display":"Beta","defs":[{"pos":"noun","sense":"base beta"}]}
+JSONL
+"$ODC" --repo "$FORK" import "$WORK/m-theirs.jsonl" >/dev/null
+"$ODC" --repo "$FORK" commit -m theirs --timestamp 1700000320 >/dev/null
+THEIRS=$("$ODC" --repo "$FORK" log --json | awk '/"hash":/ { print $2; exit }' | tr -d '",')
+python3 - "$MERGE/odc.db" "$FORK/odc.db" <<'PY'
+import sqlite3, sys
+target, source = sys.argv[1], sys.argv[2]
+connection = sqlite3.connect(target)
+connection.execute("ATTACH DATABASE ? AS fork", (source,))
+for table in ("commits", "commit_index", "blocks"):
+    connection.execute(
+        "INSERT OR IGNORE INTO main." + table + " SELECT * FROM fork." + table
+    )
+connection.commit()
+connection.execute("DETACH DATABASE fork")
+connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+connection.close()
+PY
+HEAD_BEFORE=$("$ODC" --repo "$MERGE" log --json | awk '/"hash":/ { print $2; exit }' | tr -d '",')
+set +e
+"$ODC" --repo "$MERGE" merge HEAD "$THEIRS" --json > "$WORK/merge-conflict.json"
+CONFLICT=$?
+set -e
+if [ "$CONFLICT" -ne 5 ]; then
+  echo "FAIL: merge with conflicts exited $CONFLICT (expected 5)"
+  exit 1
+fi
+grep -q '"word": "alpha"' "$WORK/merge-conflict.json" || { echo "FAIL: conflict word"; exit 1; }
+grep -q '"defs"' "$WORK/merge-conflict.json" || { echo "FAIL: conflict fields"; exit 1; }
+HEAD_AFTER=$("$ODC" --repo "$MERGE" log --json | awk '/"hash":/ { print $2; exit }' | tr -d '",')
+if [ "$HEAD_BEFORE" != "$HEAD_AFTER" ]; then
+  echo "FAIL: conflicted merge moved HEAD"
+  exit 1
+fi
+echo "ok: conflicted merge exits 5 and leaves HEAD unchanged"
+"$ODC" --repo "$MERGE" conflicts --json | tee "$WORK/merge-conflicts.json" >/dev/null
+grep -q '"resolution": null' "$WORK/merge-conflicts.json" || { echo "FAIL: conflict listing"; exit 1; }
+"$ODC" --repo "$MERGE" resolve alpha --ours
+"$ODC" --repo "$MERGE" merge --continue --json | tee "$WORK/merge-done.json"
+grep -q '"kind": "merged"' "$WORK/merge-done.json" || { echo "FAIL: merge --continue"; exit 1; }
+"$ODC" --repo "$MERGE" lookup alpha | grep -q "ours alpha" || { echo "FAIL: resolved payload"; exit 1; }
+"$ODC" --repo "$MERGE" status | grep -q "working set clean" || { echo "FAIL: merge status"; exit 1; }
+"$ODC" --repo "$MERGE" verify | grep -q "verify: OK" || { echo "FAIL: merge verify"; exit 1; }
+echo "ok: merge conflict resolved, merge commit verified"
+
 echo "e2e: PASS (workdir $WORK)"

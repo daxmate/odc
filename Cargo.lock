@@ -534,6 +534,7 @@ dependencies = [
  "odc-core",
  "odc-testkit",
  "predicates",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
