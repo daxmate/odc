@@ -83,4 +83,33 @@ apps/apple/
   binary; sort that out before distribution.
 * macOS builds are unsigned (`CODE_SIGNING_ALLOWED=NO`); the desktop target
   ships with an app-sandbox entitlement and
-  `files.user-selected.read-only`.
+  `files.user-selected.read-write` (read-write so an imported MDX can be
+  converted next to its source; the picker still gates every path).
+
+## Importing MDX (macOS)
+
+ODict Desktop converts a `.mdx` dictionary into a standalone `.odc` file, so
+the CLI is no longer required for the first step.
+
+1. `Open Dictionary or MDX…` (⌘O) accepts `.odc` files, repository
+   directories and `.mdx` files. The iOS target keeps rejecting `.mdx`.
+2. `DictionaryStore.importMDX(url:)` runs `odc_import_mdx_to_odc` on a
+   background thread and publishes the stage (准备 / 导入中 / 完成). The core
+   converts and packs in a single call, so the UI never invents a percentage.
+3. The output lands next to the source as `<name>.odc`; when that directory
+   is not writable it falls back to `~/Documents`. An existing file is never
+   replaced — the app uses `-1`, `-2`, … instead.
+4. Corrupt record blocks are skipped (the core imports a repaired copy) and
+   the completion alert reports `已导入 N 条，跳过 M 个损坏块（K 条）` plus
+   any scan warning.
+5. The converted document opens automatically through the normal path.
+
+The same call is available without the GUI:
+
+```rust
+let report = odc_import_mdx_to_odc(mdx_path, out_odc_path, &mut report_json, &mut error);
+```
+
+`cargo test -p odc-ffi --test ffi import_mdx` covers the clean, corrupt,
+existing-target and missing-source paths; the `imports_a_real_mdx_file` test
+is opt-in through `ODC_MDX_SMOKE=<path to .mdx>` and `-- --ignored`.

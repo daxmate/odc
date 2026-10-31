@@ -21,7 +21,7 @@ public struct DictionaryRootView: View {
                 switch result {
                 case .success(let urls):
                     guard let url = urls.first else { return }
-                    store.open(url: url)
+                    openDocument(url)
                 case .failure(let error):
                     store.present(error: error)
                 }
@@ -43,9 +43,26 @@ public struct DictionaryRootView: View {
             } message: {
                 Text(store.errorMessage ?? "")
             }
-            .odictOnOpenURL { url in
-                store.open(url: url)
+            .overlay(alignment: .bottom) {
+                if let phase = store.importPhase {
+                    ImportProgressView(phase: phase)
+                        .padding(.bottom, 24)
+                        .transition(.opacity)
+                } else if let summary = store.importSummary {
+                    ImportSummaryView(summary: summary) {
+                        store.dismissImportSummary()
+                    }
+                    .padding(.bottom, 24)
+                }
             }
+            .odictOnOpenURL { url in
+                openDocument(url)
+            }
+    }
+
+    /// MDX files are converted into a standalone document first.
+    private func openDocument(_ url: URL) {
+        store.openDocument(url: url)
     }
 
     @ViewBuilder

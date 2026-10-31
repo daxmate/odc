@@ -10,6 +10,25 @@ final class DictionaryStoreTests: XCTestCase {
         XCTAssertEqual(store.query, "   ")
     }
 
+    func testMDXFilesRouteToTheImporter() {
+        let store = DictionaryStore()
+        defer { store.close() }
+
+        store.openDocument(url: URL(fileURLWithPath: "/tmp/missing.mdx"))
+
+        XCTAssertEqual(store.importPhase, .preparing)
+        XCTAssertNil(store.documentURL)
+    }
+
+    func testODCFilesStillOpenDirectly() {
+        let store = DictionaryStore()
+        defer { store.close() }
+
+        store.openDocument(url: Fixture.demoRepository)
+
+        XCTAssertNil(store.importPhase)
+    }
+
     func testQueryWithoutADocumentIsIgnored() {
         let store = DictionaryStore()
         store.setQuery("apple")

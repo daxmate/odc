@@ -15,8 +15,9 @@ public struct EmptyStateView: View {
                 .foregroundStyle(.tint)
             Text("ODict")
                 .font(.largeTitle.weight(.semibold))
-            Text("打开一个 .odc 词典，开始只读查词。")
+            Text(explanation)
                 .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
             Button("打开词典…") {
                 isImporterPresented = true
             }
@@ -29,5 +30,13 @@ public struct EmptyStateView: View {
         }
         .padding(40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var explanation: String {
+        #if os(macOS)
+        return "打开一个 .odc 词典，或导入 .mdx 文件自动转换成 .odc。"
+        #else
+        return "打开一个 .odc 词典，开始只读查词。"
+        #endif
     }
 }

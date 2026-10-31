@@ -15,7 +15,7 @@ struct ODictDesktopApp: App {
                 .onAppear {
                     appDelegate.connect { urls in
                         for url in urls {
-                            store.open(url: url)
+                            store.openDocument(url: url)
                         }
                     }
                 }
@@ -23,7 +23,7 @@ struct ODictDesktopApp: App {
         .defaultSize(width: 900, height: 620)
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("Open…") {
+                Button("Open Dictionary or MDX…") {
                     isImporterPresented = true
                 }
                 .keyboardShortcut("o", modifiers: .command)

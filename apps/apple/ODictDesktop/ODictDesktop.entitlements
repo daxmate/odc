@@ -4,7 +4,9 @@
 <dict>
 	<key>com.apple.security.app-sandbox</key>
 	<true/>
-	<key>com.apple.security.files.user-selected.read-only</key>
+	<!-- Read-write so an imported MDX can be converted next to its source;
+	     the picker still gates every path the app may touch. -->
+	<key>com.apple.security.files.user-selected.read-write</key>
 	<true/>
 </dict>
 </plist>

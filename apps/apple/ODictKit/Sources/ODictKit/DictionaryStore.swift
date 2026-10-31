@@ -21,10 +21,15 @@ public final class DictionaryStore {
     public private(set) var errorMessage: String?
     /// True while a document is being imported or a search is running.
     public private(set) var isLoading = false
+    /// Stage of a running MDX conversion, `nil` when idle.
+    public private(set) var importPhase: MDXImportPhase?
+    /// Summary shown once an MDX conversion finished, until dismissed.
+    public private(set) var importSummary: String?
 
     @ObservationIgnored private var dictionary: OdcDictionary?
     @ObservationIgnored private var searchTask: Task<Void, Never>?
     @ObservationIgnored private var importTask: Task<Void, Never>?
+    @ObservationIgnored private var conversionTask: Task<Void, Never>?
 
     /// Search debounce, in milliseconds.
     private static let debounceMilliseconds = 200
@@ -44,6 +49,7 @@ public final class DictionaryStore {
     /// Close the current dictionary and delete its imported copy.
     public func close() {
         importTask?.cancel()
+        conversionTask?.cancel()
         searchTask?.cancel()
         closeDictionary()
         if let documentURL {
@@ -57,6 +63,8 @@ public final class DictionaryStore {
         entry = nil
         errorMessage = nil
         isLoading = false
+        importPhase = nil
+        importSummary = nil
     }
 
     private func performOpen(url: URL) async {
@@ -94,6 +102,56 @@ public final class DictionaryStore {
         } catch is CancellationError {
             return
         } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    // MARK: - Importing MDX
+
+    /// Open `url`, converting an MDX dictionary into `.odc` first.
+    public func openDocument(url: URL) {
+        if url.pathExtension.lowercased() == "mdx" {
+            importMDX(url: url)
+        } else {
+            open(url: url)
+        }
+    }
+
+    /// Convert `url` into a standalone `.odc` document and open the result.
+    ///
+    /// The conversion runs off the main actor. The store publishes the coarse
+    /// stage only — never a fabricated percentage.
+    public func importMDX(url: URL) {
+        conversionTask?.cancel()
+        errorMessage = nil
+        importSummary = nil
+        importPhase = .preparing
+        conversionTask = Task { [weak self] in
+            await self?.performImport(url: url)
+        }
+    }
+
+    /// Dismiss the post-import summary.
+    public func dismissImportSummary() {
+        importSummary = nil
+    }
+
+    private func performImport(url: URL) async {
+        do {
+            let result = try await MDXImporter.convert(source: url) { [weak self] phase in
+                Task { @MainActor in
+                    self?.importPhase = phase
+                }
+            }
+            guard !Task.isCancelled else { return }
+            importPhase = nil
+            importSummary = result.report.summary
+            open(url: result.outputURL)
+        } catch is CancellationError {
+            importPhase = nil
+            return
+        } catch {
+            importPhase = nil
             errorMessage = error.localizedDescription
         }
     }
