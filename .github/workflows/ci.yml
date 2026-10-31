@@ -5,13 +5,23 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
 
 jobs:
   test:
-    name: ${{ matrix.os }}
+    name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -22,12 +32,32 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: test-${{ matrix.os }}
       - name: fmt
         run: cargo fmt --all --check
       - name: clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
       - name: test
         run: cargo test --all
+      - name: test (release)
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo test --all --release
+      - name: doc
+        if: matrix.os == 'ubuntu-latest'
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --no-deps --all-features
       - name: e2e
         if: matrix.os == 'ubuntu-latest'
         run: bash scripts/e2e.sh
+
+  deny:
+    name: cargo deny
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories bans licenses sources
