@@ -168,7 +168,8 @@ if [ "$MIRROR_HEAD" != "$PATCH_TARGET" ]; then
   exit 1
 fi
 "$ODC" --repo "$MIRROR" verify >/dev/null
-echo "ok: patch roundtrip produced the target commit"
+"$ODC" --repo "$MIRROR" status | grep -q "working set clean" || { echo "FAIL: patch apply left a dirty working set"; exit 1; }
+echo "ok: patch roundtrip produced the target commit with a clean working set"
 set +e
 "$ODC" --repo "$MIRROR" patch apply "$WORK/fix.odp" >/dev/null 2>&1
 REPLAY=$?

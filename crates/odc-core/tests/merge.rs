@@ -278,6 +278,10 @@ fn conflicts_block_the_commit_until_they_are_resolved() {
         "ours meaning"
     );
     assert!(merge::conflicts(&repo).expect("conflicts").is_empty());
+    assert!(
+        repo.status().expect("status").is_clean(),
+        "merge --continue must leave the working set equal to HEAD"
+    );
     assert!(repo.verify().expect("verify").ok);
     cleanup(&work);
 }
@@ -371,6 +375,10 @@ fn patch_apply_into_a_descendant_head_merges_three_way() {
         }
         other => panic!("expected a merge, got {other:?}"),
     }
+    assert!(
+        mirror_repo.status().expect("status").is_clean(),
+        "merged patch apply must leave the working set equal to HEAD"
+    );
     assert_eq!(
         mirror_repo
             .show("alpha")
@@ -439,6 +447,65 @@ fn patch_apply_conflicts_leave_the_repository_untouched() {
     let outcome =
         merge::continue_merge(&mut mirror_repo, "tester", 1_700_000_100).expect("continue");
     assert_eq!(outcome.kind, MergeKind::Merged);
+    assert!(mirror_repo.verify().expect("verify").ok);
+    cleanup(&work);
+}
+
+#[test]
+fn patch_apply_leaves_a_clean_working_set_and_allows_merges() {
+    let work = temp_dir("patch-clean");
+    let base = vector_base();
+    let source = work.join("source");
+    let repo = seed(&source, &base, "base", 1_700_000_000);
+    let base_hash = head(&repo);
+    drop(repo);
+    let base_copy = work.join("base-copy");
+    fork(&source, &base_copy);
+    let mirror = work.join("mirror");
+    fork(&base_copy, &mirror);
+
+    let mut theirs = base.clone();
+    theirs[1] = entry("beta", "beta theirs");
+    let mut source_repo = Repo::open(&source).expect("open");
+    source_repo.import(&theirs, true).expect("import");
+    source_repo
+        .commit("theirs", "tester", 1_700_000_020)
+        .expect("commit");
+    let target = head(&source_repo);
+    let plan = patch::create(
+        &source_repo,
+        &hash::to_hex(&base_hash),
+        &hash::to_hex(&target),
+    )
+    .expect("create");
+    let bytes = patch::encode(&plan).expect("encode");
+
+    let mut mirror_repo = Repo::open(&mirror).expect("open");
+    match patch::apply(&mut mirror_repo, &bytes).expect("apply") {
+        patch::ApplyOutcome::Applied(outcome) => assert_eq!(outcome.target, target),
+        other => panic!("expected an exact-base apply, got {other:?}"),
+    }
+    assert_eq!(head(&mirror_repo), target);
+    assert!(
+        mirror_repo.status().expect("status").is_clean(),
+        "apply must reset the working set to the new HEAD"
+    );
+
+    // A divergent commit merges right away instead of failing on a dirty
+    // working set (ODC-E016).
+    let mut ours = base.clone();
+    ours[0] = entry("alpha", "alpha copy");
+    let other = commit_entries(&base_copy, &ours, "copy", 1_700_000_010);
+    import_commits(&mirror, &base_copy);
+    let outcome = merge::merge(
+        &mut mirror_repo,
+        "HEAD",
+        &hash::to_hex(&other),
+        Strategy::Auto,
+    )
+    .expect("merge after apply");
+    assert_eq!(outcome.kind, MergeKind::Merged);
+    assert!(mirror_repo.status().expect("status").is_clean());
     assert!(mirror_repo.verify().expect("verify").ok);
     cleanup(&work);
 }

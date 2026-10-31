@@ -287,6 +287,67 @@ fn union_strategy_keeps_both_entries() {
 }
 
 #[test]
+fn patch_apply_leaves_a_clean_working_set_and_allows_merges() {
+    let temp = TempDir::new().expect("tempdir");
+    let repo_dir = seed(&temp, &[("alpha", "first"), ("beta", "second")]);
+    let base_copy = temp.path().join("base-copy");
+    fork(&repo_dir, &base_copy);
+    let mirror = temp.path().join("mirror");
+    fork(&base_copy, &mirror);
+
+    let theirs = write(
+        temp.path(),
+        "theirs.jsonl",
+        &jsonl(&[("alpha", "first"), ("beta", "second theirs")]),
+    );
+    odc(&repo_dir).arg("import").arg(&theirs).assert().success();
+    odc(&repo_dir)
+        .args(["commit", "-m", "theirs", "--timestamp", "1700000020"])
+        .assert()
+        .success();
+    let patch_path = temp.path().join("p.odp");
+    odc(&repo_dir)
+        .args(["patch", "create", "HEAD~1", "HEAD", "-o"])
+        .arg(&patch_path)
+        .assert()
+        .success();
+
+    odc(&mirror)
+        .args(["patch", "apply"])
+        .arg(&patch_path)
+        .assert()
+        .success();
+    odc(&mirror)
+        .arg("status")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("working set clean"));
+
+    // A divergent commit can be merged immediately (no ODC-E016).
+    let other = write(
+        temp.path(),
+        "copy.jsonl",
+        &jsonl(&[("alpha", "first copy"), ("beta", "second")]),
+    );
+    odc(&base_copy).arg("import").arg(&other).assert().success();
+    odc(&base_copy)
+        .args(["commit", "-m", "copy", "--timestamp", "1700000010"])
+        .assert()
+        .success();
+    let other_hash = head_of(&base_copy);
+    import_commits(&mirror, &base_copy);
+
+    let output = odc(&mirror)
+        .args(["merge", "HEAD", &other_hash, "--json"])
+        .output()
+        .expect("merge output");
+    assert!(output.status.success(), "merge failed: {output:?}");
+    let report = parse_json(&output);
+    assert_eq!(report["kind"], "merged");
+    odc(&mirror).arg("verify").assert().success();
+}
+
+#[test]
 fn continuing_without_a_merge_is_rejected() {
     let temp = TempDir::new().expect("tempdir");
     let repo_dir = seed(&temp, &[("alpha", "first")]);
