@@ -7,6 +7,7 @@ use odc_core::hash;
 use odc_core::patch;
 use odc_core::repo::Repo;
 use serde_json::json;
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -116,6 +117,18 @@ enum Command {
     },
     /// Check every block, entry and commit.
     Verify,
+    /// Delete blocks and commit indexes no reachable commit needs.
+    Gc {
+        /// Commits to keep on each first-parent chain (at least 1).
+        #[arg(long, value_name = "N")]
+        keep_last: usize,
+        /// Report what would be freed without writing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Rebuild the database file afterwards.
+        #[arg(long)]
+        vacuum: bool,
+    },
     /// Show the working set relative to HEAD.
     Status,
     /// Patch creation and application (specified, implemented in M3).
@@ -315,17 +328,20 @@ fn run() -> odc_core::Result<ExitCode> {
             let repo = Repo::open(&cli.repo)?;
             let diff = repo.diff(&from, &to)?;
             if json {
-                let value = json!({
-                    "from": diff.from,
-                    "to": diff.to,
-                    "added": diff.added,
-                    "removed": diff.removed,
-                    "modified": diff.modified,
-                });
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&value).unwrap_or_default()
-                );
+                let stdout = std::io::stdout();
+                let mut out = std::io::BufWriter::new(stdout.lock());
+                out.write_all(b"{\n  ")?;
+                write_json_field(&mut out, "from", &diff.from)?;
+                out.write_all(b",\n  ")?;
+                write_json_field(&mut out, "to", &diff.to)?;
+                out.write_all(b",\n  ")?;
+                write_json_string_list(&mut out, "added", &diff.added)?;
+                out.write_all(b",\n  ")?;
+                write_json_string_list(&mut out, "removed", &diff.removed)?;
+                out.write_all(b",\n  ")?;
+                write_json_string_list(&mut out, "modified", &diff.modified)?;
+                out.write_all(b"\n}\n")?;
+                out.flush()?;
             } else {
                 println!("from {}", diff.from);
                 println!("to {}", diff.to);
@@ -341,6 +357,37 @@ fn run() -> odc_core::Result<ExitCode> {
                 for word in &diff.modified {
                     println!("~ {word}");
                 }
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+
+        Command::Gc {
+            keep_last,
+            dry_run,
+            vacuum,
+        } => {
+            let mut repo = Repo::open(&cli.repo)?;
+            if keep_last == 0 {
+                return Err(odc_core::Error::InvalidArgument(
+                    "gc requires --keep-last of at least 1".to_string(),
+                ));
+            }
+            let report = repo.gc(keep_last, dry_run, vacuum)?;
+            if report.dry_run {
+                println!("gc: dry run (nothing written)");
+            }
+            println!("commits kept: {}", report.kept_commits);
+            println!(
+                "commits removed: {} ({} indexes, {} bytes)",
+                report.removed_commits, report.removed_indexes, report.freed_index_bytes
+            );
+            println!(
+                "blocks removed: {} ({} bytes)",
+                report.removed_blocks, report.freed_block_bytes
+            );
+            println!("freed: {} bytes", report.freed_bytes());
+            if report.vacuumed {
+                println!("vacuumed: yes");
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -800,4 +847,32 @@ fn split_csv_line(line: &str) -> odc_core::Result<Vec<String>> {
     }
     fields.push(current);
     Ok(fields)
+}
+
+/// Write `"key": value` with the streaming JSON encoder.
+fn write_json_field<W: std::io::Write, T: serde::Serialize + ?Sized>(
+    out: &mut W,
+    key: &str,
+    value: &T,
+) -> odc_core::Result<()> {
+    write!(out, "\"{key}\": ")?;
+    serde_json::to_writer(&mut *out, value).map_err(|error| odc_core::Error::Io(error.to_string()))
+}
+
+/// Write a JSON array of strings, one element at a time.
+fn write_json_string_list<W: std::io::Write>(
+    out: &mut W,
+    key: &str,
+    words: &[String],
+) -> odc_core::Result<()> {
+    write!(out, "\"{key}\": [")?;
+    for (index, word) in words.iter().enumerate() {
+        if index > 0 {
+            out.write_all(b", ")?;
+        }
+        serde_json::to_writer(&mut *out, word)
+            .map_err(|error| odc_core::Error::Io(error.to_string()))?;
+    }
+    out.write_all(b"]")?;
+    Ok(())
 }
