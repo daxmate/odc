@@ -1,5 +1,8 @@
 # ODC — Open Dictionary Container
 
+[![CI](https://github.com/daxmate/odc/actions/workflows/ci.yml/badge.svg)](https://github.com/daxmate/odc/actions/workflows/ci.yml)
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
+
 **一个为词典而生的、内容寻址的容器格式与工具链。**
 
 ODC 想把词典制作从「一堆需要专家维护的 MDX 脚本」变成「任何人都能参与校对和发布的开放格式」：
@@ -90,6 +93,19 @@ scripts/e2e.sh            10k 词条端到端演示
 | M1 | macOS SwiftUI 编辑器（表格导入、逐条校对、字段级 diff） |
 | M2 | 合并 / 冲突表、并发编辑、多语言词条 |
 | M3 | patch 生成与应用、增量发布、签名 |
+| M4 | 三方合并、冲突表、字段级合并 |
+| M5 | gc / shallow 仓库、Swift 与 Kotlin 绑定 |
+
+## 非技术用户工作流（目标形态）
+
+面向词典编辑者，最终只需要四步，全部在图形界面里完成：
+
+1. **导入**：把 Excel / CSV / JSONL 词表拖进应用，字段自动映射成「词条 / 词性 / 释义 / 例句 / 标签」；
+2. **校对**：表格里逐条改，应用实时显示「新增 X 条 / 修改 Y 条 / 删除 Z 条」；
+3. **提交**：点「提交」，写一句变更说明，得到一串内容哈希（相当于 Git 提交号）；
+4. **发布 / 分享**：导出一个 .odc 库给阅读器，或只生成几十 KB 的增量包给协作者。
+
+M0 阶段这些能力由 CLI 提供（odc import / commit / diff / patch），M1 起有 macOS 图形编辑器。
 
 ## 开发
 
@@ -102,4 +118,6 @@ cargo test --all
 
 ## 许可证
 
-MIT OR Apache-2.0，见 `LICENSE-MIT` 与 `LICENSE-APACHE`。
+GNU General Public License v3.0 or later（GPL-3.0-or-later），见 [LICENSE](LICENSE)。
+
+选择 GPL-3.0-or-later 的原因：ODC 的目标是让词典内容长期可被任何社区维护，要求分发修改版时同样开放格式实现，避免出现「私有分支格式」。
