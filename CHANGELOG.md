@@ -18,8 +18,7 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 * `odc patch create|apply|verify` implements the frozen `ODP1` transfer
   format: patches carry only the target blocks that the base lacks plus the
   index delta, verify their checksum and Merkle roots, and apply atomically
-  on an exact base. A descendant HEAD is reported as needing the M4
-  three-way merge; `docs/patch.md` documents usage, error codes and limits.
+  on an exact base. A descendant HEAD is merged three-way (M4); `docs/patch.md` documents usage, error codes and limits.
 * `odc status` reports committed entry and block counts.
 * `crates/odc-testkit` generates synthetic MDX 1.2 / 2.0 fixtures for tests
   and the e2e script; `examples/lookup_bench.rs` reports p50/p95 lookup
@@ -27,9 +26,25 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 * Spec section 16 documents the MDX mapping; `docs/mdx-compat.md` records the
   parser comparison and the measured import figures.
 
+* `odc merge A B [--strategy auto|ours|theirs|union] [--json]`: three-way
+  merge over the `parent` / `parent2` DAG with a deterministic merge base,
+  fast-forward, word-level and field-level automatic merges.
+* `odc resolve`, `odc merge --continue` and `odc conflicts` for the conflict
+  workflow: conflicts live in the frozen `conflicts` table, block the merge
+  commit, and make the command exit with code 5.
+* Applying a patch whose base is an ancestor of HEAD now merges the target
+  three-way instead of failing with `ODC-E025`.
+* `docs/merge.md` documents the semantics, the conflict JSON schema, exit
+  codes and the union `~N` suffix rule.
+
 ### Changed
 
 * `Error` gained `Mdx` (`ODC-E021`) and `EntryTooLarge` (`ODC-E022`).
+* `Error` also gained `MergeInProgress` (`ODC-E028`), `UnresolvedConflicts`
+  (`ODC-E029`) and `NoMergeInProgress` (`ODC-E030`). `PatchNeedsMerge`
+  (`ODC-E025`) stays reserved but is no longer produced.
+* `patch::apply` returns `ApplyOutcome` (`Applied` or `Merged`) and no longer
+  rejects a descendant HEAD.
 * CSV import accepts an optional `raw_html` column.
 
 ## [0.1.0] - 2026-10-31

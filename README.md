@@ -88,9 +88,28 @@ odc --repo ./demo export --format jsonl -o dump.jsonl
 | `odc verify` | 全量校验块、索引与提交 |
 | `odc patch create A B -o FILE [--json]` | 生成增量包（只含目标新增块与索引增量） |
 | `odc patch verify FILE [--json]` | 校验增量包与本地基线 |
-| `odc patch apply FILE [--json]` | 在精确 base 上应用增量包，失败退出码 4 |
+| `odc patch apply FILE [--json]` | 应用增量包；精确 base 直接前进，后代 HEAD 转三方合并，失败退出码 4 |
+| `odc merge <A> <B> [--strategy auto\|ours\|theirs\|union] [--json]` | 三方合并（A 必须是 HEAD）：快进 / 自动合并 / 冲突退出码 5 |
+| `odc conflicts [--json]` | 列出未完成合并的冲突 |
+| `odc resolve <word> --ours\|--theirs\|--union\|--file FILE [--json]` | 记录一个冲突的解决方式 |
+| `odc merge --continue [--json]` | 冲突全部解决后写入合并提交 |
 
 全局参数 `--repo DIR` 指定仓库目录（默认当前目录，库文件 `odc.db`）。
+
+### 合并示例
+
+```console
+# 两人从同一 base 出发，各自提交后再汇合（A 必须是 HEAD）
+odc merge HEAD 3f2a9c1d --json
+
+# 有冲突时：退出码 5，HEAD 不变，冲突记录在 conflicts 表
+odc conflicts --json
+odc resolve alpha --ours        # 或 --theirs / --union / --file payload.cbor
+odc merge --continue --json     # 写入 parent2 = 对方的合并提交
+```
+
+自动合并按词条比较 `content_hash`：一方改动直接取该方；双方都改且字段不重叠时按
+字段合并（例如一方改音标、一方改释义），否则记为冲突。详见 `docs/merge.md`。
 
 ## 仓库结构
 

@@ -219,7 +219,7 @@ CREATE TABLE staging(word TEXT PRIMARY KEY, display TEXT NOT NULL,
 * `commit_index` 存 zstd 压缩的 CBOR 快照：按 key 升序的 `[[word, content_hash], …]` 数组，用于历史 diff。写入与读取都按条流式进行（数组头给出条目数），实现不得要求整表驻留内存；`raw_size` 记录未压缩字节数，`verify` 会与实际解码字节数比对。
 * `staging` 是工作区（未提交内容）。它不属于互操作格式。
 * codec：`0` = 原始字节，`1` = zstd（压缩级别 3，实现可调，不影响任何哈希）。
-* `conflicts` 为 M2 合并预留，M0 只建表留空。
+* `conflicts` 保存未完成的合并中每个冲突词条的决定（见 §10.1 与 `docs/merge.md`）。
 
 ## 10. 命令语义
 
@@ -238,10 +238,32 @@ CREATE TABLE staging(word TEXT PRIMARY KEY, display TEXT NOT NULL,
 | `status` | 工作区相对 HEAD 的 added / modified / removed |
 | `verify` | 校验块哈希、块解码、索引偏移、content_hash、field_hashes、commit 哈希链、HEAD 根一致性；逐块流式校验，内存不随词典规模增长 |
 | `gc --keep-last N [--dry-run] [--vacuum]` | 保留每个 ref 及其 first-parent 链上最近 N 个提交，删除其余 commit、commit_index 与当前索引不再引用的块；`--dry-run` 只报告将释放的条数与字节，`--vacuum` 事后重建数据库文件 |
-| `patch create \| apply \| verify` | 见 §11 与 `docs/patch.md`；`apply` 只接受精确 base，三方合并属 M4 |
+| `patch create \| apply \| verify` | 见 §11 与 `docs/patch.md`；`apply` 在精确 base 上应用，HEAD 为 base 后代时转为三方合并 |
 
 revision 语法：`HEAD`、`HEAD~N`、commit 哈希前缀（≥ 4 个十六进制字符，需唯一）。
 
+## 10.1 合并语义
+
+`merge` 在 `parent` / `parent2` 组成的 DAG 上工作，第一个参数必须解析为 HEAD。
+
+* **merge base**：按两个提交到各祖先的距离做分层 BFS；候选先比较 `max(distance)`，
+  再比较距离和，最后比较 `commit_hash` 字典序（最小者胜），结果确定。没有公共
+  祖先时按空树作为 base。
+* **快进**：A 是 B 的祖先时 HEAD 直接指向 B，不产生合并提交；B 是 A 的祖先时为无操作。
+* **自动合并**：逐 word 比较 base / ours / theirs 的 `content_hash`；只有一方变化取变化方，
+  双方变成相同值取该值；双方都变且不同时比较 `field_hashes`，改动字段互不重叠则按字段
+  取值并重新计算 `content_hash`。
+* **冲突**：写入 `conflicts` 表（`detail` 为规范 CBOR，含 base / ours / theirs 的
+  `content_hash`、各方字段哈希、冲突字段与时间），不产生合并提交，退出码 5；`--json`
+  输出冲突清单。
+* **解决**：`resolve <word> --ours|--theirs|--union|--file <path>` 只记录决定；
+  `merge --continue` 在全部冲突解决后写入合并提交（`parent` = 原 HEAD，`parent2` = B）。
+* **union**：ours 保留原 key，theirs 存为第一个空闲的 `<key>~N`（N 从 2 起）；后缀作用于
+  已归一化的 key。
+* **patch 联动**：HEAD 是 patch base 的后代时，`patch apply` 不再报 `ODC-E025`，而是在安装
+  target 之后做三方合并（base = patch base，ours = HEAD，theirs = target）；冲突时 HEAD 与
+  工作集不变，退出码 5。
+* 未完成的合并记录在 `meta` 表的 `merge` 键下。
 ## 11. patch 格式（`ODP1`）
 
 M0 不实现生成与应用，但字节格式冻结如下：
@@ -293,6 +315,9 @@ index_entry = varint(len(word)) | word | content_hash:32B
 | ODC-E025 | 需要三方合并（HEAD 是 base 的后代，属 M4） |
 | ODC-E026 | patch 已应用（target 提交已存在） |
 | ODC-E027 | patch 字节流结构非法 |
+| ODC-E028 | 合并已在进行中 |
+| ODC-E029 | 合并仍有未解决的冲突 |
+| ODC-E030 | 没有进行中的合并 |
 
 ## 13. 版本兼容
 
