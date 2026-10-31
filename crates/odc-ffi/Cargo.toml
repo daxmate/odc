@@ -17,6 +17,7 @@ odc-core = { path = "../odc-core" }
 serde_json = "1.0.154"
 
 [dev-dependencies]
+odc-testkit = { path = "../odc-testkit" }
 tempfile = "3"
 
 # The workspace forbids unsafe code; this crate exists to expose a C ABI and

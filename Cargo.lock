@@ -561,6 +561,7 @@ name = "odc-ffi"
 version = "0.1.0"
 dependencies = [
  "odc-core",
+ "odc-testkit",
  "serde_json",
  "tempfile",
 ]

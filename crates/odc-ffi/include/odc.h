@@ -57,6 +57,21 @@ char *odc_repo_entry_json(const OdcRepo *repo, const char *key_utf8,
                           char **error_message);
 
 /*
+ * Import an MDX file into a standalone .odc file.
+ *
+ * Returns 0 on success and -1 on failure. On success *report_json_out holds a
+ * heap-allocated, NUL-terminated JSON report; release it with
+ * odc_string_free(). On failure *report_json_out is NULL and *error_message
+ * carries the diagnostic.
+ *
+ * The output is written atomically: the pack is staged next to the
+ * destination and renamed into place. An existing file at out_odc_path is a
+ * hard error and is never replaced.
+ */
+int32_t odc_import_mdx_to_odc(const char *mdx_path, const char *out_odc_path,
+                              char **report_json_out, char **error_message);
+
+/*
  * Release a string returned by this library. Passing NULL is a no-op.
  */
 void odc_string_free(char *s);

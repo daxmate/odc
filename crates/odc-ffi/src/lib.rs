@@ -23,11 +23,12 @@ use std::any::Any;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::ptr;
 
 use odc_core::cbor::Value as CborValue;
-use odc_core::{Entry, Repo};
+use odc_core::pack::PackOptions;
+use odc_core::{import_mdx, Entry, MdxImportOptions, MdxImportReport, Repo};
 use serde_json::{json, Map, Value as JsonValue};
 
 /// Largest accepted `limit` for [`odc_repo_search_json`].
@@ -199,6 +200,237 @@ pub unsafe extern "C" fn odc_repo_entry_json(
             .ok_or_else(|| format!("entry not found: {key}"))?;
         to_c_string(&entry_to_json(&entry))
     })
+}
+
+/// Import an MDX file into a standalone `.odc` file.
+///
+/// Returns `0` on success and `-1` on failure. On success `report_json_out`
+/// receives a heap-allocated, NUL-terminated JSON report that the caller
+/// releases with [`odc_string_free`]. On failure `report_json_out` is left
+/// `NULL` and `error_message` carries the diagnostic.
+///
+/// The output is written atomically: the working repository is packed into a
+/// temporary file inside the destination directory and renamed into place. An
+/// existing file at `out_odc_path` is a hard error and is never replaced.
+///
+/// # Safety
+///
+/// `mdx_path` and `out_odc_path` must be NUL-terminated UTF-8 strings;
+/// `report_json_out` and `error_message` must be `NULL` or point to writable
+/// storage for one `char *`.
+#[no_mangle]
+pub unsafe extern "C" fn odc_import_mdx_to_odc(
+    mdx_path: *const c_char,
+    out_odc_path: *const c_char,
+    report_json_out: *mut *mut c_char,
+    error_message: *mut *mut c_char,
+) -> i32 {
+    // A stale report pointer must never survive a failed import.
+    clear_error(report_json_out);
+    guarded(error_message, -1, || {
+        // SAFETY: both pointers follow the contract documented above.
+        let mdx = unsafe { text_arg(mdx_path, "mdx_path") }?;
+        let out = unsafe { text_arg(out_odc_path, "out_odc_path") }?;
+        let converted = import_mdx_to_odc(Path::new(&mdx), Path::new(&out))?;
+        let payload = import_report_to_json(&converted.report, converted.output_bytes);
+        store_json(report_json_out, &payload)?;
+        Ok(0)
+    })
+}
+
+/// Outcome of one `odc_import_mdx_to_odc` run.
+struct ConvertedMdx {
+    report: MdxImportReport,
+    output_bytes: u64,
+}
+
+fn import_mdx_to_odc(mdx: &Path, out: &Path) -> Result<ConvertedMdx, String> {
+    if out.exists() {
+        return Err(format!("output file already exists: {}", out.display()));
+    }
+    let Some(name) = out.file_name().and_then(|name| name.to_str()) else {
+        return Err(format!("output path has no file name: {}", out.display()));
+    };
+    let parent = out
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| format!("output path has no parent directory: {}", out.display()))?;
+    if !parent.is_dir() {
+        return Err(format!(
+            "output directory does not exist: {}",
+            parent.display()
+        ));
+    }
+
+    // The working repository lives in the system temp directory and is removed
+    // on every exit path: success, error and panic.
+    let work = TemporaryDirectory::create()?;
+    let mut repo = Repo::init(work.path().join("repo"))
+        .map_err(|error| format!("cannot create a working repository: {error}"))?;
+    let report = import_mdx(
+        mdx,
+        &mut repo,
+        MdxImportOptions {
+            skip_corrupt_blocks: true,
+            ..MdxImportOptions::default()
+        },
+    )
+    .map_err(|error| format!("import failed: {error}"))?;
+
+    // `pack` exports what HEAD reaches, so the working set has to become a
+    // commit first. An empty MDX file leaves nothing to commit.
+    if !repo
+        .status()
+        .map_err(|error| format!("cannot inspect the working set: {error}"))?
+        .is_clean()
+    {
+        let label = mdx
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("dictionary");
+        repo.commit(
+            &format!("import {label}"),
+            odc_core::DEFAULT_AUTHOR,
+            now_unix(),
+        )
+        .map_err(|error| format!("cannot commit the import: {error}"))?;
+    }
+
+    // Packing beside the destination keeps the final rename on one filesystem,
+    // which is what makes it atomic.
+    let staging = parent.join(format!(".{name}.partial-{}", unique_token()));
+    let packed = match repo.pack(
+        &staging,
+        PackOptions {
+            shallow: true,
+            force: false,
+        },
+    ) {
+        Ok(packed) => packed,
+        Err(error) => {
+            let _ = std::fs::remove_file(&staging);
+            return Err(format!("cannot write {}: {error}", out.display()));
+        }
+    };
+    drop(repo);
+
+    if out.exists() {
+        let _ = std::fs::remove_file(&staging);
+        return Err(format!("output file already exists: {}", out.display()));
+    }
+    if let Err(error) = std::fs::rename(&staging, out) {
+        let _ = std::fs::remove_file(&staging);
+        return Err(format!("cannot move the import into place: {error}"));
+    }
+
+    Ok(ConvertedMdx {
+        report,
+        output_bytes: packed.bytes,
+    })
+}
+
+/// Scratch directory removed when dropped, whatever the exit path.
+struct TemporaryDirectory {
+    path: PathBuf,
+}
+
+impl TemporaryDirectory {
+    fn create() -> Result<Self, String> {
+        let path = std::env::temp_dir().join(format!("odc-mdx-import-{}", unique_token()));
+        std::fs::create_dir_all(&path).map_err(|error| {
+            format!(
+                "cannot create the temporary directory {}: {error}",
+                path.display()
+            )
+        })?;
+        Ok(Self { path })
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TemporaryDirectory {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+/// Seconds since the Unix epoch, clamped to the `i64` range.
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| i64::try_from(elapsed.as_secs()).unwrap_or(i64::MAX))
+        .unwrap_or_default()
+}
+
+/// Process-unique token used for scratch names.
+fn unique_token() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or_default();
+    format!(
+        "{}-{nanos}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+fn import_report_to_json(report: &MdxImportReport, output_bytes: u64) -> JsonValue {
+    let corrupt: Vec<JsonValue> = report
+        .corrupt_blocks
+        .iter()
+        .map(|block| {
+            json!({
+                "ordinal": block.ordinal,
+                "file_offset": block.file_offset,
+                "compressed_size": block.compressed_size,
+                "declared_size": block.declared_size,
+                "decompressed_size": block.decompressed_size,
+                "decompressed_offset": block.decompressed_offset,
+                "detail": block.detail,
+            })
+        })
+        .collect();
+    json!({
+        "imported_entries": report.imported_entries,
+        "written": report.written,
+        "removed": report.removed,
+        "skipped_blocks": report.skipped_blocks,
+        "skipped_entries": report.skipped_entries,
+        "corrupt_blocks": corrupt,
+        "deduplicated": report.deduplicated,
+        "skipped_empty": report.skipped_empty,
+        "skipped_oversized": report.skipped_oversized,
+        "working_set": report.working_set,
+        "scan_warning": report.scan_warning.as_deref(),
+        "header": {
+            "engine_version": report.header.engine_version.as_str(),
+            "required_engine_version": report.header.required_engine_version.as_str(),
+            "encoding": report.header.encoding.as_str(),
+            "encrypted": report.header.encrypted.as_deref(),
+            "records": report.header.records,
+        },
+        "output_bytes": output_bytes,
+    })
+}
+
+/// Store `value` in `slot` for the caller to free; a `NULL` slot releases it.
+fn store_json(slot: *mut *mut c_char, value: &JsonValue) -> Result<(), String> {
+    let pointer = to_c_string(value)?;
+    if slot.is_null() {
+        // SAFETY: `pointer` came from `CString::into_raw` above.
+        unsafe { drop(CString::from_raw(pointer)) };
+        return Ok(());
+    }
+    // SAFETY: the contract requires writable storage for one `char *`.
+    unsafe { *slot = pointer };
+    Ok(())
 }
 
 /// Run `body` with panic isolation and translate the outcome into the C
