@@ -107,3 +107,63 @@ pub fn from_hex(text: &str) -> crate::error::Result<[u8; 32]> {
     }
     Ok(out)
 }
+
+/// Incremental Merkle root builder.
+///
+/// Leaves are pushed in stream order; the builder keeps one subtree root per
+/// set bit of the leaf count, so memory stays O(log n) no matter how many
+/// leaves pass through it. Folding the retained peaks right to left in
+/// [MerkleAccumulator::finish] reproduces [merkle_root] byte for byte.
+#[derive(Clone, Debug, Default)]
+pub struct MerkleAccumulator {
+    /// (subtree root, height); heights are strictly decreasing.
+    peaks: Vec<([u8; 32], u32)>,
+}
+
+impl MerkleAccumulator {
+    /// Create an empty accumulator.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Feed the next leaf, in the same order merkle_root expects.
+    pub fn push(&mut self, leaf: [u8; 32]) {
+        let mut root = leaf;
+        let mut height = 0u32;
+        while self.peaks.last().map(|peak| peak.1) == Some(height) {
+            let Some((left, _)) = self.peaks.pop() else {
+                break;
+            };
+            root = node_hash(&left, &root);
+            height += 1;
+        }
+        self.peaks.push((root, height));
+    }
+
+    /// Number of leaves pushed so far.
+    #[must_use]
+    pub fn len(&self) -> u64 {
+        self.peaks.iter().map(|peak| 1u64 << peak.1).sum()
+    }
+
+    /// True when no leaf has been pushed.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.peaks.is_empty()
+    }
+
+    /// Fold the retained peaks into the final root.
+    #[must_use]
+    pub fn finish(self) -> [u8; 32] {
+        let mut peaks = self.peaks.iter().rev();
+        let Some((first, _)) = peaks.next() else {
+            return ZERO_HASH;
+        };
+        let mut root = *first;
+        for (peak, _) in peaks {
+            root = node_hash(peak, &root);
+        }
+        root
+    }
+}

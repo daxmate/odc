@@ -21,6 +21,7 @@ pub mod hash;
 pub mod mdx;
 pub mod patch;
 pub mod repo;
+pub mod snapshot;
 pub mod store;
 pub mod varint;
 

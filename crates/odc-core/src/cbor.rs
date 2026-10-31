@@ -383,3 +383,23 @@ pub fn bytes_with_prefix(prefix: u8, value: &[u8]) -> Vec<u8> {
     out.extend_from_slice(value);
     out
 }
+
+/// Write a definite-length array header for `len` items.
+///
+/// Streaming encoders use this together with [`write_text`] and [`write_bytes`]
+/// when the item count is known up front but the items arrive one at a time.
+pub fn write_array_header(len: u64, out: &mut Vec<u8>) {
+    push_head(4, len, out);
+}
+
+/// Write one CBOR text string.
+pub fn write_text(text: &str, out: &mut Vec<u8>) {
+    push_head(3, text.len() as u64, out);
+    out.extend_from_slice(text.as_bytes());
+}
+
+/// Write one CBOR byte string.
+pub fn write_bytes(bytes: &[u8], out: &mut Vec<u8>) {
+    push_head(2, bytes.len() as u64, out);
+    out.extend_from_slice(bytes);
+}

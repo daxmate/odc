@@ -104,3 +104,68 @@ pub fn block_sizes(records: &[Record]) -> Vec<usize> {
         .map(|range| records[range].iter().map(Record::encoded_len).sum())
         .collect()
 }
+
+/// Where a block boundary falls relative to the record just pushed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cut {
+    /// The record fits in the current block; keep going.
+    None,
+    /// A block must be closed *before* the pushed record is added.
+    Before,
+    /// The pushed record completes a block.
+    After,
+}
+
+/// Incremental form of [`boundaries`].
+///
+/// Feeding records one at a time and closing a block whenever [`Cut::After`]
+/// (or [`Cut::Before`]) is reported produces exactly the ranges that
+/// [`boundaries`] returns for the same record sequence.
+#[derive(Debug, Default)]
+pub struct StreamChunker {
+    size: usize,
+    state: u64,
+}
+
+impl StreamChunker {
+    /// Create a chunker positioned at the start of a block.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Number of encoded bytes accumulated in the current block.
+    #[must_use]
+    pub fn size(&self) -> usize {
+        self.size
+    }
+
+    /// Offer the next record (already sorted by key).
+    ///
+    /// On [`Cut::Before`] the record is *not* consumed: close the block and
+    /// offer the same record again, which then reports [`Cut::None`].
+    pub fn push(&mut self, record: &Record) -> Cut {
+        let record_len = record.encoded_len();
+        if self.size > 0 && self.size + record_len > MAX_CHUNK {
+            self.size = 0;
+            self.state = 0;
+            return Cut::Before;
+        }
+        self.size += record_len;
+        let content_hash = hash::blake3(&record.payload);
+        let mut stream = Vec::with_capacity(record.key.len() + 1 + 32);
+        stream.extend_from_slice(&record.key);
+        stream.push(0x00);
+        stream.extend_from_slice(&content_hash);
+        let (next_state, hit) = roll(self.state, &stream);
+        self.state = next_state;
+        let boundary = self.size >= MIN_CHUNK && hit;
+        let oversized = self.size >= MAX_CHUNK;
+        if boundary || oversized {
+            self.size = 0;
+            self.state = 0;
+            return Cut::After;
+        }
+        Cut::None
+    }
+}
