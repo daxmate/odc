@@ -11,7 +11,7 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 * Apple clients: `apps/apple/` ships the **ODict** (iOS) and **ODict Desktop**
   (macOS) SwiftUI targets on a shared `ODictKit` package. v0 opens a
   dictionary, prefix-searches it through `ODCFFI` and renders entries
-  read-only. `scripts/build-apple.sh` builds both targets end to end.
+  read-only. `build-app.sh` builds both targets end to end.
 
 * MDX (MDict 1.2 / 2.0) import through `odc import --format mdx`, wrapping
   the `mdictlib` reader (MIT). Duplicate normalised keys receive a
