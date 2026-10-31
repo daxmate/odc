@@ -1,0 +1,20 @@
+[package]
+name = "odc-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Open Dictionary Container core: chunking, encoding, hashing, storage"
+
+[dependencies]
+blake3 = "1.8.7"
+rusqlite = { version = "0.41.1", features = ["bundled"] }
+thiserror = "2.0.21"
+unicode-normalization = "0.1.26"
+zstd = "0.14.3"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+serde_json = "1.0.154"

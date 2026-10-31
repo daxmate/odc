@@ -1,0 +1,87 @@
+{
+  "cases": [
+    {
+      "content_hash": "bdc46dc8f3985e65e1b76c2372540bb36250bdca45fb41634f77eb0be96b6a9d",
+      "field_hashes": [
+        [
+          "defs",
+          "5a4b75db15a090467cb2de9f33d1e473acb0ae40783096c8affcfe06dfb99b7e"
+        ],
+        [
+          "display",
+          "073ce326975889a7d4e9d5fb479a2c646343f3f6e5506be4ff653102a8e75364"
+        ],
+        [
+          "extra",
+          "1f94cbf313b3ce23257a7251ea0fc95a24556ea611e4f8f475e549971baedb02"
+        ],
+        [
+          "phonetic",
+          "aaa1c40f6fbfc1d9d56cb6d67f40e95671cd96903656d0d6c4f55be23f94896f"
+        ],
+        [
+          "raw_html",
+          "61a9bf10f0ffedc7dc77589ae2ab4ca80b006c806e6636e41b60410cd8f0bbc4"
+        ]
+      ],
+      "payload_hex": "a5646465667382a463706f73646e6f756e6573656e73656d6120726f756e64206672756974666c6162656c7380686578616d706c6573816e616e206170706c65206120646179a463706f73646e6f756e6573656e7365781b7468652074726565206f66207468652067656e7573204d616c7573666c6162656c738166626f74616e79686578616d706c657380656578747261a067646973706c6179656170706c656870686f6e657469638169cb88c3a6702ec9996c687261775f68746d6cf6",
+      "word": "apple"
+    },
+    {
+      "content_hash": "b6b80d237dc44512129ff3648b1ddc6cf74607154d47c5695b4c7b116fa0f9af",
+      "field_hashes": [
+        [
+          "defs",
+          "e909a3537627a2b78ca1bbfc4247174ef881b1e329d44e7835309096c5775b89"
+        ],
+        [
+          "display",
+          "13a4b38b9dae3bb7026892fd9b3c1faf3380fdf18728dbd20de1ad6e92f2f12f"
+        ],
+        [
+          "extra",
+          "1f94cbf313b3ce23257a7251ea0fc95a24556ea611e4f8f475e549971baedb02"
+        ],
+        [
+          "phonetic",
+          "bbe6a9f5a0146a1f4d0381e9b0ed1ac2f1a979ce9d5ad84e46ff0b58f36b5f46"
+        ],
+        [
+          "raw_html",
+          "fcb1ba076634add5b5b1bdc4dc8c3fefd1d577e89d57a5c76ff67efbfb822e02"
+        ]
+      ],
+      "payload_hex": "a5646465667381a463706f73606573656e736571616e204166726963616e20657175696e65666c6162656c7380686578616d706c657380656578747261a067646973706c6179655a656272616870686f6e6574696380687261775f68746d6c6c3c693e7a656272613c2f693e",
+      "word": "zebra"
+    },
+    {
+      "content_hash": "14ce61e043a300c789a80f7daf0a7c1a73c3d74df5cfd20ee9d4c1d117c962b1",
+      "field_hashes": [
+        [
+          "defs",
+          "bbe6a9f5a0146a1f4d0381e9b0ed1ac2f1a979ce9d5ad84e46ff0b58f36b5f46"
+        ],
+        [
+          "display",
+          "2d219dad181a5582ea1e303962f266224640adeffd92718ec3e1e6ea91e4709a"
+        ],
+        [
+          "extra",
+          "1f94cbf313b3ce23257a7251ea0fc95a24556ea611e4f8f475e549971baedb02"
+        ],
+        [
+          "phonetic",
+          "bbe6a9f5a0146a1f4d0381e9b0ed1ac2f1a979ce9d5ad84e46ff0b58f36b5f46"
+        ],
+        [
+          "raw_html",
+          "61a9bf10f0ffedc7dc77589ae2ab4ca80b006c806e6636e41b60410cd8f0bbc4"
+        ]
+      ],
+      "payload_hex": "a5646465667380656578747261a067646973706c617965656d7074796870686f6e6574696380687261775f68746d6cf6",
+      "word": "empty"
+    }
+  ],
+  "format": "odc-testvector-v1",
+  "kind": "payload_encoding"
+}
