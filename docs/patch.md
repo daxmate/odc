@@ -13,13 +13,34 @@ the M3 usage, behaviour and limits.
 # On a machine that has both revisions:
 odc patch create <base> <target> -o fix.odp [--json]
 
-# On the receiver, with HEAD exactly at <base>:
+# On the receiver, with HEAD at <base> or on a branch that descends from it:
 odc patch verify fix.odp [--json]
 odc patch apply fix.odp [--json]
 ```
 
 Revisions follow the usual syntax (`HEAD`, `HEAD~1`, or a unique hash prefix
 of at least four hex characters).
+
+## Three-way application (M4)
+
+When HEAD is exactly the base commit, `apply` advances HEAD to the target as
+before. When HEAD descends from the base, the patch target is installed as a
+commit but HEAD does not move; the target is then merged into HEAD three-way
+(base = the patch base, ours = HEAD, theirs = target) and a merge commit is
+written when the merge is unambiguous.
+
+A conflicted merge leaves HEAD, the entry index and the working set untouched,
+records the conflicts (see `docs/merge.md`), and exits with code 5. Finish it on
+the receiver with:
+
+```console
+odc conflicts --json
+odc resolve <word> --ours|--theirs|--union|--file payload.cbor
+odc merge --continue
+```
+
+The target commit and its blocks stay in the repository so the resolution can
+complete; a second `apply` of the same file therefore reports `ODC-E026`.
 
 `create` reports the number of inline blocks, base blocks, index changes and
 the file size. `apply` reports the blocks inserted, index changes and target
@@ -77,9 +98,10 @@ region — this is inherent to the block-level format.
 
 ## Limits (M3)
 
-* Exact base only. Rebasing or merging a patch onto a descendant is M4
-  (`ODC-E025`), and `create` requires the target to descend from the base:
-  patches describe a forward, linear step.
+* `create` requires the target to descend from the base: patches describe a
+  forward step. Applying to a descendant HEAD is a three-way merge (see above).
+  `ODC-E025` is no longer produced by this implementation; the code stays
+  reserved in the error table.
 * The base commit's blocks must still be stored locally, because the reference
   implementation rebuilds the historical block set from the block pool.
   `odc gc` keeps the current index and ref chains; creating a patch from a

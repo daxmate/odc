@@ -2,8 +2,8 @@
 //!
 //! A patch carries the block set difference between two commits plus the
 //! index delta, so an offline mirror can advance from the base commit to the
-//! target commit without shipping unchanged blocks. M3 implements exact-base
-//! transfer: three-way merges are M4.
+//! target commit without shipping unchanged blocks. Applying to a descendant
+//! HEAD installs the target and merges it three-way (spec section 11.1).
 
 use crate::block;
 use crate::cbor;
@@ -11,11 +11,12 @@ use crate::cdc::{self, RecordShape};
 use crate::entry::Entry;
 use crate::error::{Error, Result};
 use crate::hash;
+use crate::merge::{self, Strategy};
 use crate::repo::{self, CommitRecord, Repo, DEFAULT_AUTHOR};
 use crate::snapshot;
 use crate::store::codec;
 use crate::varint;
-use rusqlite::{params, OptionalExtension};
+use rusqlite::params;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// Patch magic, four ASCII bytes.
@@ -515,35 +516,18 @@ pub fn create(repo: &Repo, base_rev: &str, target_rev: &str) -> Result<PatchPlan
 }
 
 fn is_ancestor(repo: &Repo, ancestor: &[u8; 32], from: &[u8; 32]) -> Result<bool> {
-    let mut cursor = *from;
-    let mut steps = 0usize;
-    while cursor != hash::ZERO_HASH {
-        if cursor == *ancestor {
-            return Ok(true);
-        }
-        let parent: Option<Vec<u8>> = repo
-            .connection
-            .query_row(
-                "SELECT parent FROM commits WHERE commit_hash = ?1",
-                params![cursor.as_slice()],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let Some(parent) = parent else {
-            return Ok(false);
-        };
-        cursor = repo::hash_from_blob(&parent)?;
-        steps += 1;
-        if steps > 10_000_000 {
-            return Err(Error::Inconsistent(
-                "commit chain is unreasonably long".to_string(),
-            ));
-        }
-    }
-    Ok(false)
+    merge::is_ancestor(repo, ancestor, from)
 }
 
-fn check_base(repo: &Repo, plan: &PatchPlan) -> Result<()> {
+/// Where HEAD sits relative to the patch base.
+enum BasePosition {
+    /// HEAD is exactly the base commit.
+    Exact,
+    /// HEAD descends from the base, so the patch needs a three-way merge.
+    Descendant,
+}
+
+fn check_base(repo: &Repo, plan: &PatchPlan) -> Result<BasePosition> {
     if repo.commit_record(&plan.base)?.is_none() {
         return Err(Error::PatchBaseMismatch(format!(
             "base commit {} is not present",
@@ -554,14 +538,10 @@ fn check_base(repo: &Repo, plan: &PatchPlan) -> Result<()> {
         .head()?
         .ok_or_else(|| Error::PatchBaseMismatch("repository has no commits".to_string()))?;
     if head == plan.base {
-        return Ok(());
+        return Ok(BasePosition::Exact);
     }
     if is_ancestor(repo, &plan.base, &head)? {
-        return Err(Error::PatchNeedsMerge(format!(
-            "HEAD {} descends from base {}",
-            hash::to_hex(&head),
-            hash::to_hex(&plan.base)
-        )));
+        return Ok(BasePosition::Descendant);
     }
     Err(Error::PatchBaseMismatch(format!(
         "HEAD {} is not base {}",
@@ -675,7 +655,12 @@ fn check_index_delta(repo: &Repo, plan: &PatchPlan, state: &TargetState) -> Resu
     Ok(())
 }
 
-fn write_target(repo: &mut Repo, plan: &PatchPlan, state: &TargetState) -> Result<()> {
+fn write_target(
+    repo: &mut Repo,
+    plan: &PatchPlan,
+    state: &TargetState,
+    move_head: bool,
+) -> Result<()> {
     let transaction = repo.connection.transaction()?;
     {
         let mut insert_block = transaction.prepare(
@@ -693,23 +678,25 @@ fn write_target(repo: &mut Repo, plan: &PatchPlan, state: &TargetState) -> Resul
             ])?;
         }
     }
-    transaction.execute("DELETE FROM entries", [])?;
-    {
-        let mut insert_entry = transaction.prepare(
-            "INSERT INTO entries(word, display, block_hash, offset, length,
+    if move_head {
+        transaction.execute("DELETE FROM entries", [])?;
+        {
+            let mut insert_entry = transaction.prepare(
+                "INSERT INTO entries(word, display, block_hash, offset, length,
                                  content_hash, field_hashes)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        )?;
-        for row in &state.rows {
-            insert_entry.execute(params![
-                &row.word,
-                &row.display,
-                row.block_hash.as_slice(),
-                row.offset,
-                row.length,
-                row.content_hash.as_slice(),
-                &row.field_hashes,
-            ])?;
+            )?;
+            for row in &state.rows {
+                insert_entry.execute(params![
+                    &row.word,
+                    &row.display,
+                    row.block_hash.as_slice(),
+                    row.offset,
+                    row.length,
+                    row.content_hash.as_slice(),
+                    &row.field_hashes,
+                ])?;
+            }
         }
     }
     let message = format!("apply patch {}", hash::to_hex(&plan.target));
@@ -752,11 +739,13 @@ fn write_target(repo: &mut Repo, plan: &PatchPlan, state: &TargetState) -> Resul
             data,
         ],
     )?;
-    transaction.execute(
-        "INSERT INTO refs(name, commit_hash) VALUES ('HEAD', ?1)
-         ON CONFLICT(name) DO UPDATE SET commit_hash = excluded.commit_hash",
-        params![plan.target.as_slice()],
-    )?;
+    if move_head {
+        transaction.execute(
+            "INSERT INTO refs(name, commit_hash) VALUES ('HEAD', ?1)
+             ON CONFLICT(name) DO UPDATE SET commit_hash = excluded.commit_hash",
+            params![plan.target.as_slice()],
+        )?;
+    }
     transaction.commit()?;
     Ok(())
 }
@@ -787,20 +776,56 @@ pub fn verify(repo: &Repo, bytes: &[u8]) -> Result<PatchVerify> {
 ///
 /// Every validation happens before the single write transaction, so a rejected
 /// patch leaves the repository untouched.
-pub fn apply(repo: &mut Repo, bytes: &[u8]) -> Result<PatchOutcome> {
+/// Result of applying a patch.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ApplyOutcome {
+    /// HEAD advanced to the target commit.
+    Applied(PatchOutcome),
+    /// HEAD already descends from the base, so the patch was merged three-way.
+    Merged {
+        /// Patch statistics.
+        patch: PatchOutcome,
+        /// Merge result.
+        merge: Box<merge::MergeOutcome>,
+    },
+}
+
+/// Apply a patch to the repository.
+///
+/// An exact-base repository advances to the target commit. When HEAD descends
+/// from the base, the patch target is installed and merged three-way; a merge
+/// that cannot be completed leaves HEAD and the working set untouched and
+/// records conflicts for [`crate::merge::resolve`].
+pub fn apply(repo: &mut Repo, bytes: &[u8]) -> Result<ApplyOutcome> {
     let plan = decode(bytes)?;
     if repo.commit_record(&plan.target)?.is_some() {
         return Err(Error::PatchApplied(hash::to_hex(&plan.target)));
     }
-    check_base(repo, &plan)?;
+    let position = check_base(repo, &plan)?;
     let state = target_state(repo, &plan)?;
     check_index_delta(repo, &plan, &state)?;
-    write_target(repo, &plan, &state)?;
-    Ok(PatchOutcome {
+    let patch = PatchOutcome {
         target: plan.target,
         base_blocks: plan.base_blocks.len(),
         new_blocks: plan.new_blocks.len(),
         index_changes: plan.index_rows.len(),
         bytes: bytes.len(),
-    })
+    };
+    match position {
+        BasePosition::Exact => {
+            write_target(repo, &plan, &state, true)?;
+            Ok(ApplyOutcome::Applied(patch))
+        }
+        BasePosition::Descendant => {
+            write_target(repo, &plan, &state, false)?;
+            let head = repo
+                .head()?
+                .ok_or_else(|| Error::PatchBaseMismatch("repository has no commits".to_string()))?;
+            let merge = merge::merge_commits(repo, head, plan.target, Strategy::Auto)?;
+            Ok(ApplyOutcome::Merged {
+                patch,
+                merge: Box::new(merge),
+            })
+        }
+    }
 }

@@ -127,7 +127,7 @@ fn roundtrip_reproduces_the_target_commit() {
     assert!(!report.target_present);
 
     let outcome = patch::apply(&mut mirror_repo, &bytes).expect("apply");
-    assert_eq!(outcome.target, target_hash);
+    assert_eq!(outcome_applied(&outcome).target, target_hash);
     assert_eq!(head(&mirror_repo), target_hash);
     assert_eq!(mirror_repo.entry_count().expect("entries"), edited.len());
     let changed = mirror_repo
@@ -199,7 +199,7 @@ fn rejects_wrong_base_merges_replays_and_corruption() {
     assert_eq!(code(&error), "ODC-E024");
     assert_eq!(state(&stranger_repo), before);
 
-    // A descendant HEAD needs a three-way merge (M4).
+    // A descendant HEAD merges the target three-way instead of rejecting it.
     let merge_dir = work.join("merge");
     let mut merge_repo = seed(&merge_dir, &initial, "A", 1_700_000_030);
     let mut local = initial.clone();
@@ -208,10 +208,28 @@ fn rejects_wrong_base_merges_replays_and_corruption() {
     merge_repo
         .commit("local", "tester", 1_700_000_040)
         .expect("commit local");
-    let before = state(&merge_repo);
-    let error = patch::apply(&mut merge_repo, &bytes).expect_err("needs merge");
-    assert_eq!(code(&error), "ODC-E025");
-    assert_eq!(state(&merge_repo), before);
+    let local_head = head(&merge_repo);
+    let outcome = patch::apply(&mut merge_repo, &bytes).expect("merged apply");
+    match &outcome {
+        patch::ApplyOutcome::Merged { merge, .. } => {
+            assert_eq!(merge.kind, odc_core::merge::MergeKind::Merged);
+            let commit = merge.commit.as_ref().expect("merge commit");
+            assert_eq!(commit.parent, local_head);
+            assert_eq!(commit.parent2, target_hash);
+        }
+        other => panic!("expected a merge, got {other:?}"),
+    }
+    assert_ne!(head(&merge_repo), local_head);
+    assert_eq!(
+        merge_repo
+            .show("word-000010")
+            .expect("show")
+            .expect("entry")
+            .defs[0]
+            .sense,
+        "local edit"
+    );
+    assert!(merge_repo.verify().expect("verify").ok);
 
     // Exact base: applies, then repeated application is refused.
     let mirror = work.join("mirror");
@@ -246,4 +264,11 @@ fn rejects_wrong_base_merges_replays_and_corruption() {
     assert_eq!(state(&pristine_repo), before);
 
     assert_eq!(head(&mirror_repo), target_hash);
+}
+
+fn outcome_applied(outcome: &patch::ApplyOutcome) -> &patch::PatchOutcome {
+    match outcome {
+        patch::ApplyOutcome::Applied(outcome) => outcome,
+        patch::ApplyOutcome::Merged { patch, .. } => patch,
+    }
 }
