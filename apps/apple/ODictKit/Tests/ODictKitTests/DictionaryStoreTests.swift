@@ -26,6 +26,48 @@ final class DictionaryStoreTests: XCTestCase {
         XCTAssertEqual(try dictionary.search("app", limit: 50).count, 2)
     }
 
+    func testOpeningAURLPopulatesTheStore() async throws {
+        let store = DictionaryStore()
+        defer { store.close() }
+
+        // Same entry point the document handlers use (onOpenURL / NSApplicationDelegate).
+        store.open(url: Fixture.demoRepository)
+        try await waitUntil { store.documentURL != nil }
+
+        XCTAssertEqual(store.documentName, "demo")
+        XCTAssertNotNil(store.documentURL)
+        XCTAssertNil(store.errorMessage)
+
+        store.setQuery("app")
+        try await waitUntil { !store.hits.isEmpty }
+        XCTAssertEqual(store.hits.map(\.key), ["apple", "application"])
+    }
+
+    func testCloseAfterOpeningRemovesTheCopy() async throws {
+        let store = DictionaryStore()
+        store.open(url: Fixture.demoRepository)
+        try await waitUntil { store.documentURL != nil }
+        let copy = try XCTUnwrap(store.documentURL)
+
+        store.close()
+        XCTAssertNil(store.documentURL)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: copy.path))
+    }
+
+    private func waitUntil(
+        timeout: Duration = .seconds(5),
+        _ condition: @MainActor () -> Bool
+    ) async throws {
+        let deadline = ContinuousClock.now + timeout
+        while !condition() {
+            guard ContinuousClock.now < deadline else {
+                XCTFail("condition not met within \(timeout)")
+                return
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+    }
+
     func testDismissErrorClearsMessage() {
         let store = DictionaryStore()
         store.present(error: OdcError.closed)

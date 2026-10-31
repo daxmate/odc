@@ -43,6 +43,9 @@ public struct DictionaryRootView: View {
             } message: {
                 Text(store.errorMessage ?? "")
             }
+            .odictOnOpenURL { url in
+                store.open(url: url)
+            }
     }
 
     @ViewBuilder
