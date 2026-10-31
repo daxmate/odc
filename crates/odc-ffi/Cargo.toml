@@ -1,0 +1,28 @@
+[package]
+name = "odc-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+description = "C ABI bindings for odc-core, packaged as a static library for Apple platforms"
+publish = false
+
+[lib]
+name = "odc_ffi"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies]
+odc-core = { path = "../odc-core" }
+serde_json = "1.0.154"
+
+[dev-dependencies]
+tempfile = "3"
+
+# The workspace forbids unsafe code; this crate exists to expose a C ABI and
+# therefore allows it. Every unsafe block carries a SAFETY comment.
+[lints.rust]
+unsafe_code = "allow"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

@@ -5,3 +5,8 @@
 *.db-wal
 *.db-shm
 /odc-e2e
+
+# Apple build artifacts
+apps/apple/ODictKit/Frameworks/
+apps/apple/build/
+*.xcframework

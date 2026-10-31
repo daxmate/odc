@@ -1,0 +1,5 @@
+module ODCFFI {
+    umbrella header "odc.h"
+    export *
+    module * { export * }
+}

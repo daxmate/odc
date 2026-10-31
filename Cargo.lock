@@ -556,6 +556,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "odc-ffi"
+version = "0.1.0"
+dependencies = [
+ "odc-core",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "odc-testkit"
 version = "0.1.0"
 dependencies = [

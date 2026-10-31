@@ -25,6 +25,10 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   latency.
 * Spec section 16 documents the MDX mapping; `docs/mdx-compat.md` records the
   parser comparison and the measured import figures.
+* `crates/odc-ffi` exposes the core through a C ABI (`staticlib` and
+  `cdylib`) with `include/odc.h` and an `ODCFFI` module map;
+  `scripts/build-odc-xcframework.sh` assembles macOS, iOS device and iOS
+  simulator slices into `ODCFFI.xcframework`.
 
 * `odc merge A B [--strategy auto|ours|theirs|union] [--json]`: three-way
   merge over the `parent` / `parent2` DAG with a deterministic merge base,
