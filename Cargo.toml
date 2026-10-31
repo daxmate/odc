@@ -5,8 +5,12 @@ resolver = "2"
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-license = "MIT OR Apache-2.0"
+license = "GPL-3.0-or-later"
 repository = "https://github.com/daxmate/odc"
+description = "Open Dictionary Container: a content-addressed, dictionary-first storage format and toolchain"
+readme = "README.md"
+keywords = ["dictionary", "content-addressed", "chunking", "cbor", "cli"]
+categories = ["parser-implementations", "text-processing", "command-line-utilities"]
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
