@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-31T03:28:19Z",
-  "updated_at": "2026-10-31T03:30:43Z",
+  "updated_at": "2026-10-31T03:39:13Z",
   "files": {
     ".gitattributes": {
       "role": "index",
@@ -89,9 +89,9 @@
     },
     "crates/odc-cli/Cargo.toml": {
       "role": "index",
-      "sha256": "abac2320aee7ef9ac347f7efec40af98a890ad69d23edede1531d4db033dd525",
-      "size": 611,
-      "normalized_sha256": "abac2320aee7ef9ac347f7efec40af98a890ad69d23edede1531d4db033dd525"
+      "sha256": "e0d994bf878fa34d845bbc5e7c2bfbf4b6082ca4b7bdbfbb68e928db04999779",
+      "size": 630,
+      "normalized_sha256": "e0d994bf878fa34d845bbc5e7c2bfbf4b6082ca4b7bdbfbb68e928db04999779"
     },
     "crates/odc-cli/src/main.rs": {
       "role": "index",
@@ -239,9 +239,9 @@
     },
     "deny.toml": {
       "role": "index",
-      "sha256": "e13a1f6d4d4433d166afca29e248c6c52c8021459f22b588a8eed286223b17cf",
-      "size": 641,
-      "normalized_sha256": "e13a1f6d4d4433d166afca29e248c6c52c8021459f22b588a8eed286223b17cf"
+      "sha256": "e083262a648769a6e449cc677aa5d73eb2d26a4a03049505eb371d822d097bdf",
+      "size": 870,
+      "normalized_sha256": "e083262a648769a6e449cc677aa5d73eb2d26a4a03049505eb371d822d097bdf"
     },
     "docs/design-rationale.md": {
       "role": "index",
