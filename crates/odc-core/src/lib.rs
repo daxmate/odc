@@ -7,7 +7,8 @@
 //! * canonical CBOR payloads (modules `cbor` and `entry`),
 //! * BLAKE3 hashing and Merkle roots (module `hash`),
 //! * a SQLite-backed repository with commit / log / diff / verify
-//!   (module `repo`).
+//!   (module `repo`),
+//! * an MDX (MDict) import adapter (module `mdx`).
 //!
 //! The normative description lives in `docs/odc-spec.md`.
 
@@ -17,6 +18,7 @@ pub mod cdc;
 pub mod entry;
 pub mod error;
 pub mod hash;
+pub mod mdx;
 pub mod patch;
 pub mod repo;
 pub mod store;

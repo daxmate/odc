@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/odc-core", "crates/odc-cli"]
+members = ["crates/odc-core", "crates/odc-cli", "crates/odc-testkit"]
 resolver = "2"
 
 [workspace.package]

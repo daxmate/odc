@@ -31,14 +31,20 @@ enum Command {
     Init,
     /// Import entries into the working set.
     Import {
-        /// Input file (JSONL or CSV).
+        /// Input file (JSONL, CSV or MDX).
         file: PathBuf,
         /// Input format.
-        #[arg(long, value_parser = ["jsonl", "csv"], default_value = "jsonl")]
+        #[arg(long, value_parser = ["jsonl", "csv", "mdx"], default_value = "jsonl")]
         format: String,
         /// Delete working-set entries that are absent from the input file.
         #[arg(long)]
         prune: bool,
+        /// Stop after this many entries (MDX only).
+        #[arg(short = 'n', long)]
+        limit: Option<usize>,
+        /// Print progress to stderr (MDX only).
+        #[arg(long)]
+        progress: bool,
     },
     /// Record the working set as a new commit.
     Commit {
@@ -68,6 +74,35 @@ enum Command {
         /// Emit JSON.
         #[arg(long)]
         json: bool,
+    },
+    /// Look up one committed entry; exits with code 4 when it is missing.
+    Lookup {
+        /// Word to look up (normalised automatically).
+        word: String,
+        /// Emit JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// List committed entries whose normalised key starts with a prefix.
+    Search {
+        /// Key prefix (normalised automatically).
+        #[arg(long)]
+        prefix: String,
+        /// Maximum number of entries.
+        #[arg(short = 'n', long, default_value_t = 20)]
+        limit: usize,
+        /// Emit JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Export every committed entry.
+    Export {
+        /// Output format.
+        #[arg(long, value_parser = ["jsonl", "csv"], default_value = "jsonl")]
+        format: String,
+        /// Output file; stdout when omitted.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
     },
     /// Compare two revisions (word level).
     Diff {
@@ -100,7 +135,7 @@ enum PatchCommand {
 
 fn main() -> ExitCode {
     match run() {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(code) => code,
         Err(error) => {
             eprintln!("error: {error}");
             ExitCode::FAILURE
@@ -108,7 +143,7 @@ fn main() -> ExitCode {
     }
 }
 
-fn run() -> odc_core::Result<()> {
+fn run() -> odc_core::Result<ExitCode> {
     let cli = Cli::parse();
     match cli.command {
         Command::Init => {
@@ -118,14 +153,19 @@ fn run() -> odc_core::Result<()> {
                 .map_or_else(|| "".to_string(), |hash| hash::to_hex(&hash));
             println!("initialized ODC repository at {}", cli.repo.display());
             println!("genesis {}", &head[..12.min(head.len())]);
-            Ok(())
+            Ok(ExitCode::SUCCESS)
         }
         Command::Import {
             file,
             format,
             prune,
+            limit,
+            progress,
         } => {
             let mut repo = Repo::open(&cli.repo)?;
+            if format == "mdx" {
+                return import_mdx(&mut repo, &file, prune, limit, progress);
+            }
             let entries = if format == "csv" {
                 read_csv(&file)?
             } else {
@@ -139,7 +179,7 @@ fn run() -> odc_core::Result<()> {
                 report.removed,
                 report.total
             );
-            Ok(())
+            Ok(ExitCode::SUCCESS)
         }
         Command::Commit {
             message,
@@ -158,7 +198,7 @@ fn run() -> odc_core::Result<()> {
                 " {} entries, {} new blocks, {} reused blocks",
                 outcome.entries, outcome.new_blocks, outcome.reused_blocks
             );
-            Ok(())
+            Ok(ExitCode::SUCCESS)
         }
         Command::Log { limit, json } => {
             let repo = Repo::open(&cli.repo)?;
@@ -196,7 +236,7 @@ fn run() -> odc_core::Result<()> {
                     );
                 }
             }
-            Ok(())
+            Ok(ExitCode::SUCCESS)
         }
         Command::Show { word, json } => {
             let repo = Repo::open(&cli.repo)?;
@@ -210,13 +250,66 @@ fn run() -> odc_core::Result<()> {
                     } else {
                         print_entry(&entry);
                     }
-                    Ok(())
+                    Ok(ExitCode::SUCCESS)
                 }
                 None => Err(odc_core::Error::InvalidArgument(format!(
                     "entry not found: {}",
                     normalize_key(&word)
                 ))),
             }
+        }
+        Command::Lookup { word, json } => {
+            let repo = Repo::open(&cli.repo)?;
+            match repo.show(&word)? {
+                Some(entry) => {
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&entry_json(&entry)).unwrap_or_default()
+                        );
+                    } else {
+                        print_entry(&entry);
+                    }
+                    Ok(ExitCode::SUCCESS)
+                }
+                None => {
+                    eprintln!("not found: {}", normalize_key(&word));
+                    Ok(ExitCode::from(4))
+                }
+            }
+        }
+        Command::Search {
+            prefix,
+            limit,
+            json,
+        } => {
+            let repo = Repo::open(&cli.repo)?;
+            let hits = repo.search_prefix(&prefix, limit)?;
+            if json {
+                let rows: Vec<_> = hits
+                    .iter()
+                    .map(|(word, display)| json!({ "word": word, "display": display }))
+                    .collect();
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&rows).unwrap_or_default()
+                );
+            } else {
+                for (word, display) in &hits {
+                    if word == display {
+                        println!("{word}");
+                    } else {
+                        println!("{word}\t{display}");
+                    }
+                }
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Export { format, output } => {
+            let repo = Repo::open(&cli.repo)?;
+            let written = export_entries(&repo, &format, output.as_deref())?;
+            eprintln!("exported {written} entries as {format}");
+            Ok(ExitCode::SUCCESS)
         }
         Command::Diff { from, to, json } => {
             let repo = Repo::open(&cli.repo)?;
@@ -249,7 +342,7 @@ fn run() -> odc_core::Result<()> {
                     println!("~ {word}");
                 }
             }
-            Ok(())
+            Ok(ExitCode::SUCCESS)
         }
         Command::Verify => {
             let repo = Repo::open(&cli.repo)?;
@@ -259,7 +352,7 @@ fn run() -> odc_core::Result<()> {
                     "verify: OK ({} blocks, {} entries, {} commits)",
                     report.blocks, report.entries, report.commits
                 );
-                Ok(())
+                Ok(ExitCode::SUCCESS)
             } else {
                 println!("verify: FAILED ({} problems)", report.errors.len());
                 for error in &report.errors {
@@ -287,7 +380,11 @@ fn run() -> odc_core::Result<()> {
                 );
                 println!("working set: {} entries", status.total);
             }
-            Ok(())
+            println!(
+                "index: {} entries, {} blocks",
+                status.entries, status.blocks
+            );
+            Ok(ExitCode::SUCCESS)
         }
         Command::Patch { command } => {
             let mut repo = Repo::open(&cli.repo)?;
@@ -295,11 +392,12 @@ fn run() -> odc_core::Result<()> {
                 PatchCommand::Create { base, target } => {
                     let plan = patch::create(&repo, &base, &target)?;
                     println!("patch plan with {} blocks", plan.new_blocks.len());
-                    Ok(())
+                    Ok(ExitCode::SUCCESS)
                 }
                 PatchCommand::Apply { file } => {
                     let bytes = std::fs::read(&file)?;
-                    patch::apply(&mut repo, &bytes)
+                    patch::apply(&mut repo, &bytes)?;
+                    Ok(ExitCode::SUCCESS)
                 }
             }
         }
@@ -361,6 +459,141 @@ fn print_entry(entry: &Entry) {
     }
     if let Some(html) = &entry.raw_html {
         println!("raw_html: {} bytes", html.len());
+    }
+}
+
+fn import_mdx(
+    repo: &mut Repo,
+    path: &std::path::Path,
+    prune: bool,
+    limit: Option<usize>,
+    progress: bool,
+) -> odc_core::Result<ExitCode> {
+    use odc_core::mdx::{entry_from_record, MdxKeys, MdxSource};
+
+    let source = MdxSource::open(path)?;
+    let header = source.header();
+    eprintln!(
+        "mdx: engine {} (required {}), encoding {}, records {}{}",
+        header.engine_version,
+        header.required_engine_version,
+        if header.encoding.is_empty() {
+            "unknown"
+        } else {
+            header.encoding.as_str()
+        },
+        header.records,
+        header
+            .encrypted
+            .as_deref()
+            .map_or(String::new(), |value| format!(", encrypted={value}")),
+    );
+
+    let mut records = source.records();
+    let mut keys = MdxKeys::new();
+    let mut taken = 0usize;
+    let mut skipped_empty = 0usize;
+    let mut skipped_oversized = 0usize;
+    let mut deduplicated = 0usize;
+    let mut next_mark = 10_000usize;
+
+    let report = repo.import_stream(
+        || loop {
+            if limit.is_some_and(|cap| taken >= cap) {
+                return Ok(None);
+            }
+            let Some(record) = records.next() else {
+                return Ok(None);
+            };
+            let record = record?;
+            if record.key.trim().is_empty() {
+                skipped_empty += 1;
+                continue;
+            }
+            let mut entry = match entry_from_record(&record) {
+                Ok(entry) => entry,
+                Err(odc_core::Error::EntryTooLarge { .. }) => {
+                    skipped_oversized += 1;
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            let (key, collided) = keys.allocate(&entry.word);
+            entry.word = key;
+            if collided {
+                deduplicated += 1;
+            }
+            taken += 1;
+            return Ok(Some(entry));
+        },
+        prune,
+        |written| {
+            if progress && written >= next_mark {
+                eprintln!("progress: {written} entries");
+                next_mark = written + 10_000;
+            }
+        },
+    )?;
+
+    println!(
+        "imported {} entries ({} written, {} removed); working set = {}",
+        report.written, report.written, report.removed, report.total
+    );
+    if skipped_empty + skipped_oversized + deduplicated > 0 {
+        println!(
+            "mdx: {deduplicated} duplicate keys suffixed, {skipped_empty} empty skipped, {skipped_oversized} oversized skipped"
+        );
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn export_entries(
+    repo: &Repo,
+    format: &str,
+    output: Option<&std::path::Path>,
+) -> odc_core::Result<usize> {
+    use std::io::Write;
+
+    let mut writer: Box<dyn Write> = match output {
+        Some(path) => Box::new(std::io::BufWriter::new(std::fs::File::create(path)?)),
+        None => Box::new(std::io::BufWriter::new(std::io::stdout())),
+    };
+    let csv = format == "csv";
+    if csv {
+        writeln!(writer, "word,display,pos,sense,raw_html")?;
+    }
+    let mut written = 0usize;
+    repo.for_each_entry(|entry| {
+        if csv {
+            let def = entry.defs.first();
+            let fields = [
+                csv_field(&entry.word),
+                csv_field(&entry.display),
+                csv_field(def.map_or("", |item| item.pos.as_str())),
+                csv_field(def.map_or("", |item| item.sense.as_str())),
+                csv_field(entry.raw_html.as_deref().unwrap_or("")),
+            ];
+            writeln!(writer, "{}", fields.join(","))?;
+        } else {
+            let line = serde_json::to_string(&entry_json(&entry))
+                .map_err(|error| odc_core::Error::InvalidArgument(error.to_string()))?;
+            writeln!(writer, "{line}")?;
+        }
+        written += 1;
+        Ok(())
+    })?;
+    writer.flush()?;
+    Ok(written)
+}
+
+fn csv_field(value: &str) -> String {
+    if value
+        .chars()
+        .any(|character| matches!(character, ',' | '"' | '\n' | '\r'))
+    {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value.to_string()
     }
 }
 

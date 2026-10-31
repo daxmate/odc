@@ -43,6 +43,10 @@ pub struct Status {
     pub removed: usize,
     /// Working set size.
     pub total: usize,
+    /// Entries materialised in the committed index.
+    pub entries: usize,
+    /// Blocks stored by the repository.
+    pub blocks: usize,
     /// Current HEAD hash, if any.
     pub head: Option<String>,
 }
@@ -288,6 +292,188 @@ impl Repo {
         })
     }
 
+    /// Entries staged per transaction by [`Repo::import_stream`].
+    pub const STREAM_BATCH: usize = 1024;
+
+    /// Write one batch of entries to the working set in its own transaction.
+    ///
+    /// When `track_prune` is set, the batch is also recorded in the temporary
+    /// `imported` table used by [`Repo::import_stream`].
+    fn stage_entries(&mut self, entries: &[Entry], track_prune: bool) -> Result<()> {
+        let transaction = self.connection.transaction()?;
+        {
+            let mut insert = transaction.prepare(
+                "INSERT INTO staging(word, display, payload, content_hash) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(word) DO UPDATE SET display = excluded.display,
+                                                 payload = excluded.payload,
+                                                 content_hash = excluded.content_hash",
+            )?;
+            for entry in entries {
+                insert.execute(params![
+                    entry.word,
+                    entry.display,
+                    entry.encode_payload(),
+                    entry.content_hash().as_slice()
+                ])?;
+            }
+        }
+        if track_prune {
+            let mut insert =
+                transaction.prepare("INSERT OR IGNORE INTO imported(word) VALUES (?1)")?;
+            for entry in entries {
+                insert.execute(params![entry.word])?;
+            }
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Import entries from a streaming source.
+    ///
+    /// Entries are staged in batches of [`Repo::STREAM_BATCH`], so memory use
+    /// stays flat no matter how large the source is. `next` returns
+    /// `Ok(None)` at the end of input; `progress` is called after each batch
+    /// with the running number of entries written.
+    pub fn import_stream<F, P>(
+        &mut self,
+        mut next: F,
+        prune: bool,
+        mut progress: P,
+    ) -> Result<ImportReport>
+    where
+        F: FnMut() -> Result<Option<Entry>>,
+        P: FnMut(usize),
+    {
+        if prune {
+            self.connection.execute_batch(
+                "CREATE TEMP TABLE IF NOT EXISTS imported(word TEXT PRIMARY KEY);
+                 DELETE FROM imported;",
+            )?;
+        }
+        let mut written = 0usize;
+        let mut batch: Vec<Entry> = Vec::with_capacity(Self::STREAM_BATCH);
+        loop {
+            while batch.len() < Self::STREAM_BATCH {
+                match next()? {
+                    Some(entry) => batch.push(entry),
+                    None => break,
+                }
+            }
+            if batch.is_empty() {
+                break;
+            }
+            self.stage_entries(&batch, prune)?;
+            written += batch.len();
+            batch.clear();
+            progress(written);
+        }
+        let removed = if prune {
+            usize::try_from(self.connection.execute(
+                "DELETE FROM staging WHERE word NOT IN (SELECT word FROM imported)",
+                [],
+            )?)
+            .unwrap_or(0)
+        } else {
+            0
+        };
+        let total: i64 = self
+            .connection
+            .query_row("SELECT COUNT(*) FROM staging", [], |row| row.get(0))?;
+        Ok(ImportReport {
+            written,
+            removed,
+            total: usize::try_from(total).unwrap_or(0),
+        })
+    }
+
+    /// Number of entries in the committed index.
+    pub fn entry_count(&self) -> Result<usize> {
+        let count: i64 = self
+            .connection
+            .query_row("SELECT COUNT(*) FROM entries", [], |row| row.get(0))?;
+        Ok(usize::try_from(count).unwrap_or(0))
+    }
+
+    /// Number of blocks stored in the repository.
+    pub fn block_count(&self) -> Result<usize> {
+        let count: i64 = self
+            .connection
+            .query_row("SELECT COUNT(*) FROM blocks", [], |row| row.get(0))?;
+        Ok(usize::try_from(count).unwrap_or(0))
+    }
+
+    /// Visit every committed entry in key order.
+    ///
+    /// Blocks are decoded lazily. The index is stored in key order and blocks
+    /// were cut from the same order, so consecutive entries nearly always
+    /// share a block; a one-block cache keeps memory flat.
+    pub fn for_each_entry<F>(&self, mut visit: F) -> Result<usize>
+    where
+        F: FnMut(Entry) -> Result<()>,
+    {
+        let mut statement = self
+            .connection
+            .prepare("SELECT word, block_hash, offset, length FROM entries ORDER BY word ASC")?;
+        let mut rows = statement.query([])?;
+        let mut cached: Option<(Vec<u8>, Vec<u8>)> = None;
+        let mut count = 0usize;
+        while let Some(row) = rows.next()? {
+            let word: String = row.get(0)?;
+            let block_hash: Vec<u8> = row.get(1)?;
+            let offset = usize::try_from(row.get::<_, i64>(2)?)
+                .map_err(|_| Error::Inconsistent("negative offset".to_string()))?;
+            let length = usize::try_from(row.get::<_, i64>(3)?)
+                .map_err(|_| Error::Inconsistent("negative length".to_string()))?;
+            let stale = cached
+                .as_ref()
+                .is_none_or(|(hash, _)| hash.as_slice() != block_hash.as_slice());
+            if stale {
+                let raw = self.load_block_raw(&block_hash)?;
+                cached = Some((block_hash.clone(), raw));
+            }
+            let Some((_, raw)) = cached.as_ref() else {
+                return Err(Error::Inconsistent("block cache is empty".to_string()));
+            };
+            let slice = raw
+                .get(offset..offset + length)
+                .ok_or_else(|| Error::Inconsistent("entry slice outside block".to_string()))?;
+            let record = block::decode_record(slice)?;
+            let mut entry = Entry::decode_payload(&record.payload)?;
+            entry.word = word;
+            visit(entry)?;
+            count += 1;
+        }
+        Ok(count)
+    }
+
+    /// Entries whose normalised key starts with `prefix`, in key order.
+    pub fn search_prefix(&self, prefix: &str, limit: usize) -> Result<Vec<(String, String)>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let key = normalize_key(prefix);
+        let upper = format!("{key}\u{10FFFF}");
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let mut statement = self.connection.prepare(
+            "SELECT word, display FROM entries
+             WHERE word >= ?1 AND word < ?2
+             ORDER BY word ASC
+             LIMIT ?3",
+        )?;
+        let rows = statement.query_map(params![key, upper, limit], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (word, display) = row?;
+            if !word.starts_with(&key) {
+                continue;
+            }
+            out.push((word, display));
+        }
+        Ok(out)
+    }
+
     /// Compare the working set with HEAD.
     pub fn status(&self) -> Result<Status> {
         let added: i64 = self.connection.query_row(
@@ -319,6 +505,8 @@ impl Repo {
             modified: usize::try_from(modified).unwrap_or(0),
             removed: usize::try_from(removed).unwrap_or(0),
             total: usize::try_from(total).unwrap_or(0),
+            entries: self.entry_count()?,
+            blocks: self.block_count()?,
             head: self.head()?.map(|hash| hash::to_hex(&hash)),
         })
     }

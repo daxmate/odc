@@ -58,6 +58,17 @@ pub enum Error {
     Io(String),
     /// SQLite failure.
     Sqlite(String),
+    /// An MDX file could not be read (header, key block or record block).
+    Mdx(String),
+    /// One MDX record exceeded the import size limit.
+    EntryTooLarge {
+        /// Key of the offending record.
+        word: String,
+        /// Record size in bytes.
+        bytes: usize,
+        /// Configured limit in bytes.
+        limit: usize,
+    },
 }
 
 impl Error {
@@ -85,6 +96,8 @@ impl Error {
             Self::Inconsistent(_) => "ODC-E018",
             Self::Io(_) => "ODC-E019",
             Self::Sqlite(_) => "ODC-E020",
+            Self::Mdx(_) => "ODC-E021",
+            Self::EntryTooLarge { .. } => "ODC-E022",
         }
     }
 }
@@ -119,6 +132,10 @@ impl fmt::Display for Error {
             Self::Inconsistent(detail) => format!("index inconsistency: {detail}"),
             Self::Io(detail) => format!("io error: {detail}"),
             Self::Sqlite(detail) => format!("sqlite error: {detail}"),
+            Self::Mdx(detail) => format!("MDX error: {detail}"),
+            Self::EntryTooLarge { word, bytes, limit } => {
+                format!("entry {word} is {bytes} bytes, over the {limit}-byte MDX limit")
+            }
         };
         write!(f, "{}: {message}", self.code())
     }
