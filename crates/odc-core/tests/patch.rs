@@ -234,5 +234,16 @@ fn rejects_wrong_base_merges_replays_and_corruption() {
     let error = patch::decode(truncated).expect_err("truncated");
     assert_eq!(code(&error), "ODC-E002");
 
+    // Applying either damaged file to a pristine base leaves it untouched.
+    let pristine = work.join("pristine");
+    let mut pristine_repo = seed(&pristine, &initial, "A", 1_700_000_060);
+    let before = state(&pristine_repo);
+    let error = patch::apply(&mut pristine_repo, &corrupted).expect_err("corrupted apply");
+    assert_eq!(code(&error), "ODC-E023");
+    assert_eq!(state(&pristine_repo), before);
+    let error = patch::apply(&mut pristine_repo, truncated).expect_err("truncated apply");
+    assert_eq!(code(&error), "ODC-E002");
+    assert_eq!(state(&pristine_repo), before);
+
     assert_eq!(head(&mirror_repo), target_hash);
 }
