@@ -152,3 +152,18 @@ fn commit_hash_ignores_metadata() {
     let c = hash::commit_hash(&parent, &parent2, &entry_root, &block_root, 11);
     assert_ne!(a, c);
 }
+
+#[test]
+fn duplicate_extra_keys_are_deduplicated() {
+    let mut entry = sample_entry("dup");
+    entry.extra.push(("dup".to_string(), Value::Int(1)));
+    entry.extra.push(("dup".to_string(), Value::Int(2)));
+    let payload = entry.payload_value();
+    let extra = payload.get("extra").expect("extra field");
+    assert_eq!(extra.entries().count(), 1);
+    let encoded = entry.encode_payload();
+    let decoded = cbor::decode(&encoded).expect("canonical");
+    assert_eq!(cbor::encode(&decoded), encoded);
+    let decoded_extra = decoded.get("extra").expect("extra field");
+    assert_eq!(decoded_extra.entries().count(), 1);
+}

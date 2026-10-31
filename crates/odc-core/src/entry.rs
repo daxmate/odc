@@ -107,7 +107,10 @@ impl Entry {
                 Value::Map(
                     self.extra
                         .iter()
-                        .map(|(key, value)| (Value::Text(key.clone()), value.clone()))
+                        .cloned()
+                        .collect::<std::collections::BTreeMap<String, Value>>()
+                        .into_iter()
+                        .map(|(key, value)| (Value::Text(key), value))
                         .collect(),
                 ),
             ),
