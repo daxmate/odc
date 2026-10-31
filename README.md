@@ -122,6 +122,7 @@ crates/odc-cli/           odc 命令行
 crates/odc-testkit/       测试用合成 MDX 夹具（不发布）
 scripts/e2e.sh            10k 词条端到端演示
 scripts/bench-1m.sh       100 万合成词条基准（import/commit/diff/gc/verify 的时间与峰值 RSS）
+scripts/bench-shallow.sh  pack 体积基线：append（100k/10 提交）+ churn（20k/5 次重写）
 apps/apple/               iOS / macOS SwiftUI 客户端（ODict / ODict Desktop，只读 v0）
 ```
 
@@ -179,6 +180,7 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all
 ./scripts/e2e.sh
 ./scripts/bench-1m.sh
+./scripts/bench-shallow.sh
 ```
 
 ## 许可证

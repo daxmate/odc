@@ -56,6 +56,19 @@ odc --repo head.odc log                       # 单文件可直接作为 --repo
 | 后续补历史 | `git fetch --unshallow` | 暂不支持（见下） |
 | 用途 | 克隆加速 | 分发阅读器、控制下载体积 |
 
+## 体积基线
+
+`scripts/bench-shallow.sh` 用合成数据跑两个场景，并区分**硬指标**与**信息性指标**：
+
+| 场景 | 构造 | 硬指标 | 信息性指标 |
+| --- | --- | --- | --- |
+| append | 100,000 词条分 10 批提交，每批一次 commit | `shallow ≤ 1.10 ×` 同 HEAD 的单提交仓库 | full/shallow（实测 1.365） |
+| churn | 同一 20,000 键用不同 `gen-entries --seed` 重写 5 次 | 无 | full/shallow（实测 1.452） |
+
+硬指标不达标时脚本退出非零；信息性指标只打印数字。full/shallow **不是**代码质量门槛：
+append 场景旧块共享度高，churn 场景又被固定的 `entries` 索引体积主导，比例由数据形状和
+churn 程度决定。M5 的硬体积指标只有「shallow 不超过同 HEAD 全新仓库的 1.10 倍」。
+
 ## 未来 `odc fetch --depth`（占位设计，未实现）
 
 本版本**没有** `fetch` 子命令，也不做任何网络或远程操作。若以后补齐，建议：
