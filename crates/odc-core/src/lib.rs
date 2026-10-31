@@ -20,6 +20,8 @@ pub mod entry;
 pub mod error;
 pub mod hash;
 pub mod mdx;
+pub mod mdx_import;
+pub mod mdx_scan;
 pub mod merge;
 pub mod pack;
 pub mod patch;
@@ -30,6 +32,7 @@ pub mod varint;
 
 pub use entry::{Def, Entry};
 pub use error::{Error, Result};
+pub use mdx_import::{import_mdx, MdxImportOptions, MdxImportReport};
 pub use repo::{
     CommitOutcome, CommitRecord, Diff, GcReport, ImportReport, Repo, Status, VerifyReport,
     DEFAULT_AUTHOR,
