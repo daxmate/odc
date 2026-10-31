@@ -32,7 +32,7 @@ xcodebuild -project apps/apple/ODict.xcodeproj -scheme ODictDesktop \
   -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO build
 ```
 
-`./build-app.sh` runs those four steps in one go. Steps 1 and 2 must
+`./scripts/build-app.sh` runs those four steps in one go (root `./build-app.sh` is a compatible alias). Steps 1 and 2 must
 be re-run after changing the Rust side; `ODict.xcodeproj` is generated and is
 not meant to be edited by hand.
 

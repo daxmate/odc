@@ -167,7 +167,7 @@ bash scripts/build-odc-xcframework.sh   # Rust C ABI -> ODCFFI.xcframework
 cd apps/apple && xcodegen generate      # project.yml -> ODict.xcodeproj
 ```
 
-一条命令构建两端：`./build-app.sh`（兼容旧入口 `scripts/build-apple.sh`）。包测试：
+一条命令构建两端：`./scripts/build-app.sh`（根目录 `./build-app.sh` 为兼容别名，旧入口 `scripts/build-apple.sh` 仍可用）。包测试：
 `swift test --package-path apps/apple/ODictKit`。
 
 ## 开发
