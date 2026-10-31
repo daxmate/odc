@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 use odc_core::cbor;
 use odc_core::entry::{normalize_key, Def, Entry};
 use odc_core::hash;
+use odc_core::merge::{self, Choice, MergeKind, MergeOutcome, Strategy};
 use odc_core::patch;
 use odc_core::repo::Repo;
 use serde_json::json;
@@ -112,6 +113,48 @@ enum Command {
         /// Target revision.
         to: String,
         /// Emit JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Merge another commit into HEAD.
+    Merge {
+        /// Our revision; must resolve to HEAD.
+        ours: Option<String>,
+        /// Their revision.
+        theirs: Option<String>,
+        /// Strategy: auto, ours, theirs or union.
+        #[arg(long, default_value = "auto")]
+        strategy: String,
+        /// Finish an interrupted merge instead of starting a new one.
+        #[arg(long = "continue")]
+        continue_merge: bool,
+        /// Print a JSON report.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Resolve one merge conflict.
+    Resolve {
+        /// Conflicting word.
+        word: String,
+        /// Keep our payload.
+        #[arg(long)]
+        ours: bool,
+        /// Keep their payload.
+        #[arg(long)]
+        theirs: bool,
+        /// Keep both payloads.
+        #[arg(long)]
+        union: bool,
+        /// Take the payload from this canonical CBOR file.
+        #[arg(long, value_name = "FILE")]
+        file: Option<PathBuf>,
+        /// Print a JSON report.
+        #[arg(long)]
+        json: bool,
+    },
+    /// List recorded merge conflicts.
+    Conflicts {
+        /// Print a JSON report.
         #[arg(long)]
         json: bool,
     },
@@ -416,6 +459,98 @@ fn run() -> odc_core::Result<ExitCode> {
             }
             Ok(ExitCode::SUCCESS)
         }
+        Command::Merge {
+            ours,
+            theirs,
+            strategy,
+            continue_merge,
+            json,
+        } => {
+            let mut repo = Repo::open(&cli.repo)?;
+            let strategy = Strategy::parse(&strategy)?;
+            let outcome = if continue_merge {
+                if ours.is_some() || theirs.is_some() {
+                    return Err(odc_core::Error::InvalidArgument(
+                        "--continue takes no revisions".to_string(),
+                    ));
+                }
+                match merge::continue_merge(&mut repo, odc_core::DEFAULT_AUTHOR, now_seconds()) {
+                    Ok(outcome) => outcome,
+                    Err(odc_core::Error::UnresolvedConflicts(_)) => {
+                        let conflicts = merge::conflicts(&repo)?;
+                        print_conflicts(&conflicts, json);
+                        return Ok(ExitCode::from(5));
+                    }
+                    Err(error) => return Err(error),
+                }
+            } else {
+                let ours = ours.ok_or_else(|| {
+                    odc_core::Error::InvalidArgument("merge needs <A> <B>".to_string())
+                })?;
+                let theirs = theirs.ok_or_else(|| {
+                    odc_core::Error::InvalidArgument("merge needs <A> <B>".to_string())
+                })?;
+                merge::merge(&mut repo, &ours, &theirs, strategy)?
+            };
+            print_merge(&outcome, json);
+            if outcome.kind == MergeKind::Conflicts {
+                Ok(ExitCode::from(5))
+            } else {
+                Ok(ExitCode::SUCCESS)
+            }
+        }
+        Command::Resolve {
+            word,
+            ours,
+            theirs,
+            union,
+            file,
+            json,
+        } => {
+            let mut repo = Repo::open(&cli.repo)?;
+            let selected = usize::from(ours)
+                + usize::from(theirs)
+                + usize::from(union)
+                + usize::from(file.is_some());
+            if selected != 1 {
+                return Err(odc_core::Error::InvalidArgument(
+                    "resolve takes exactly one of --ours, --theirs, --union, --file".to_string(),
+                ));
+            }
+            let choice = if ours {
+                Choice::Ours
+            } else if theirs {
+                Choice::Theirs
+            } else if union {
+                Choice::Union
+            } else {
+                let path = file.expect("checked above");
+                Choice::File(std::fs::read(&path)?)
+            };
+            let conflict = merge::resolve(&mut repo, &word, choice)?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&conflict_json(&conflict)).unwrap_or_default()
+                );
+            } else {
+                println!(
+                    "resolved {} ({})",
+                    conflict.word,
+                    conflict
+                        .resolution
+                        .map(odc_core::merge::Resolution::as_str)
+                        .unwrap_or("unresolved")
+                );
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Conflicts { json } => {
+            let repo = Repo::open(&cli.repo)?;
+            let conflicts = merge::conflicts(&repo)?;
+            print_conflicts(&conflicts, json);
+            Ok(ExitCode::SUCCESS)
+        }
         Command::Verify => {
             let repo = Repo::open(&cli.repo)?;
             let report = repo.verify()?;
@@ -514,27 +649,72 @@ fn run_patch(repo_dir: &std::path::Path, command: PatchCommand) -> odc_core::Res
             let mut repo = Repo::open(repo_dir)?;
             let bytes = std::fs::read(&file)?;
             let outcome = patch::apply(&mut repo, &bytes)?;
-            let target = hash::to_hex(&outcome.target);
-            if json {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&json!({
-                        "target": target,
-                        "base_blocks": outcome.base_blocks,
-                        "new_blocks": outcome.new_blocks,
-                        "index_changes": outcome.index_changes,
-                        "bytes": outcome.bytes,
-                    }))
-                    .unwrap_or_default()
-                );
-            } else {
-                println!(
-                    "applied {} blocks, {} index changes, {} bytes",
-                    outcome.new_blocks, outcome.index_changes, outcome.bytes
-                );
-                println!("target: {target}");
+            match outcome {
+                patch::ApplyOutcome::Applied(outcome) => {
+                    let target = hash::to_hex(&outcome.target);
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&json!({
+                                "applied": true,
+                                "merged": false,
+                                "target": target,
+                                "base_blocks": outcome.base_blocks,
+                                "new_blocks": outcome.new_blocks,
+                                "index_changes": outcome.index_changes,
+                                "bytes": outcome.bytes,
+                            }))
+                            .unwrap_or_default()
+                        );
+                    } else {
+                        println!(
+                            "applied: {} new blocks, {} base blocks, {} index changes, {} bytes",
+                            outcome.new_blocks,
+                            outcome.base_blocks,
+                            outcome.index_changes,
+                            outcome.bytes
+                        );
+                        println!("target: {target}");
+                    }
+                    Ok(ExitCode::SUCCESS)
+                }
+                patch::ApplyOutcome::Merged {
+                    patch: outcome,
+                    merge: merged,
+                } => {
+                    let target = hash::to_hex(&outcome.target);
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&json!({
+                                "applied": true,
+                                "merged": true,
+                                "target": target,
+                                "base_blocks": outcome.base_blocks,
+                                "new_blocks": outcome.new_blocks,
+                                "index_changes": outcome.index_changes,
+                                "bytes": outcome.bytes,
+                                "merge": merge_json(merged.as_ref()),
+                            }))
+                            .unwrap_or_default()
+                        );
+                    } else {
+                        println!(
+                            "applied: {} new blocks, {} base blocks, {} index changes, {} bytes",
+                            outcome.new_blocks,
+                            outcome.base_blocks,
+                            outcome.index_changes,
+                            outcome.bytes
+                        );
+                        println!("target: {target}");
+                        print_merge(merged.as_ref(), false);
+                    }
+                    if merged.kind == MergeKind::Conflicts {
+                        return Ok(ExitCode::from(5));
+                    }
+                    Ok(ExitCode::SUCCESS)
+                }
             }
-            Ok(ExitCode::SUCCESS)
         }
         PatchCommand::Verify { file, json } => {
             let repo = Repo::open(repo_dir)?;
@@ -993,4 +1173,132 @@ fn write_json_string_list<W: std::io::Write>(
     }
     out.write_all(b"]")?;
     Ok(())
+}
+
+fn now_seconds() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| {
+            i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
+        })
+}
+
+fn hex_option(digest: Option<[u8; 32]>) -> serde_json::Value {
+    digest.map_or(serde_json::Value::Null, |hash| json!(hash::to_hex(&hash)))
+}
+
+fn conflict_json(conflict: &merge::Conflict) -> serde_json::Value {
+    json!({
+        "word": conflict.word,
+        "fields": conflict.fields,
+        "base": hex_option(conflict.base),
+        "ours": hex_option(conflict.ours),
+        "theirs": hex_option(conflict.theirs),
+        "resolution": conflict.resolution.map(merge::Resolution::as_str),
+    })
+}
+
+fn merge_json(outcome: &MergeOutcome) -> serde_json::Value {
+    let kind = match outcome.kind {
+        MergeKind::UpToDate => "up-to-date",
+        MergeKind::FastForward => "fast-forward",
+        MergeKind::Merged => "merged",
+        MergeKind::Conflicts => "conflicts",
+    };
+    let conflicts: Vec<_> = outcome.conflicts.iter().map(conflict_json).collect();
+    json!({
+        "kind": kind,
+        "strategy": outcome.strategy.as_str(),
+        "base": hex_option(outcome.base),
+        "ours": hash::to_hex(&outcome.ours),
+        "theirs": hash::to_hex(&outcome.theirs),
+        "commit": hex_option(outcome.commit.as_ref().map(|commit| commit.hash)),
+        "auto_merged": outcome.auto_merged,
+        "new_blocks": outcome.new_blocks,
+        "reused_blocks": outcome.reused_blocks,
+        "conflicts": conflicts,
+    })
+}
+
+fn short_hash(digest: &[u8; 32]) -> String {
+    hash::to_hex(digest)[..12].to_string()
+}
+
+fn short_text(text: &str) -> String {
+    text.chars().take(12).collect()
+}
+
+fn print_merge(outcome: &MergeOutcome, json: bool) {
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&merge_json(outcome)).unwrap_or_default()
+        );
+        return;
+    }
+    let base = outcome.base.map_or_else(
+        || "none".to_string(),
+        |hash| short_text(&hash::to_hex(&hash)),
+    );
+    match outcome.kind {
+        MergeKind::UpToDate => {
+            println!("already up to date with {}", short_hash(&outcome.theirs));
+        }
+        MergeKind::FastForward => {
+            println!(
+                "fast-forward to {} (was {})",
+                short_hash(&outcome.theirs),
+                short_hash(&outcome.ours)
+            );
+        }
+        MergeKind::Merged => {
+            let commit = outcome
+                .commit
+                .as_ref()
+                .map_or(outcome.ours, |commit| commit.hash);
+            println!(
+                "merge commit {} (parent2 {}, base {})",
+                short_hash(&commit),
+                short_hash(&outcome.theirs),
+                base
+            );
+        }
+        MergeKind::Conflicts => println!(
+            "conflicts: {} ({} auto-merged entries); resolve them or run merge --continue",
+            outcome.conflicts.len(),
+            outcome.auto_merged
+        ),
+    }
+    for conflict in &outcome.conflicts {
+        print_conflict_line(conflict);
+    }
+}
+
+fn print_conflict_line(conflict: &merge::Conflict) {
+    if conflict.fields.is_empty() {
+        println!("  {}", conflict.word);
+    } else {
+        println!("  {}: {}", conflict.word, conflict.fields.join(", "));
+    }
+}
+
+fn print_conflicts(conflicts: &[merge::Conflict], json: bool) {
+    if json {
+        let items: Vec<_> = conflicts.iter().map(conflict_json).collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&items).unwrap_or_default()
+        );
+        return;
+    }
+    if conflicts.is_empty() {
+        println!("no conflicts");
+        return;
+    }
+    for conflict in conflicts {
+        print_conflict_line(conflict);
+        if let Some(resolution) = conflict.resolution {
+            println!("    resolved with {}", resolution.as_str());
+        }
+    }
 }
