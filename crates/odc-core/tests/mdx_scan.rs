@@ -1,7 +1,9 @@
 //! Record-section scanning and repair tests.
 
 use odc_core::mdx::MdxSource;
-use odc_core::mdx_scan::{is_sentinel_payload, scan, write_repaired_copy};
+use odc_core::mdx_scan::{
+    is_sentinel_payload, scan, write_repaired_copy, RecordSection, ScanOutcome,
+};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -34,6 +36,13 @@ fn fixture(label: &str, count: usize) -> (PathBuf, Vec<(String, String)>) {
     (path, entries)
 }
 
+fn section_of(path: &Path) -> RecordSection {
+    match scan(path).expect("scan") {
+        ScanOutcome::Scanned(section) => *section,
+        other => panic!("expected a scanned record section, got {other:?}"),
+    }
+}
+
 fn records_of(path: &Path) -> Vec<(String, String)> {
     let source = MdxSource::open(path).expect("open fixture");
     source
@@ -47,7 +56,7 @@ fn records_of(path: &Path) -> Vec<(String, String)> {
 
 /// Flip one byte in the middle of a block's compressed payload.
 fn corrupt_block(path: &Path, ordinal: usize) {
-    let section = scan(path).expect("scan").expect("version 2 file");
+    let section = section_of(path);
     let block = &section.blocks[ordinal];
     let mut bytes = std::fs::read(path).expect("read fixture");
     let start = usize::try_from(block.file_offset).expect("offset fits usize");
@@ -60,7 +69,7 @@ fn corrupt_block(path: &Path, ordinal: usize) {
 #[test]
 fn scan_matches_the_documented_version_2_layout() {
     let (path, _) = fixture("layout", 40);
-    let section = scan(&path).expect("scan").expect("version 2 file");
+    let section = section_of(&path);
     let file_size = std::fs::metadata(&path).expect("metadata").len();
     assert!(section.num_blocks > 1, "fixture needs several blocks");
     assert_eq!(section.num_blocks, section.blocks.len() as u64);
@@ -92,10 +101,10 @@ fn scan_matches_the_documented_version_2_layout() {
 #[test]
 fn detects_a_corrupt_middle_block() {
     let (path, _) = fixture("middle", 40);
-    let intact = scan(&path).expect("scan").expect("version 2 file");
+    let intact = section_of(&path);
     let ordinal = intact.blocks.len() / 2;
     corrupt_block(&path, ordinal);
-    let section = scan(&path).expect("scan").expect("version 2 file");
+    let section = section_of(&path);
     assert_eq!(section.corrupt.len(), 1, "exactly one block is damaged");
     let block = &section.corrupt[0];
     assert_eq!(block.ordinal, ordinal as u64);
@@ -117,11 +126,11 @@ fn detects_a_corrupt_middle_block() {
 #[test]
 fn detects_corrupt_first_and_last_blocks() {
     let (path, _) = fixture("edges", 40);
-    let intact = scan(&path).expect("scan").expect("version 2 file");
+    let intact = section_of(&path);
     let last = intact.blocks.len() - 1;
     corrupt_block(&path, 0);
     corrupt_block(&path, last);
-    let section = scan(&path).expect("scan").expect("version 2 file");
+    let section = section_of(&path);
     let ordinals: Vec<u64> = section.corrupt.iter().map(|block| block.ordinal).collect();
     assert_eq!(ordinals, vec![0, last as u64]);
     std::fs::remove_dir_all(path.parent().expect("dir")).ok();
@@ -132,18 +141,25 @@ fn version_1_files_are_left_to_the_strict_path() {
     let path = temp_path("v1");
     odc_testkit::write_v1_mdx(&path, &[("alpha", "<p>a</p>"), ("bravo", "<p>b</p>")])
         .expect("write fixture");
-    assert!(scan(&path).expect("scan").is_none());
+    assert!(matches!(
+        scan(&path).expect("scan"),
+        ScanOutcome::NotVersion2
+    ));
     std::fs::remove_dir_all(path.parent().expect("dir")).ok();
 }
 
 #[test]
-fn layout_self_check_rejects_truncated_files() {
+fn layout_self_check_marks_trailing_bytes_unscannable() {
     let (path, _) = fixture("truncated", 8);
     let mut bytes = std::fs::read(&path).expect("read fixture");
     bytes.pop();
     std::fs::write(&path, &bytes).expect("truncate fixture");
-    let error = scan(&path).expect_err("self-check must reject the file");
-    assert_eq!(error.code(), "ODC-E021");
+    match scan(&path).expect("scan") {
+        ScanOutcome::Unscannable(detail) => {
+            assert!(detail.contains("self-check"), "{detail}");
+        }
+        other => panic!("expected an unscannable record section, got {other:?}"),
+    }
     std::fs::remove_dir_all(path.parent().expect("dir")).ok();
 }
 
@@ -151,9 +167,9 @@ fn layout_self_check_rejects_truncated_files() {
 fn repair_keeps_every_record_offset() {
     let (path, entries) = fixture("repair", 40);
     let original = records_of(&path);
-    let intact = scan(&path).expect("scan").expect("version 2 file");
+    let intact = section_of(&path);
     corrupt_block(&path, 1);
-    let section = scan(&path).expect("scan").expect("version 2 file");
+    let section = section_of(&path);
     assert_eq!(section.corrupt.len(), 1);
 
     let expected: HashMap<&str, &str> = entries
@@ -199,7 +215,7 @@ fn repair_keeps_every_record_offset() {
 #[test]
 fn repair_requires_corrupt_blocks() {
     let (path, _) = fixture("clean", 8);
-    let section = scan(&path).expect("scan").expect("version 2 file");
+    let section = section_of(&path);
     let error = write_repaired_copy(&path, &section).expect_err("clean files are not repaired");
     assert_eq!(error.code(), "ODC-E016");
     std::fs::remove_dir_all(path.parent().expect("dir")).ok();

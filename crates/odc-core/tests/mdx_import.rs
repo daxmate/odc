@@ -1,9 +1,16 @@
 //! MDX import pipeline tests: corrupt-block skipping and report bookkeeping.
 
-use odc_core::mdx_scan::scan;
+use odc_core::mdx_scan::{scan, RecordSection, ScanOutcome};
 use odc_core::{import_mdx, MdxImportOptions, Repo};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+fn section_of(path: &Path) -> RecordSection {
+    match scan(path).expect("scan") {
+        ScanOutcome::Scanned(section) => *section,
+        other => panic!("expected a scanned record section, got {other:?}"),
+    }
+}
 
 struct Fixture {
     root: PathBuf,
@@ -47,7 +54,7 @@ impl Fixture {
     }
 
     fn corrupt_block(&self, ordinal: usize) {
-        let section = scan(&self.mdx).expect("scan").expect("version 2 file");
+        let section = section_of(&self.mdx);
         let block = &section.blocks[ordinal];
         let mut bytes = std::fs::read(&self.mdx).expect("read fixture");
         let start = usize::try_from(block.file_offset).expect("offset fits usize");
@@ -78,11 +85,7 @@ fn options() -> MdxImportOptions {
 
 fn corrupt_fixture(label: &str, count: usize) -> Fixture {
     let fixture = Fixture::new(label, count);
-    let blocks = scan(&fixture.mdx)
-        .expect("scan")
-        .expect("version 2 file")
-        .blocks
-        .len();
+    let blocks = section_of(&fixture.mdx).blocks.len();
     assert!(blocks > 2, "fixture must span several record blocks");
     fixture.corrupt_block(0);
     fixture
@@ -103,6 +106,33 @@ fn imports_a_clean_fixture_without_repair() {
     for index in [0, 7, 39] {
         assert!(fixture.body_of(&repo, index).is_some());
     }
+}
+
+#[test]
+fn unscannable_record_sections_fall_back_to_the_original_file() {
+    let fixture = Fixture::new("trailing", 40);
+    // Extra bytes after the record section break the layout self-check, so the
+    // scanner refuses to repair; the import must still read the file as-is.
+    let mut bytes = std::fs::read(&fixture.mdx).expect("read fixture");
+    bytes.extend_from_slice(&[0xab; 64]);
+    std::fs::write(&fixture.mdx, bytes).expect("append trailing bytes");
+    assert!(matches!(
+        scan(&fixture.mdx).expect("scan"),
+        ScanOutcome::Unscannable(_)
+    ));
+
+    let mut repo = fixture.open_repo();
+    let report = import_mdx(&fixture.mdx, &mut repo, options()).expect("import must succeed");
+    assert!(
+        report.scan_warning.is_some(),
+        "the fallback must be announced"
+    );
+    assert_eq!(report.skipped_blocks, 0);
+    assert_eq!(report.skipped_entries, 0);
+    assert!(report.corrupt_blocks.is_empty());
+    assert_eq!(report.imported_entries, fixture.entries.len());
+    assert_eq!(report.working_set, fixture.entries.len());
+    assert!(fixture.body_of(&repo, 0).is_some());
 }
 
 #[test]

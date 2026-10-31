@@ -77,6 +77,11 @@ pub struct MdxImportReport {
     pub working_set: usize,
     /// Header metadata of the imported file.
     pub header: MdxHeader,
+    /// Why the record section could not be inspected, when that happened.
+    ///
+    /// The import then read the original file unchanged, so corrupt-block
+    /// recovery was unavailable for that file.
+    pub scan_warning: Option<String>,
 }
 
 /// Import an MDX file into `repo`.
@@ -100,11 +105,19 @@ pub fn import_mdx(
 
     // The repaired copy owns a temporary file that is removed when dropped, so
     // it stays alive until the import (including error paths) has finished.
+    let mut scan_warning = None;
     let repair = if skip_corrupt_blocks {
         match mdx_scan::scan(path)? {
-            Some(section) if section.has_corrupt_blocks() => {
+            mdx_scan::ScanOutcome::Scanned(section) if section.has_corrupt_blocks() => {
                 let copy = mdx_scan::write_repaired_copy(path, &section)?;
-                Some((copy, section.corrupt))
+                let mdx_scan::RecordSection { corrupt, .. } = *section;
+                Some((copy, corrupt))
+            }
+            // A record section we cannot locate is not an import failure: read
+            // the original file exactly as ODC did before this feature.
+            mdx_scan::ScanOutcome::Unscannable(detail) => {
+                scan_warning = Some(detail);
+                None
             }
             _ => None,
         }
@@ -180,5 +193,6 @@ pub fn import_mdx(
         skipped_oversized,
         working_set: report.total,
         header,
+        scan_warning,
     })
 }

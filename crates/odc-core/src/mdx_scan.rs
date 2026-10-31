@@ -123,6 +123,21 @@ impl RecordSection {
     }
 }
 
+/// Outcome of inspecting a file before importing it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ScanOutcome {
+    /// Not a version 2 MDX file: the strict import path applies unchanged.
+    NotVersion2,
+    /// Version 2 file whose record section was located and verified.
+    Scanned(Box<RecordSection>),
+    /// Version 2 file whose record section could not be located or verified.
+    ///
+    /// The importer must read the original file as-is, which is exactly the
+    /// behaviour ODC had before corrupt-block recovery existed. The payload is
+    /// a human-readable reason suitable for a one-line warning.
+    Unscannable(String),
+}
+
 /// A temporary file that deletes itself when dropped.
 #[derive(Debug)]
 pub struct TemporaryCopy {
@@ -145,17 +160,25 @@ impl Drop for TemporaryCopy {
 
 /// Locate and verify the record section of a version 2 MDX file.
 ///
-/// Returns `Ok(None)` when the file is not a version 2 MDX file (version 1.2
-/// keeps the strict import path) or when its header cannot be parsed at all;
-/// `mdictlib` then reports the failure as it always did.
+/// A version 2 file whose record section does not match the documented layout
+/// is reported as [`ScanOutcome::Unscannable`] instead of failing: the
+/// importer then reads the original file exactly as it did before corrupt-block
+/// recovery existed, so such files keep importing.
 ///
 /// # Errors
 ///
-/// * `Error::Mdx` when the file claims to be version 2 but its record
-///   section does not match the documented layout (the offset self-check
-///   failed), or when a record block is structurally impossible.
-/// * `Error::Io` when the file cannot be read.
-pub fn scan(path: &Path) -> Result<Option<RecordSection>> {
+/// [`Error::Io`] only, when the file cannot be read.
+pub fn scan(path: &Path) -> Result<ScanOutcome> {
+    match scan_section(path) {
+        Ok(Some(section)) => Ok(ScanOutcome::Scanned(Box::new(section))),
+        Ok(None) => Ok(ScanOutcome::NotVersion2),
+        Err(ScanError::Layout(detail)) => Ok(ScanOutcome::Unscannable(detail)),
+        Err(ScanError::Io(error)) => Err(Error::Io(error.to_string())),
+    }
+}
+
+/// Implementation of [`scan`]: `Ok(None)` for a version 1 file.
+fn scan_section(path: &Path) -> ScanResult<Option<RecordSection>> {
     let mut reader = BufReader::with_capacity(64 * 1024, File::open(path)?);
     let file_size = reader.get_ref().metadata()?.len();
     let Some(offset) = locate_record_section(&mut reader, file_size)? else {
@@ -276,7 +299,7 @@ pub fn write_repaired_copy(path: &Path, section: &RecordSection) -> Result<Tempo
             Some(_) => {
                 let sentinel = sentinel_block(block.ordinal, block.decompressed_size)?;
                 let size = u64::try_from(sentinel.len())
-                    .map_err(|_| layout_error("sentinel block exceeds u64".to_string()))?;
+                    .map_err(|_| copy_error("sentinel block exceeds u64".to_string()))?;
                 sentinels[position] = Some(sentinel);
                 size
             }
@@ -284,7 +307,7 @@ pub fn write_repaired_copy(path: &Path, section: &RecordSection) -> Result<Tempo
         };
         blocks_len = blocks_len
             .checked_add(compressed_size)
-            .ok_or_else(|| layout_error("repaired block sizes overflow u64".to_string()))?;
+            .ok_or_else(|| copy_error("repaired block sizes overflow u64".to_string()))?;
     }
 
     let sequence = COPY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
@@ -308,7 +331,7 @@ pub fn write_repaired_copy(path: &Path, section: &RecordSection) -> Result<Tempo
     for (position, block) in section.blocks.iter().enumerate() {
         let compressed_size = match &sentinels[position] {
             Some(sentinel) => u64::try_from(sentinel.len())
-                .map_err(|_| layout_error("sentinel block exceeds u64".to_string()))?,
+                .map_err(|_| copy_error("sentinel block exceeds u64".to_string()))?,
             None => block.compressed_size,
         };
         writer.write_all(&compressed_size.to_be_bytes())?;
@@ -319,7 +342,7 @@ pub fn write_repaired_copy(path: &Path, section: &RecordSection) -> Result<Tempo
         .offset
         .checked_add(RECORD_HEADER_BYTES)
         .and_then(|value| value.checked_add(section.index_len))
-        .ok_or_else(|| layout_error("record block offset overflows u64".to_string()))?;
+        .ok_or_else(|| copy_error("record block offset overflows u64".to_string()))?;
     source.seek(SeekFrom::Start(blocks_start))?;
     for (position, block) in section.blocks.iter().enumerate() {
         match &sentinels[position] {
@@ -329,7 +352,7 @@ pub fn write_repaired_copy(path: &Path, section: &RecordSection) -> Result<Tempo
                 // to step over its original bytes.
                 source.seek(SeekFrom::Current(
                     i64::try_from(block.compressed_size)
-                        .map_err(|_| layout_error("record block offset exceeds i64".to_string()))?,
+                        .map_err(|_| copy_error("record block offset exceeds i64".to_string()))?,
                 ))?;
             }
             None => {
@@ -354,7 +377,7 @@ pub fn is_sentinel_payload(html: &str) -> bool {
 /// Plain-text sentinel repeated until it fills `size` bytes.
 fn sentinel_plaintext(ordinal: u64, size: u64) -> Result<Vec<u8>> {
     let size = usize::try_from(size)
-        .map_err(|_| layout_error(format!("record block {ordinal} exceeds usize")))?;
+        .map_err(|_| copy_error(format!("record block {ordinal} exceeds usize")))?;
     let marker = format!("{SENTINEL_PREFIX}{ordinal}");
     let mut out = Vec::with_capacity(size);
     while out.len() < size {
@@ -378,7 +401,7 @@ fn sentinel_block(ordinal: u64, size: u64) -> Result<Vec<u8>> {
 }
 
 /// Resolve the absolute offset of the record section, or `None` for version 1.
-fn locate_record_section(reader: &mut BufReader<File>, file_size: u64) -> Result<Option<u64>> {
+fn locate_record_section(reader: &mut BufReader<File>, file_size: u64) -> ScanResult<Option<u64>> {
     let mut length = [0_u8; 4];
     if reader.read_exact(&mut length).is_err() {
         return Ok(None);
@@ -448,7 +471,7 @@ fn verify_block(
     reader: &mut BufReader<File>,
     block: &RecordBlock,
     corrupt: &mut Vec<CorruptBlock>,
-) -> Result<()> {
+) -> ScanResult<()> {
     if block.compressed_size > MAX_BLOCK_BYTES || block.decompressed_size > MAX_BLOCK_BYTES {
         return Err(layout_error(format!(
             "record block {} declares {} compressed / {} decompressed bytes, above the {} byte limit",
@@ -567,6 +590,28 @@ fn be_u64(bytes: &[u8]) -> u64 {
     u64::from_be_bytes(value)
 }
 
-fn layout_error(detail: String) -> Error {
-    Error::Mdx(format!("record section: {detail}"))
+/// Scanner failure: I/O aborts the import, layout problems fall back.
+enum ScanError {
+    /// The file could not be read.
+    Io(std::io::Error),
+    /// The record section could not be located or verified.
+    Layout(String),
+}
+
+impl From<std::io::Error> for ScanError {
+    fn from(value: std::io::Error) -> Self {
+        Self::Io(value)
+    }
+}
+
+/// Result alias used inside the scanner.
+type ScanResult<T> = std::result::Result<T, ScanError>;
+
+fn layout_error(detail: String) -> ScanError {
+    ScanError::Layout(detail)
+}
+
+/// Failure while writing the repaired copy; always aborts the import.
+fn copy_error(detail: String) -> Error {
+    Error::Mdx(format!("repaired copy: {detail}"))
 }

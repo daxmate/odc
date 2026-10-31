@@ -22,8 +22,10 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   repaired copy in which each damaged block is replaced by a sentinel payload
   of exactly its declared size, so every key and record offset still lines
   up. Sentinel entries are dropped and reported: `odc import` now ends with
-  `mdx: skipped 1 corrupt record block (N entries)`. Details, measured data
-  and limits live in `docs/mdx-compat.md`.
+  `mdx: skipped 1 corrupt record block (N entries)`. A version 2 file whose
+  record section cannot be located still imports as-is, exactly as before,
+  with a one-line warning that recovery is unavailable. Details, measured
+  data and limits live in `docs/mdx-compat.md`.
 * MDX import is now a public core API: `odc_core::import_mdx(path, repo,
   MdxImportOptions) -> MdxImportReport`, with `skip_corrupt_blocks`,
   `prune`, `limit` and a progress callback. The CLI only formats the report.

@@ -71,14 +71,21 @@ release p50 99 µs / p95 136 µs；debug p50 597 µs / p95 941 µs。
    4 个 `u64` BE，随后是 16 字节/项的索引，块数据紧随其后。定位公式为
    key 段头（`4 + header_len + 4`，其中 4 字节是 v2 头部校验和）`+ 44`
    （key 段头）`+ index_comp_size + key_blocks_len`；随后用
-   **`record_offset + 32 + index_len + blocks_len == 文件大小`** 做自校验，
-   对不上直接报错，不猜偏移。每个 `comp_type = 2` 的块用 zlib 解压，核对
+   **`record_offset + 32 + index_len + blocks_len == 文件大小`** 做自校验；
+   对不上（或任何结构对不上）就**不做容错、不猜偏移**，改为按原文件直接导入，
+   并打一行 warning（见下）。每个 `comp_type = 2` 的块用 zlib 解压，核对
    解压长度与 adler32；其它 `comp_type` 只做结构校验（不猜压缩算法）。
 2. **修复副本**：只要存在坏块，就在系统临时目录写一份副本：坏块之前的字节
    原样复制，坏块替换为「解压后长度**恰好等于**声明值」的哨兵内容
    （`ODC-SKIPPED-BLOCK-<n>` 重复填充后重新 zlib 压缩），并重写索引与
    32 字节记录段头（`blocks_len` 更新）；**解压偏移不变**，key 段完全不动。
    没有坏块时直接用原文件，不产生副本。
+
+定位或自校验失败（例如记录段后面还有多余字节）**不算导入失败**：导入会退回
+旧路径，直接读原文件，stderr 打一行形如
+`mdx: warning: record section self-check failed: …; reading the file as-is
+(corrupt-block recovery unavailable)` 的提示；只有“确实检测到坏块、但生成
+修复副本失败”才会报错。
 3. **过滤**：导入时丢弃 HTML 含哨兵标记的条目，计入 `skipped_entries`；
    CLI 在原有输出之后追加一行，例如
    `mdx: skipped 1 corrupt record block (123 entries)`。坏块明细（块序号、
@@ -128,6 +135,8 @@ pub fn import_mdx(path: &Path, repo: &mut Repo, options: MdxImportOptions)
 
 * 只对 **MDX 2.0** 生效。1.2 文件保持原行为（坏块仍报 `ODC-E021`），
   因为 1.2 没有可重写的记录段索引。
+* 记录段定位/自校验失败时容错不可用：导入按原文件进行（与旧行为一致），
+  这类文件里的坏块仍然会让导入以 `ODC-E021` 结束，只是不会被提前拦下。
 * 坏块内的**全部**条目都会被跳过（本次 123 条）；与坏块相邻的边界条目可能
   一并丢失，不会尝试从损坏的解压流里抢救部分记录。
 * 有坏块时会多写一份临时副本（约等于原文件大小，本样本约 72 MB），

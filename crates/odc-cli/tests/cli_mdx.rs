@@ -277,3 +277,39 @@ fn corrupt_version_2_blocks_are_skipped_and_reported() {
         "{status}"
     );
 }
+
+#[test]
+fn trailing_bytes_fall_back_to_the_plain_import_with_a_warning() {
+    let repo_dir = TempDir::new().expect("tempdir");
+    let input_dir = TempDir::new().expect("tempdir");
+    let mdx = input_dir.path().join("trailing.mdx");
+    let rows: Vec<(&str, &str)> = ENTRIES.to_vec();
+    odc_testkit::write_v2_mdx(&mdx, &rows).expect("write fixture");
+    let mut bytes = fs::read(&mdx).expect("read fixture");
+    bytes.extend_from_slice(&[0xab; 32]);
+    fs::write(&mdx, &bytes).expect("write fixture");
+
+    stdout_of(odc(repo_dir.path()).arg("init"));
+    let output = odc(repo_dir.path())
+        .arg("import")
+        .arg(&mdx)
+        .arg("--format")
+        .arg("mdx")
+        .output()
+        .expect("run odc");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("corrupt-block recovery unavailable"),
+        "{stderr}"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("working set = 4"), "{stdout}");
+    assert!(!stdout.contains("corrupt record block"), "{stdout}");
+    let status = stdout_of(odc(repo_dir.path()).arg("status"));
+    assert!(status.contains("working set: 4 entries"), "{status}");
+}

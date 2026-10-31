@@ -905,6 +905,12 @@ fn import_mdx(
     };
     let report = odc_core::import_mdx(path, repo, options)?;
 
+    if let Some(warning) = &report.scan_warning {
+        eprintln!(
+            "mdx: warning: {warning}; reading the file as-is \
+             (corrupt-block recovery unavailable)"
+        );
+    }
     for block in &report.corrupt_blocks {
         let (start, end) = block.decompressed_range();
         eprintln!(
