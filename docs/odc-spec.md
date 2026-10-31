@@ -216,7 +216,7 @@ CREATE TABLE staging(word TEXT PRIMARY KEY, display TEXT NOT NULL,
 ```
 
 * `entries` 是 HEAD 的物化索引；`offset`/`length` 指向块内该 record 的字节区间。
-* `commit_index` 存 zstd 压缩的 CBOR 快照：按 key 升序的 `[[word, content_hash], …]` 数组，用于历史 diff。
+* `commit_index` 存 zstd 压缩的 CBOR 快照：按 key 升序的 `[[word, content_hash], …]` 数组，用于历史 diff。写入与读取都按条流式进行（数组头给出条目数），实现不得要求整表驻留内存；`raw_size` 记录未压缩字节数，`verify` 会与实际解码字节数比对。
 * `staging` 是工作区（未提交内容）。它不属于互操作格式。
 * codec：`0` = 原始字节，`1` = zstd（压缩级别 3，实现可调，不影响任何哈希）。
 * `conflicts` 为 M2 合并预留，M0 只建表留空。
@@ -236,7 +236,8 @@ CREATE TABLE staging(word TEXT PRIMARY KEY, display TEXT NOT NULL,
 | `export --format jsonl\|csv [-o FILE]` | 导出全部已提交词条（display + raw_html 等） |
 | `diff A B` | 词条级 added / removed / modified；`--json` 输出结构化结果 |
 | `status` | 工作区相对 HEAD 的 added / modified / removed |
-| `verify` | 校验块哈希、块解码、索引偏移、content_hash、field_hashes、commit 哈希链、HEAD 根一致性 |
+| `verify` | 校验块哈希、块解码、索引偏移、content_hash、field_hashes、commit 哈希链、HEAD 根一致性；逐块流式校验，内存不随词典规模增长 |
+| `gc --keep-last N [--dry-run] [--vacuum]` | 保留每个 ref 及其 first-parent 链上最近 N 个提交，删除其余 commit、commit_index 与当前索引不再引用的块；`--dry-run` 只报告将释放的条数与字节，`--vacuum` 事后重建数据库文件 |
 | `patch create\|apply` | 见 §11；M0 返回 `ODC-E017` |
 
 revision 语法：`HEAD`、`HEAD~N`、commit 哈希前缀（≥ 4 个十六进制字符，需唯一）。

@@ -129,6 +129,7 @@ fn snapshot_stream_matches_canonical_cbor() {
     }
     assert_eq!(decoded, pairs);
     assert_eq!(reader.remaining(), 0);
+    assert_eq!(reader.bytes_read(), raw_size);
 }
 
 #[test]
@@ -233,4 +234,29 @@ fn corrupted_commit_index_is_reported() {
         .expect("same revision")
         .added
         .is_empty());
+}
+
+#[test]
+fn commit_index_raw_size_mismatch_is_reported() {
+    let dir = temp_dir("raw-size");
+    let mut repo = Repo::init(&dir).expect("init");
+    repo.import(&[Entry::new("alpha")], true).expect("import");
+    repo.commit("first", "tester", 1_700_000_000)
+        .expect("commit");
+    drop(repo);
+
+    let connection = rusqlite::Connection::open(dir.join("odc.db")).expect("open db");
+    connection
+        .execute("UPDATE commit_index SET raw_size = raw_size + 1", [])
+        .expect("tamper");
+    drop(connection);
+
+    let repo = Repo::open(&dir).expect("reopen");
+    let report = repo.verify().expect("verify runs");
+    assert!(!report.ok, "a padded raw_size must be rejected");
+    assert!(
+        report.errors.iter().any(|error| error.contains("raw_size")),
+        "unexpected errors: {:?}",
+        report.errors
+    );
 }

@@ -268,3 +268,82 @@ fn invalid_arguments_are_rejected_by_the_parser() {
         .failure()
         .stderr(predicate::str::contains("ODC-E"));
 }
+
+#[test]
+fn gc_dry_run_then_keep_last_one() {
+    let temp = TempDir::new().expect("tempdir");
+    odc(temp.path()).arg("init").assert().success();
+
+    let first = write(temp.path(), "first.jsonl", jsonl_fixture());
+    odc(temp.path())
+        .arg("import")
+        .arg(&first)
+        .arg("--format")
+        .arg("jsonl")
+        .assert()
+        .success();
+    odc(temp.path())
+        .args(["commit", "-m", "first", "--author", "tester"])
+        .assert()
+        .success();
+
+    let second = write(
+        temp.path(),
+        "second.jsonl",
+        "{\"word\":\"delta\",\"display\":\"delta\",\"phonetic\":[],\"defs\":[]}\n",
+    );
+    odc(temp.path())
+        .arg("import")
+        .arg(&second)
+        .arg("--format")
+        .arg("jsonl")
+        .arg("--prune")
+        .assert()
+        .success();
+    odc(temp.path())
+        .args(["commit", "-m", "second", "--author", "tester"])
+        .assert()
+        .success();
+
+    odc(temp.path())
+        .args(["gc", "--keep-last", "1", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("dry run"))
+        .stdout(predicate::str::contains("commits removed"));
+
+    odc(temp.path())
+        .args(["gc", "--keep-last", "1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("blocks removed"));
+
+    odc(temp.path())
+        .arg("verify")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("verify: OK"));
+
+    let log = odc(temp.path())
+        .args(["log", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&log).expect("log json");
+    let commits = value.as_array().expect("array");
+    assert_eq!(commits.len(), 1);
+    assert_eq!(commits[0]["message"], "second");
+}
+
+#[test]
+fn gc_rejects_zero_keep_last() {
+    let temp = TempDir::new().expect("tempdir");
+    odc(temp.path()).arg("init").assert().success();
+    odc(temp.path())
+        .args(["gc", "--keep-last", "0"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("ODC-E"));
+}

@@ -80,6 +80,7 @@ impl<W: Write> SnapshotWriter<W> {
 pub struct SnapshotReader<R: Read> {
     inner: BufReader<R>,
     remaining: u64,
+    bytes: u64,
 }
 
 impl<R: Read> SnapshotReader<R> {
@@ -93,6 +94,7 @@ impl<R: Read> SnapshotReader<R> {
         Ok(Self {
             inner,
             remaining: count,
+            bytes: head_len(count),
         })
     }
 
@@ -106,20 +108,24 @@ impl<R: Read> SnapshotReader<R> {
         if major != 4 || length != 2 {
             return Err(Error::Cbor("snapshot item is not a [word, digest] pair"));
         }
+        self.bytes += head_len(length);
         let (major, length) = read_head(&mut self.inner)?;
         if major != 3 {
             return Err(Error::Cbor("snapshot word is not text"));
         }
+        self.bytes += head_len(length);
         let length =
             usize::try_from(length).map_err(|_| Error::Cbor("snapshot word is too long"))?;
         let mut word = vec![0u8; length];
         self.inner.read_exact(&mut word)?;
+        self.bytes += length as u64;
         let word =
             String::from_utf8(word).map_err(|_| Error::Cbor("snapshot word is not UTF-8"))?;
         let (major, length) = read_head(&mut self.inner)?;
         if major != 2 || length != 32 {
             return Err(Error::Cbor("snapshot digest is not a 32-byte string"));
         }
+        self.bytes += head_len(length) + length;
         let mut digest = [0u8; 32];
         self.inner.read_exact(&mut digest)?;
         Ok(Some((word, digest)))
@@ -129,6 +135,15 @@ impl<R: Read> SnapshotReader<R> {
     #[must_use]
     pub fn remaining(&self) -> u64 {
         self.remaining
+    }
+
+    /// Uncompressed CBOR bytes consumed so far.
+    ///
+    /// Compare with the stored `raw_size` to detect truncated or padded
+    /// commit indexes without decompressing the blob again.
+    #[must_use]
+    pub fn bytes_read(&self) -> u64 {
+        self.bytes
     }
 }
 
@@ -163,4 +178,18 @@ fn read_head<R: Read>(reader: &mut R) -> Result<(u8, u64)> {
         _ => return Err(Error::Cbor("reserved additional information")),
     };
     Ok((major, argument))
+}
+
+/// Encoded width of a CBOR head carrying `argument`.
+///
+/// Mirrors the minimal-length rule in `cbor::push_head`, so byte accounting
+/// stays exact without re-encoding the value.
+fn head_len(argument: u64) -> u64 {
+    match argument {
+        0..=23 => 1,
+        24..=0xff => 2,
+        0x100..=0xffff => 3,
+        0x1_0000..=0xffff_ffff => 5,
+        _ => 9,
+    }
 }

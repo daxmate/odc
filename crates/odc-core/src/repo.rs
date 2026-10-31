@@ -516,7 +516,6 @@ impl Repo {
         })
     }
 
-    /// Commit the working set.
     /// Record the working set as a new commit.
     ///
     /// Nothing is bulk-loaded: the staging table is read once in word order,
@@ -937,7 +936,12 @@ impl Repo {
 
     /// Merkle root and entry count of the snapshot stored for `hash`, folded
     /// while streaming.
-    fn snapshot_summary(&self, hash: &[u8; 32]) -> Result<([u8; 32], u64)> {
+    fn snapshot_summary(&self, hash: &[u8; 32]) -> Result<([u8; 32], u64, u64, u64)> {
+        let raw_size: i64 = self.connection.query_row(
+            "SELECT raw_size FROM commit_index WHERE commit_hash = ?1",
+            params![hash.as_slice()],
+            |row| row.get(0),
+        )?;
         let mut reader = self.snapshot_reader(hash)?;
         let mut accumulator = hash::MerkleAccumulator::new();
         let mut count = 0u64;
@@ -945,7 +949,12 @@ impl Repo {
             accumulator.push(hash::leaf_hash(word.as_bytes(), &digest));
             count += 1;
         }
-        Ok((accumulator.finish(), count))
+        Ok((
+            accumulator.finish(),
+            count,
+            u64::try_from(raw_size).unwrap_or(u64::MAX),
+            reader.bytes_read(),
+        ))
     }
 
     /// Word-level diff between two revisions.
@@ -1209,7 +1218,13 @@ impl Repo {
                     Err(_) => errors.push("commit hash column is not 32 bytes".to_string()),
                 }
                 match self.snapshot_summary(&recomputed) {
-                    Ok((snapshot_root, snapshot_count)) => {
+                    Ok((snapshot_root, snapshot_count, snapshot_size, decoded_size)) => {
+                        if snapshot_size != decoded_size {
+                            errors.push(format!(
+                                "commit {}: commit_index raw_size does not match its payload",
+                                hash::to_hex(&recomputed)
+                            ));
+                        }
                         if snapshot_root != entry_root {
                             errors.push(format!(
                                 "commit {}: entry_root does not match snapshot",
@@ -1252,7 +1267,9 @@ impl Repo {
     ///
     /// The retained set is every ref target plus the most recent keep_last
     /// commits of its first-parent chain. Blocks survive when the current
-    /// entry index references them. `dry_run` reports what would be freed
+    /// entry index references them, so blocks used only by older retained
+    /// revisions are collected: their commit indexes stay, which keeps
+    /// `log` and `diff` working. `dry_run` reports what would be freed
     /// without writing; `vacuum` rebuilds the database file afterwards.
     pub fn gc(&mut self, keep_last: usize, dry_run: bool, vacuum: bool) -> Result<GcReport> {
         if keep_last == 0 {

@@ -89,6 +89,7 @@ crates/odc-core/          切块、编码、哈希、SQLite、commit/diff/verify
 crates/odc-cli/           odc 命令行
 crates/odc-testkit/       测试用合成 MDX 夹具（不发布）
 scripts/e2e.sh            10k 词条端到端演示
+scripts/bench-1m.sh       100 万合成词条基准（import/commit/diff/gc/verify 的时间与峰值 RSS）
 ```
 
 ## 设计要点
@@ -130,6 +131,7 @@ cargo fmt --all --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all
 ./scripts/e2e.sh
+./scripts/bench-1m.sh
 ```
 
 ## 许可证
