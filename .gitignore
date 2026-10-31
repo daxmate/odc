@@ -9,4 +9,9 @@
 # Apple build artifacts
 apps/apple/ODictKit/Frameworks/
 apps/apple/build/
+apps/apple/ODictKit/.build/
+apps/apple/**/xcuserdata/
 *.xcframework
+
+# Committed on purpose: the Swift tests open this repository copy.
+!apps/apple/ODictKit/Tests/ODictKitTests/Fixtures/**/*.db

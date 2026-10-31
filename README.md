@@ -121,6 +121,7 @@ crates/odc-cli/           odc 命令行
 crates/odc-testkit/       测试用合成 MDX 夹具（不发布）
 scripts/e2e.sh            10k 词条端到端演示
 scripts/bench-1m.sh       100 万合成词条基准（import/commit/diff/gc/verify 的时间与峰值 RSS）
+apps/apple/               iOS / macOS SwiftUI 客户端（ODict / ODict Desktop，只读 v0）
 ```
 
 ## 设计要点
@@ -154,6 +155,20 @@ scripts/bench-1m.sh       100 万合成词条基准（import/commit/diff/gc/veri
 4. **发布 / 分享**：导出一个 .odc 库给阅读器，或只生成几十 KB 的增量包给协作者。
 
 M0 阶段这些能力由 CLI 提供（odc import / commit / diff / patch），M1 起有 macOS 图形编辑器。
+
+## Apple 客户端（v0）
+
+`apps/apple/` 下是 **ODict**（iOS）与 **ODict Desktop**（macOS）两个 SwiftUI
+target，共享 `ODictKit`（`ODCFFI` 封装、状态与视图）。当前范围：打开 .odc →
+前缀搜索 → 词条渲染，只读。构建步骤见 `apps/apple/README.md`：
+
+```bash
+bash scripts/build-odc-xcframework.sh   # Rust C ABI -> ODCFFI.xcframework
+cd apps/apple && xcodegen generate      # project.yml -> ODict.xcodeproj
+```
+
+一条命令构建两端：`bash scripts/build-apple.sh`。包测试：
+`swift test --package-path apps/apple/ODictKit`。
 
 ## 开发
 
