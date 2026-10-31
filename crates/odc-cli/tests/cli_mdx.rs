@@ -215,3 +215,65 @@ fn limit_caps_the_number_of_imported_entries() {
     );
     assert!(output.contains("working set = 2"), "{output}");
 }
+
+/// Digits immediately following `marker` (skipping spaces).
+fn number_after(output: &str, marker: &str) -> usize {
+    let start = output
+        .find(marker)
+        .unwrap_or_else(|| panic!("missing {marker} in {output}"))
+        + marker.len();
+    let digits: String = output[start..]
+        .trim_start()
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    digits.parse().expect("a number after the marker")
+}
+
+#[test]
+fn corrupt_version_2_blocks_are_skipped_and_reported() {
+    let repo_dir = TempDir::new().expect("tempdir");
+    let input_dir = TempDir::new().expect("tempdir");
+    let entries: Vec<(String, String)> = (0..60)
+        .map(|index| {
+            (
+                format!("word{index:04}"),
+                format!("<p>{index}</p>{}", "x".repeat(8 * 1024)),
+            )
+        })
+        .collect();
+    let rows: Vec<(&str, &str)> = entries
+        .iter()
+        .map(|(key, body)| (key.as_str(), body.as_str()))
+        .collect();
+    let mdx = input_dir.path().join("big-v2.mdx");
+    odc_testkit::write_v2_mdx(&mdx, &rows).expect("write fixture");
+
+    // Damage the last record block by flipping a byte in its payload.
+    let mut bytes = fs::read(&mdx).expect("read fixture");
+    let last = bytes.len() - 10;
+    bytes[last] ^= 0xff;
+    fs::write(&mdx, &bytes).expect("write corrupt fixture");
+
+    stdout_of(odc(repo_dir.path()).arg("init"));
+    let output = stdout_of(
+        odc(repo_dir.path())
+            .arg("import")
+            .arg(&mdx)
+            .arg("--format")
+            .arg("mdx"),
+    );
+    assert!(
+        output.contains("mdx: skipped 1 corrupt record block"),
+        "{output}"
+    );
+    let imported = number_after(&output, "imported ");
+    let skipped = number_after(&output, "corrupt record block (");
+    assert_eq!(imported + skipped, entries.len(), "{output}");
+    assert!(skipped > 0 && skipped < entries.len(), "{output}");
+    let status = stdout_of(odc(repo_dir.path()).arg("status"));
+    assert!(
+        status.contains(&format!("working set: {imported} entries")),
+        "{status}"
+    );
+}

@@ -13,7 +13,7 @@
 | 其他主版本 | 拒绝，报 `ODC-E021` |
 | 文本编码 | UTF-8、UTF-16LE、GBK/GB2312、GB18030、Big5（由头部 `Encoding` 决定） |
 | 块压缩 | 无压缩、zlib、LZO（启用 mdictlib 的 `lzo` 特性） |
-| 校验和 | 导入时启用（adler32 逐块校验），损坏即报 `ODC-E021` |
+| 校验和 | 导入时启用（adler32 逐块校验）；MDX 2.0 的坏块可修复跳过（见「损坏块容错」），其余情况报 `ODC-E021` |
 | MDD 资源文件 | 不导入（M1 非目标） |
 | MDX 写出 | 不支持（M1 非目标） |
 
@@ -59,6 +59,86 @@
 
 点查（LDOCE6 库，随机 1000 词，`examples/lookup_bench.rs`）：
 release p50 99 µs / p95 136 µs；debug p50 597 µs / p95 941 µs。
+
+## 损坏块容错
+
+真实词典偶有「整条记录段里只有一个块坏了」的情况。早期实现里 `mdictlib`
+读到那个块就整体失败（`ODC-E021`，见下方实测），339,937 条的《汉语大词典》
+就因为 1 个块丢掉了整部词典。现在 MDX 2.0 的导入改为
+「先扫描、再修复、后过滤」：
+
+1. **扫描**（`odc-core::mdx_scan`）：按 v2 记录段布局定位记录段——头 32 字节为
+   4 个 `u64` BE，随后是 16 字节/项的索引，块数据紧随其后。定位公式为
+   key 段头（`4 + header_len + 4`，其中 4 字节是 v2 头部校验和）`+ 44`
+   （key 段头）`+ index_comp_size + key_blocks_len`；随后用
+   **`record_offset + 32 + index_len + blocks_len == 文件大小`** 做自校验，
+   对不上直接报错，不猜偏移。每个 `comp_type = 2` 的块用 zlib 解压，核对
+   解压长度与 adler32；其它 `comp_type` 只做结构校验（不猜压缩算法）。
+2. **修复副本**：只要存在坏块，就在系统临时目录写一份副本：坏块之前的字节
+   原样复制，坏块替换为「解压后长度**恰好等于**声明值」的哨兵内容
+   （`ODC-SKIPPED-BLOCK-<n>` 重复填充后重新 zlib 压缩），并重写索引与
+   32 字节记录段头（`blocks_len` 更新）；**解压偏移不变**，key 段完全不动。
+   没有坏块时直接用原文件，不产生副本。
+3. **过滤**：导入时丢弃 HTML 含哨兵标记的条目，计入 `skipped_entries`；
+   CLI 在原有输出之后追加一行，例如
+   `mdx: skipped 1 corrupt record block (123 entries)`。坏块明细（块序号、
+   文件偏移、压缩/声明长度、解压区间、失败原因）打到 stderr。
+
+公共 API（`odc_core::import_mdx`）：
+
+```rust,ignore
+pub struct MdxImportOptions {
+    pub skip_corrupt_blocks: bool, // 默认 true
+    pub prune: bool,
+    pub limit: Option<usize>,
+    pub progress: Option<Box<dyn FnMut(usize)>>,
+}
+pub fn import_mdx(path: &Path, repo: &mut Repo, options: MdxImportOptions)
+    -> Result<MdxImportReport>; // imported_entries / written / removed /
+                                // skipped_blocks / skipped_entries / corrupt_blocks
+                                // （另有 dedup / empty / oversized 计数）
+```
+
+### 实测（release 构建，Apple Silicon，本机样本）
+
+样本：`汉语大词典(简体精排).mdx`，72,104,480 B，MDX 2.0，339,937 条，
+`Encrypted="2"`，3,186 个记录块。
+
+* 记录段偏移 2,364,101；记录段头
+  `num_blocks=3186, num_entries=339937, index_len=50976, blocks_len=69689371`；
+  自校验 `2,364,101 + 32 + 50,976 + 69,689,371 = 72,104,480` 与文件大小一致。
+* 3,185/3,186 个块解压长度与 adler32 全部匹配；只有 **块 #1601（0 基）**
+  损坏：文件偏移 37,510,487，压缩 21,942 B，声明解压 65,419 B，
+  zlib 报 `incorrect data check`，实际只产出 65,365 B。
+* 修复前：`ODC-E021: MDX error: invalid data: invalid or oversized zlib block
+  in record block: Adler32Mismatch`，导入在第 166,149 条（1 基）中止。
+* 修复后：`imported 339814 entries (339814 written, 0 removed); working set = 339814`
+  加 `mdx: skipped 1 corrupt record block (123 entries)`；
+  `339,814 + 123 = 339,937`，与文件声明的条目数一致。按 `--limit` 逐点探测，
+  第一个被跳过的条目正是第 166,149 条（1 基），与修复前的失败位置完全吻合。
+* 耗时与内存（`/usr/bin/time -l`，import 全程）：`2.12 real 1.70 user 0.34 sys`，
+  `44,662,784 maximum resident set size`（约 42.6 MiB），
+  `41,697,736 peak memory footprint`。随后 `odc commit` 报告
+  `339814 entries, 946 new blocks`，`odc verify` 报
+  `verify: OK (946 blocks, 339814 entries, 2 commits)`。
+* 抽查三条正常条目（`一`、`一丁不识`、`中国`）的 `raw_html`，已用独立
+  Python 解析原始 MDX 记录段做字节比对，全部逐字节命中。
+
+### 已知限制
+
+* 只对 **MDX 2.0** 生效。1.2 文件保持原行为（坏块仍报 `ODC-E021`），
+  因为 1.2 没有可重写的记录段索引。
+* 坏块内的**全部**条目都会被跳过（本次 123 条）；与坏块相邻的边界条目可能
+  一并丢失，不会尝试从损坏的解压流里抢救部分记录。
+* 有坏块时会多写一份临时副本（约等于原文件大小，本样本约 72 MB），
+  导入结束（含出错路径）即删除。
+* 扫描要完整解压一遍记录段（本样本约 206 MB），相当于导入前多一次解压
+  开销；无坏块的大词典也要付这一遍扫描。
+* CLI 暂未提供关闭容错的开关（需要严格失败时用 core API 的
+  `skip_corrupt_blocks: false`）。
+* 与 `--limit` 同用时，`skipped_entries` 只在导入真正读到坏块时累计；
+  若条目上限先达到、坏块尚未读到，则 `skipped_blocks` 为 1 而
+  `skipped_entries` 为 0（`skipped_blocks` 来自扫描，始终准确）。
 
 ## 已知缺口
 

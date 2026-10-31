@@ -17,6 +17,16 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   the `mdictlib` reader (MIT). Duplicate normalised keys receive a
   `U+001F<n>` suffix; empty keys and records over 1 MiB are skipped and
   counted.
+* MDX 2.0 corrupt record blocks no longer abort the import. `odc-core` scans
+  the record section first (`mdx_scan`), and imports through a temporary
+  repaired copy in which each damaged block is replaced by a sentinel payload
+  of exactly its declared size, so every key and record offset still lines
+  up. Sentinel entries are dropped and reported: `odc import` now ends with
+  `mdx: skipped 1 corrupt record block (N entries)`. Details, measured data
+  and limits live in `docs/mdx-compat.md`.
+* MDX import is now a public core API: `odc_core::import_mdx(path, repo,
+  MdxImportOptions) -> MdxImportReport`, with `skip_corrupt_blocks`,
+  `prune`, `limit` and a progress callback. The CLI only formats the report.
 * `odc lookup` (exit code 4 when the word is missing), `odc search --prefix`
   over the entries index, and `odc export --format jsonl|csv` with a JSONL
   round-trip back into a fresh repository.
@@ -57,6 +67,9 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 ### Changed
 
 * `Error` gained `Mdx` (`ODC-E021`) and `EntryTooLarge` (`ODC-E022`).
+* `odc import --format mdx` keeps its previous stdout lines and adds the
+  corrupt-block summary after them; the engine banner still precedes the
+  import, and per-block diagnostics go to stderr.
 * `Error` also gained `MergeInProgress` (`ODC-E028`), `UnresolvedConflicts`
   (`ODC-E029`) and `NoMergeInProgress` (`ODC-E030`). `PatchNeedsMerge`
   (`ODC-E025`) stays reserved but is no longer produced.

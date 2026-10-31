@@ -866,10 +866,11 @@ fn import_mdx(
     limit: Option<usize>,
     progress: bool,
 ) -> odc_core::Result<ExitCode> {
-    use odc_core::mdx::{entry_from_record, MdxKeys, MdxSource};
+    use odc_core::mdx::MdxSource;
+    use odc_core::MdxImportOptions;
 
-    let source = MdxSource::open(path)?;
-    let header = source.header();
+    // Keep the header line ahead of the import, exactly where it used to be.
+    let header = MdxSource::open(path)?.header();
     eprintln!(
         "mdx: engine {} (required {}), encoding {}, records {}{}",
         header.engine_version,
@@ -886,59 +887,52 @@ fn import_mdx(
             .map_or(String::new(), |value| format!(", encrypted={value}")),
     );
 
-    let mut records = source.records();
-    let mut keys = MdxKeys::new();
-    let mut taken = 0usize;
-    let mut skipped_empty = 0usize;
-    let mut skipped_oversized = 0usize;
-    let mut deduplicated = 0usize;
     let mut next_mark = 10_000usize;
-
-    let report = repo.import_stream(
-        || loop {
-            if limit.is_some_and(|cap| taken >= cap) {
-                return Ok(None);
-            }
-            let Some(record) = records.next() else {
-                return Ok(None);
-            };
-            let record = record?;
-            if record.key.trim().is_empty() {
-                skipped_empty += 1;
-                continue;
-            }
-            let mut entry = match entry_from_record(&record) {
-                Ok(entry) => entry,
-                Err(odc_core::Error::EntryTooLarge { .. }) => {
-                    skipped_oversized += 1;
-                    continue;
-                }
-                Err(error) => return Err(error),
-            };
-            let (key, collided) = keys.allocate(&entry.word);
-            entry.word = key;
-            if collided {
-                deduplicated += 1;
-            }
-            taken += 1;
-            return Ok(Some(entry));
-        },
+    let options = MdxImportOptions {
+        skip_corrupt_blocks: true,
         prune,
-        |written| {
-            if progress && written >= next_mark {
-                eprintln!("progress: {written} entries");
-                next_mark = written + 10_000;
-            }
+        limit,
+        progress: if progress {
+            Some(Box::new(move |written: usize| {
+                if written >= next_mark {
+                    eprintln!("progress: {written} entries");
+                    next_mark = written + 10_000;
+                }
+            }))
+        } else {
+            None
         },
-    )?;
+    };
+    let report = odc_core::import_mdx(path, repo, options)?;
 
+    for block in &report.corrupt_blocks {
+        let (start, end) = block.decompressed_range();
+        eprintln!(
+            "mdx: corrupt record block #{} at offset {} ({} B compressed, {} B declared, \
+             decompressed bytes {start}..{end}): {}",
+            block.ordinal,
+            block.file_offset,
+            block.compressed_size,
+            block.declared_size,
+            block.detail
+        );
+    }
     println!(
         "imported {} entries ({} written, {} removed); working set = {}",
-        report.written, report.written, report.removed, report.total
+        report.imported_entries, report.written, report.removed, report.working_set
     );
-    if skipped_empty + skipped_oversized + deduplicated > 0 {
+    if report.deduplicated + report.skipped_empty + report.skipped_oversized > 0 {
         println!(
-            "mdx: {deduplicated} duplicate keys suffixed, {skipped_empty} empty skipped, {skipped_oversized} oversized skipped"
+            "mdx: {} duplicate keys suffixed, {} empty skipped, {} oversized skipped",
+            report.deduplicated, report.skipped_empty, report.skipped_oversized
+        );
+    }
+    if report.skipped_blocks > 0 {
+        println!(
+            "mdx: skipped {} corrupt record block{} ({} entries)",
+            report.skipped_blocks,
+            if report.skipped_blocks == 1 { "" } else { "s" },
+            report.skipped_entries
         );
     }
     Ok(ExitCode::SUCCESS)
