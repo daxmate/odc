@@ -12,6 +12,16 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   (macOS) SwiftUI targets on a shared `ODictKit` package. v0 opens a
   dictionary, prefix-searches it through `ODCFFI` and renders entries
   read-only. `build-app.sh` builds both targets end to end.
+* ODict Desktop imports MDX: the new `odc_import_mdx_to_odc(mdx_path,
+  out_odc_path, report_json_out, error_message)` C entry point imports a
+  version 1.2 / 2.0 dictionary into a temporary repository, commits it, packs
+  a shallow `.odc` and renames it into place atomically (an existing target
+  is an error, never overwritten). The Swift side converts on a background
+  thread, writes `<name>.odc` next to the source (falling back to
+  `~/Documents`, `-1`/`-2` suffixes on collision), reports the stage without
+  faking a percentage, and opens the result. Corrupt record blocks are
+  skipped and summarised in the completion alert. iOS keeps rejecting
+  `.mdx`.
 
 * MDX (MDict 1.2 / 2.0) import through `odc import --format mdx`, wrapping
   the `mdictlib` reader (MIT). Duplicate normalised keys receive a

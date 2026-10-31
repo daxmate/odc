@@ -172,6 +172,12 @@ cd apps/apple && xcodegen generate      # project.yml -> ODict.xcodeproj
 一条命令构建两端：`./scripts/build-app.sh`（根目录 `./build-app.sh` 为兼容别名，旧入口 `scripts/build-apple.sh` 仍可用）。包测试：
 `swift test --package-path apps/apple/ODictKit`。
 
+**导入 MDX（仅 macOS）**：`Open Dictionary or MDX…`（⌘O）选一个 `.mdx`，
+App 在后台调用 `odc_import_mdx_to_odc` 转换成独立 `<name>.odc`（与源文件同
+目录，不可写时回退 `~/Documents`，已存在则加 `-1`、`-2` 后缀），完成后自动
+打开并提示导入条数与跳过的损坏块。损坏记录块沿用 Phase 1 的「跳过坏块」策略；
+iOS target 不暴露入口，只保证编译。细节见 `apps/apple/README.md`。
+
 ## 开发
 
 ```bash
