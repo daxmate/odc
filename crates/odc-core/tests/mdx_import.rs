@@ -1,7 +1,7 @@
 //! MDX import pipeline tests: corrupt-block skipping and report bookkeeping.
 
 use odc_core::mdx_scan::{scan, RecordSection, ScanOutcome};
-use odc_core::{import_mdx, MdxImportOptions, Repo};
+use odc_core::{import_mdx, ImportProgress, ImportStage, MdxImportOptions, Repo};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -198,7 +198,7 @@ fn version_1_imports_ignore_the_repair_path() {
 }
 
 #[test]
-fn progress_reports_written_entries() {
+fn progress_reports_stages_and_totals() {
     let fixture = Fixture::new("progress", 300);
     let mut repo = fixture.open_repo();
     let marks = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -207,16 +207,59 @@ fn progress_reports_written_entries() {
         &fixture.mdx,
         &mut repo,
         MdxImportOptions {
-            progress: Some(Box::new(move |written| {
-                sink.lock().expect("progress log").push(written);
+            progress: Some(Box::new(move |sample: ImportProgress| {
+                sink.lock().expect("progress log").push(sample);
             })),
             ..MdxImportOptions::default()
         },
     )
     .expect("import");
-    let marks = marks.lock().expect("progress log");
-    assert!(!marks.is_empty(), "progress callback fired");
-    assert_eq!(marks.last().copied(), Some(report.written));
+    let samples = marks.lock().expect("progress log").clone();
+
+    assert!(!samples.is_empty(), "progress callback fired");
+    assert_eq!(
+        samples.first().map(|sample| sample.stage),
+        Some(ImportStage::Preparing),
+        "the first sample announces the job before any record is read"
+    );
+    assert_eq!(samples.first().map(|sample| sample.done), Some(0));
+    assert_eq!(
+        samples.last().map(|sample| sample.stage),
+        Some(ImportStage::Committing),
+        "the last sample closes the import"
+    );
+
+    // done is stage-scoped, so monotonicity is checked per stage.
+    let mut entries = 0_u64;
+    let mut resources = 0_u64;
+    let mut entries_total = None;
+    for sample in &samples {
+        match sample.stage {
+            ImportStage::Entries => {
+                assert!(sample.done >= entries, "entry progress moved backwards");
+                assert!(sample.done <= sample.total, "done stayed within total");
+                entries = sample.done;
+                entries_total = Some(sample.total);
+            }
+            ImportStage::Resources => {
+                assert!(
+                    sample.done >= resources,
+                    "resource progress moved backwards"
+                );
+                resources = sample.done;
+            }
+            ImportStage::Preparing | ImportStage::Committing => {}
+        }
+    }
+
+    let last = samples.last().expect("final sample");
+    assert_eq!(last.done, last.total, "the final sample is complete");
+    assert_eq!(
+        entries_total,
+        Some(300),
+        "entries total is the record count"
+    );
+    assert_eq!(entries, 300, "every record is accounted for");
     assert_eq!(report.imported_entries, 300);
 }
 

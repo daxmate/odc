@@ -44,6 +44,30 @@ pub struct MddImportReport {
     pub warnings: Vec<String>,
 }
 
+/// One progress sample from [`import_scanned`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MddProgress {
+    /// Physical resources processed across all volumes so far.
+    pub done: u64,
+    /// Physical resources in the readable volumes.
+    pub total: u64,
+    /// One-based index of the volume being imported.
+    pub volume_index: u32,
+    /// Number of readable volumes.
+    pub volume_count: u32,
+}
+
+/// Totals learned by opening the volumes without reading payloads.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MddScan {
+    /// Readable volumes and their physical resource counts, in import order.
+    pub volumes: Vec<(PathBuf, u64)>,
+    /// Sum of the counts above.
+    pub total: u64,
+    /// Problems found while opening the volumes, one line each.
+    pub warnings: Vec<String>,
+}
+
 /// Normalise an MDD resource path for storage and lookup.
 ///
 /// MDD keys use backslashes and often carry a leading slash; the repository
@@ -130,10 +154,70 @@ pub fn import_volumes(
     volumes: &[PathBuf],
     warnings: &mut Vec<String>,
 ) -> Result<MddImportReport> {
+    let scan = scan_volumes(volumes);
+    warnings.extend(scan.warnings.iter().cloned());
+    import_scanned(repo, &scan, warnings, |_| {})
+}
+
+/// Open every volume without reading payloads to learn the resource totals.
+///
+/// A volume that cannot be opened becomes a warning and is left out of the
+/// totals, exactly like [`import_scanned`] would skip it. Parsing the key
+/// table is all this does, so a 180k-resource volume costs milliseconds.
+pub fn scan_volumes(volumes: &[PathBuf]) -> MddScan {
+    let mut scan = MddScan::default();
+    for path in volumes {
+        match MddFile::open(path) {
+            Ok(file) => {
+                let resources = file.len();
+                scan.total += resources;
+                scan.volumes.push((path.clone(), resources));
+            }
+            Err(error) => scan.warnings.push(format!("{}: {error}", path.display())),
+        }
+    }
+    scan
+}
+
+/// Import the volumes a [`scan_volumes`] call already opened.
+///
+/// `progress` receives one sample per volume switch and one per written batch.
+/// A volume that fails halfway is counted as if its scanned resources were
+/// processed, so the sample never stalls and never moves backwards.
+///
+/// # Errors
+///
+/// Only repository failures are fatal; MDD problems never abort an import.
+pub fn import_scanned<F>(
+    repo: &mut Repo,
+    scan: &MddScan,
+    warnings: &mut Vec<String>,
+    mut progress: F,
+) -> Result<MddImportReport>
+where
+    F: FnMut(MddProgress),
+{
+    let volume_count = u32::try_from(scan.volumes.len()).unwrap_or(u32::MAX);
     let mut report = MddImportReport::default();
     let mut seen: HashSet<String> = HashSet::new();
-    for path in volumes {
-        match import_volume(repo, path, &mut seen) {
+    let mut done = 0_u64;
+    for (position, (path, resources)) in scan.volumes.iter().enumerate() {
+        let volume_index = u32::try_from(position + 1).unwrap_or(u32::MAX);
+        progress(MddProgress {
+            done,
+            total: scan.total,
+            volume_index,
+            volume_count,
+        });
+        let base = done;
+        match import_volume(repo, path, &mut seen, &mut |processed| {
+            progress(MddProgress {
+                done: base + processed,
+                total: scan.total,
+                volume_index,
+                volume_count,
+            });
+        }) {
             Ok(volume) => {
                 report.resources += volume.entries;
                 report.resource_bytes += volume.bytes;
@@ -144,6 +228,7 @@ pub fn import_volumes(
             }
             Err(VolumeFailure::Repo(error)) => return Err(error),
         }
+        done = base + resources;
     }
     Ok(report)
 }
@@ -166,13 +251,16 @@ fn import_volume(
     repo: &mut Repo,
     path: &Path,
     seen: &mut HashSet<String>,
+    progress: &mut dyn FnMut(u64),
 ) -> std::result::Result<MddVolumeReport, VolumeFailure> {
     let file = MddFile::open(path).map_err(|error| VolumeFailure::Mdd(error.to_string()))?;
     let mut batch: Vec<(String, Vec<u8>)> = Vec::with_capacity(RESOURCE_BATCH);
     let mut entries = 0_usize;
     let mut bytes = 0_u64;
+    let mut processed = 0_u64;
     for resource in file.resources() {
         let resource = resource.map_err(|error| VolumeFailure::Mdd(error.to_string()))?;
+        processed += 1;
         let key = normalize_resource_key(resource.key());
         if key.is_empty() || !seen.insert(key.clone()) {
             continue;
@@ -184,11 +272,13 @@ fn import_volume(
         if batch.len() >= RESOURCE_BATCH {
             repo.put_resources(&batch)?;
             batch.clear();
+            progress(processed);
         }
     }
     if !batch.is_empty() {
         repo.put_resources(&batch)?;
     }
+    progress(processed);
     Ok(MddVolumeReport {
         path: path.to_path_buf(),
         entries,

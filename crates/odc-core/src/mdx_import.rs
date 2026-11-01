@@ -7,9 +7,10 @@
 //! `MdxImportReport`.
 
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use crate::error::{Error, Result};
-use crate::mdd_import::{self, MddImportReport, MddVolumeReport};
+use crate::mdd_import::{self, MddImportReport, MddScan, MddVolumeReport};
 use crate::mdx::{entry_from_record, MdxHeader, MdxKeys, MdxSource};
 use crate::mdx_scan::{self, CorruptBlock};
 use crate::repo::Repo;
@@ -25,8 +26,14 @@ pub struct MdxImportOptions {
     pub prune: bool,
     /// Stop after this many accepted entries.
     pub limit: Option<usize>,
-    /// Called with the number of entries written so far.
-    pub progress: Option<Box<dyn FnMut(usize)>>,
+    /// Called with samples of the import progress.
+    ///
+    /// Samples are stage-scoped: `done` and `total` count records of the
+    /// stage they belong to (see [`ImportProgress`]). The callback runs on the
+    /// importing thread and must stay cheap; the core already limits it to
+    /// roughly ten samples per second, plus every stage change and the final
+    /// `done == total` sample.
+    pub progress: Option<Box<dyn FnMut(ImportProgress)>>,
     /// Import the sibling MDD volumes (default `true`).
     ///
     /// The volumes are `<stem>.mdd`, `<stem>.1.mdd`, `<stem>.2.mdd` … next
@@ -64,6 +71,130 @@ impl std::fmt::Debug for MdxImportOptions {
             .field("import_mdd", &self.import_mdd)
             .field("mdd_volumes", &self.mdd_volumes)
             .finish()
+    }
+}
+
+/// Stage of an `import_mdx` call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ImportStage {
+    /// Opening the MDD volumes to learn how many resources exist.
+    Preparing,
+    /// Reading dictionary records into the working set.
+    Entries,
+    /// Copying MDD payloads into the block store.
+    Resources,
+    /// Every record and resource is written; committing and packing follow
+    /// in the caller.
+    Committing,
+}
+
+impl ImportStage {
+    /// Stable numeric identifier, mirrored by `odc.h`.
+    pub const fn code(self) -> i32 {
+        match self {
+            Self::Preparing => 0,
+            Self::Entries => 1,
+            Self::Resources => 2,
+            Self::Committing => 3,
+        }
+    }
+}
+
+/// One progress sample from [`MdxImportOptions::progress`].
+///
+/// `done` and `total` are **stage-scoped counts of records**, never bytes:
+///
+/// * [`ImportStage::Preparing`] — `done` is `0` and `total` is the number of
+///   resources the MDD pre-scan found (`0` when there are no volumes).
+/// * [`ImportStage::Entries`] — `total` is `min(limit, records in the file)`
+///   and `done` counts processed records, including the empty, oversized and
+///   duplicated ones, so the last sample satisfies `done == total`.
+/// * [`ImportStage::Resources`] — `done` and `total` count MDD resources,
+///   `volume_index` is one-based and `volume_count` is the number of readable
+///   volumes. A volume that fails halfway is counted as processed so the
+///   sample never moves backwards.
+/// * [`ImportStage::Committing`] — `done == total`, the sum of the entry and
+///   resource totals.
+///
+/// A caller that wants a single fraction keeps the totals it has seen:
+/// `(entries_done + resources_done) / (entries_total + resources_total)`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ImportProgress {
+    /// Which part of the import produced this sample.
+    pub stage: ImportStage,
+    /// Records processed so far in this stage.
+    pub done: u64,
+    /// Records this stage will process in total.
+    pub total: u64,
+    /// One-based index of the volume being imported.
+    pub volume_index: u32,
+    /// Number of readable volumes; `0` outside the resources stage.
+    pub volume_count: u32,
+}
+
+/// Rate limiter for [`MdxImportOptions::progress`].
+///
+/// Stage changes and complete samples always go out; everything else is
+/// capped at about ten samples per second so that a dictionary with 180k
+/// resources cannot flood a UI thread.
+struct ProgressLimiter {
+    last_sent: Option<Instant>,
+    last_stage: Option<ImportStage>,
+}
+
+impl ProgressLimiter {
+    /// Shortest gap between two ordinary samples.
+    const MIN_INTERVAL: Duration = Duration::from_millis(100);
+
+    fn new() -> Self {
+        Self {
+            last_sent: None,
+            last_stage: None,
+        }
+    }
+
+    fn allows(&mut self, sample: &ImportProgress) -> bool {
+        self.allows_at(Instant::now(), sample)
+    }
+
+    fn allows_at(&mut self, now: Instant, sample: &ImportProgress) -> bool {
+        let stage_changed = self.last_stage != Some(sample.stage);
+        let complete = sample.total > 0 && sample.done >= sample.total;
+        let elapsed = match self.last_sent {
+            Some(last) => now.duration_since(last) >= Self::MIN_INTERVAL,
+            None => true,
+        };
+        if stage_changed || complete || elapsed {
+            self.last_sent = Some(now);
+            self.last_stage = Some(sample.stage);
+            true
+        } else {
+            false
+        }
+    }
+}
+
+/// Delivers samples to the caller, applying [`ProgressLimiter`].
+struct ProgressSink {
+    callback: Option<Box<dyn FnMut(ImportProgress)>>,
+    limiter: ProgressLimiter,
+}
+
+impl ProgressSink {
+    fn new(callback: Option<Box<dyn FnMut(ImportProgress)>>) -> Self {
+        Self {
+            callback,
+            limiter: ProgressLimiter::new(),
+        }
+    }
+
+    fn send(&mut self, sample: ImportProgress) {
+        if self.callback.is_none() || !self.limiter.allows(&sample) {
+            return;
+        }
+        if let Some(callback) = self.callback.as_mut() {
+            callback(sample);
+        }
     }
 }
 
@@ -124,10 +255,11 @@ pub fn import_mdx(
         skip_corrupt_blocks,
         prune,
         limit,
-        mut progress,
+        progress,
         import_mdd,
         mdd_volumes,
     } = options;
+    let mut reporter = ProgressSink::new(progress);
 
     // The repaired copy owns a temporary file that is removed when dropped, so
     // it stays alive until the import (including error paths) has finished.
@@ -158,6 +290,29 @@ pub fn import_mdx(
 
     let source = MdxSource::open(source_path)?;
     let header = source.header();
+
+    // The MDD volumes are opened before the first record so the caller learns
+    // the size of the whole job up front and can show one determinate bar from
+    // the first sample. Opening a volume only parses its key table, no payload
+    // is read, so the pre-scan stays cheap.
+    let mut warnings = Vec::new();
+    let mdd_paths = if import_mdd {
+        Some(mdd_volumes.unwrap_or_else(|| mdd_import::discover_volumes(path)))
+    } else {
+        None
+    };
+    let scan = match &mdd_paths {
+        Some(volumes) => mdd_import::scan_volumes(volumes),
+        None => MddScan::default(),
+    };
+    warnings.extend(scan.warnings.iter().cloned());
+    reporter.send(ImportProgress {
+        stage: ImportStage::Preparing,
+        done: 0,
+        total: scan.total,
+        volume_index: 0,
+        volume_count: scan.volumes.len() as u32,
+    });
     let mut records = source.records();
     let mut keys = MdxKeys::new();
     let mut taken = 0_usize;
@@ -165,6 +320,8 @@ pub fn import_mdx(
     let mut skipped_oversized = 0_usize;
     let mut skipped_entries = 0_usize;
     let mut deduplicated = 0_usize;
+    let mut processed = 0_u64;
+    let entries_total = limit.map_or(header.records, |cap| (cap as u64).min(header.records));
 
     let report = repo.import_stream(
         || loop {
@@ -175,6 +332,14 @@ pub fn import_mdx(
                 return Ok(None);
             };
             let record = record?;
+            processed += 1;
+            reporter.send(ImportProgress {
+                stage: ImportStage::Entries,
+                done: processed.min(entries_total),
+                total: entries_total,
+                volume_index: 0,
+                volume_count: 0,
+            });
             if record.key.trim().is_empty() {
                 skipped_empty += 1;
                 continue;
@@ -200,23 +365,35 @@ pub fn import_mdx(
             return Ok(Some(entry));
         },
         prune,
-        |written| {
-            if let Some(callback) = progress.as_mut() {
-                callback(written);
-            }
-        },
+        |_| {},
     )?;
 
     // Resources are written after the entries, in the same call: a failed MDX
     // import therefore never leaves a resource set behind. Volumes commit one
     // batch at a time, so a corrupt volume keeps what it already wrote.
-    let mut warnings = Vec::new();
-    let mdd = if import_mdd {
-        let volumes = mdd_volumes.unwrap_or_else(|| mdd_import::discover_volumes(path));
-        mdd_import::import_volumes(repo, &volumes, &mut warnings)?
-    } else {
-        MddImportReport::default()
+    let mdd = match &mdd_paths {
+        Some(_) => mdd_import::import_scanned(repo, &scan, &mut warnings, |sample| {
+            reporter.send(ImportProgress {
+                stage: ImportStage::Resources,
+                done: sample.done,
+                total: sample.total,
+                volume_index: sample.volume_index,
+                volume_count: sample.volume_count,
+            });
+        })?,
+        None => MddImportReport::default(),
     };
+
+    // Everything the core owns is written; committing the working set and
+    // packing the container happen in the caller, hence a stage of their own.
+    let complete = entries_total + scan.total;
+    reporter.send(ImportProgress {
+        stage: ImportStage::Committing,
+        done: complete,
+        total: complete,
+        volume_index: 0,
+        volume_count: 0,
+    });
 
     Ok(MdxImportReport {
         imported_entries: taken,

@@ -33,8 +33,8 @@ pub mod varint;
 
 pub use entry::{Def, Entry};
 pub use error::{Error, Result};
-pub use mdd_import::{MddImportReport, MddVolumeReport};
-pub use mdx_import::{import_mdx, MdxImportOptions, MdxImportReport};
+pub use mdd_import::{MddImportReport, MddProgress, MddScan, MddVolumeReport};
+pub use mdx_import::{import_mdx, ImportProgress, ImportStage, MdxImportOptions, MdxImportReport};
 pub use repo::{
     CommitOutcome, CommitRecord, Diff, GcReport, ImportReport, Repo, Status, VerifyReport,
     DEFAULT_AUTHOR,
