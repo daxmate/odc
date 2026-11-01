@@ -31,6 +31,18 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ### Changed
 
+* Import banner: the resources stage counts the MDD payloads it is copying
+  ("导入资源 12,345 / 26,780 个" plus the volume when there are several) instead
+  of repeating the finished entry count, so a long media copy is visible.
+* Import banner: the packing stage that follows has no samples of its own, so
+  it shows an indeterminate spinner with the elapsed seconds rather than a
+  100% bar the core never measured. The detail names what is being written and
+  asks the reader not to quit.
+* Import summary: the note under the entry clears itself after six seconds;
+  the button still dismisses it at once, and failures stay until dismissed.
+* macOS search: Return in the sidebar field opens the first hit. SwiftUI does
+  not deliver that key to `onSubmit(of: .search)`, so the list watches the key
+  locally and swallows it only while the sidebar search field has focus.
 * `MDXImporter.outputURL` no longer prefers the source folder even when it is
   writable; conversions go into the app's storage unless the caller names a
   directory.

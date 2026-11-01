@@ -59,6 +59,9 @@ public struct SearchResultsView: View {
         .navigationTitle("ODict")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        #else
+        // The sidebar search field does not reach onSubmit on macOS.
+        .modifier(SearchFieldSubmitModifier(submit: { store.submitQuery() }))
         #endif
     }
 
