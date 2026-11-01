@@ -101,11 +101,65 @@ public struct LibraryListView: View {
                         }
                     }
                 }
-                ForEach(store.library.items) { item in
-                    row(for: item)
+                Section("词典") {
+                    if store.library.items.isEmpty {
+                        hint("还没有词典")
+                    }
+                    ForEach(store.library.items) { item in
+                        row(for: item)
+                    }
+                }
+                Section("最近") {
+                    if store.recentEntries.isEmpty {
+                        hint("打开过的词条会出现在这里")
+                    }
+                    ForEach(store.recentEntries) { ref in
+                        memoryRow(for: ref)
+                    }
+                }
+                Section("收藏") {
+                    if store.bookmarkedEntries.isEmpty {
+                        hint("收藏的词条会出现在这里")
+                    }
+                    ForEach(store.bookmarkedEntries) { ref in
+                        memoryRow(for: ref)
+                    }
                 }
             }
         }
+    }
+
+    /// A remembered entry from the history or bookmark section.
+    ///
+    /// Tapping it opens the entry; when it belongs to another dictionary the
+    /// store switches to that one first.
+    private func memoryRow(for ref: EntryRef) -> some View {
+        Button {
+            Task {
+                await store.openEntry(ref)
+                dismiss()
+            }
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(ref.headword)
+                Text(dictionaryName(for: ref))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// Name of the dictionary a remembered entry belongs to.
+    private func dictionaryName(for ref: EntryRef) -> String {
+        guard let id = UUID(uuidString: ref.dictionaryID) else { return ref.dictionaryID }
+        return store.library.item(id: id)?.displayName ?? "已移除的词典"
+    }
+
+    /// One grey line standing in for a section that has nothing yet.
+    private func hint(_ text: String) -> some View {
+        Text(text)
+            .font(.callout)
+            .foregroundStyle(.secondary)
     }
 
     /// A dictionary whose copy could not be moved into the library folder.

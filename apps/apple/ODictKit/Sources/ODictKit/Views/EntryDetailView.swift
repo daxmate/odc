@@ -39,6 +39,27 @@ public struct EntryDetailView: View {
                 await store.select(key: explicitKey)
             }
         }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                if let entry = store.entry {
+                    bookmarkButton(for: entry)
+                }
+            }
+        }
+    }
+
+    /// Star toggling for the entry on screen; the label is also its a11y name.
+    private func bookmarkButton(for entry: DictionaryEntry) -> some View {
+        let isBookmarked = store.isBookmarked(key: entry.key)
+        return Button {
+            store.toggleBookmark()
+        } label: {
+            Label(
+                isBookmarked ? "取消收藏" : "收藏",
+                systemImage: isBookmarked ? "star.fill" : "star"
+            )
+        }
+        .accessibilityLabel(isBookmarked ? "取消收藏" : "收藏")
     }
 
     @ViewBuilder

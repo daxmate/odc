@@ -42,6 +42,8 @@ public final class DictionaryStore {
     public private(set) var importSummary: String?
     /// Dictionaries copied into the app's storage.
     public private(set) var library = LibraryState()
+    /// Bookmarks and recent entries, mirrored from `reader.json`.
+    public private(set) var reader = ReaderState()
     /// True while duplicate copies are being moved out of the library.
     public private(set) var isDeduplicating = false
 
@@ -59,6 +61,8 @@ public final class DictionaryStore {
     /// Identifier of the library entry backing `documentURL`.
     @ObservationIgnored private var openItemID: UUID?
     @ObservationIgnored private var hasRestored = false
+    /// Directory `reader` was loaded from; `nil` until the first read.
+    @ObservationIgnored private var readerDirectory: URL?
     /// Library root; `nil` means the app's Application Support folder.
     private let container: URL?
 
@@ -97,6 +101,9 @@ public final class DictionaryStore {
         if let openItemID, let directory = try? libraryDirectoryURL() {
             LibraryStore.remove(id: openItemID, from: &library)
             saveLibrary(in: directory)
+            updateReader(in: directory) {
+                ReaderStore.forget(dictionaryID: openItemID.uuidString, in: &$0)
+            }
         }
         openItemID = nil
         documentURL = nil
@@ -374,6 +381,9 @@ public final class DictionaryStore {
         }
         LibraryStore.remove(id: id, from: &library)
         saveLibrary(in: directory)
+        updateReader(in: directory) {
+            ReaderStore.forget(dictionaryID: id.uuidString, in: &$0)
+        }
     }
 
     /// Move duplicate copies into the library's `.Trash` folder.
@@ -453,6 +463,7 @@ public final class DictionaryStore {
             LibraryStore.add(item, to: &state)
         }
         library = state
+        loadReader(in: directory)
         if !pruned.isEmpty {
             libraryLog.warning("dropped \(pruned.count) missing librar\(pruned.count == 1 ? "y item" : "y items")")
         }
@@ -529,6 +540,9 @@ public final class DictionaryStore {
     private func forgetStaleEntry(_ item: LibraryItem, in directory: URL) {
         LibraryStore.remove(id: item.id, from: &library)
         saveLibrary(in: directory)
+        updateReader(in: directory) {
+            ReaderStore.forget(dictionaryID: item.id.uuidString, in: &$0)
+        }
     }
 
     private func saveLibrary(in directory: URL) {
@@ -537,6 +551,82 @@ public final class DictionaryStore {
         } catch {
             libraryLog.error("could not save the library: \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    // MARK: - Bookmarks and history
+
+    /// Entries opened most recently, newest first.
+    public var recentEntries: [EntryRef] { reader.history }
+
+    /// Bookmarked entries, newest first.
+    public var bookmarkedEntries: [EntryRef] { reader.bookmarks }
+
+    /// Whether `key` is bookmarked in the dictionary that is open right now.
+    public func isBookmarked(key: String) -> Bool {
+        guard let dictionaryID = openItemID?.uuidString else { return false }
+        return reader.bookmarks.contains {
+            $0.dictionaryID == dictionaryID && $0.key == key
+        }
+    }
+
+    /// Adds the entry on screen to the bookmarks, or removes it again.
+    public func toggleBookmark() {
+        guard let entry,
+              let dictionaryID = openItemID?.uuidString,
+              let directory = try? libraryDirectoryURL()
+        else { return }
+        let ref = EntryRef(dictionaryID: dictionaryID, key: entry.key, headword: entry.display)
+        updateReader(in: directory) { ReaderStore.toggleBookmark(ref, in: &$0) }
+    }
+
+    /// Opens a remembered entry, switching dictionaries first when needed.
+    public func openEntry(_ ref: EntryRef) async {
+        if let id = UUID(uuidString: ref.dictionaryID), id != openItemID {
+            guard let item = library.item(id: id), let directory = try? libraryDirectoryURL() else {
+                noticeMessage = "这本词典已不在词典库中。"
+                return
+            }
+            do {
+                try await openExisting(item, in: directory)
+            } catch is CancellationError {
+                return
+            } catch {
+                errorMessage = error.localizedDescription
+                return
+            }
+        }
+        await select(key: ref.key)
+    }
+
+    /// Loads `reader.json` once per storage folder.
+    private func loadReader(in directory: URL) {
+        guard readerDirectory != directory else { return }
+        readerDirectory = directory
+        let result = ReaderStore.loadResult(in: directory)
+        reader = result.state
+        if result.recoveredFromCorruptFile {
+            noticeMessage = "阅读记录文件已损坏，已重置。"
+        }
+    }
+
+    /// Applies `change` to the reader state and writes it back right away.
+    private func updateReader(in directory: URL, _ change: (inout ReaderState) -> Void) {
+        loadReader(in: directory)
+        change(&reader)
+        do {
+            try ReaderStore.save(reader, in: directory)
+        } catch {
+            libraryLog.error("could not save the reader state: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Remembers an entry that resolved and is now on screen.
+    private func recordHistory(for entry: DictionaryEntry) {
+        guard let dictionaryID = openItemID?.uuidString,
+              let directory = try? libraryDirectoryURL()
+        else { return }
+        let ref = EntryRef(dictionaryID: dictionaryID, key: entry.key, headword: entry.display)
+        updateReader(in: directory) { ReaderStore.recordHistory(ref, in: &$0) }
     }
 
     /// Delete a conversion that only existed to be copied into the library.
@@ -654,6 +744,7 @@ public final class DictionaryStore {
                 if loaded.key != requestedKey {
                     await followRedirect(to: loaded)
                 }
+                recordHistory(for: loaded)
             case let .missingTarget(target, _):
                 entry = previous
                 noticeMessage = "重定向目标不存在：\(target)"
