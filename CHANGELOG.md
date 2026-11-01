@@ -17,7 +17,7 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   sheet lists recent entries and bookmarks, and the entry toolbar toggles a
   bookmark for the entry on screen.
 * Library: opening a second dictionary no longer replaces the first. Up to
-  eight stay open at once, the sidebar lists every library entry with its open
+  eight stay open at once, the library sheet lists every entry with its open
   state and highlights the active one, and closing the active dictionary falls
   back to another open one instead of the empty state.
 * Library: the set of open dictionaries is remembered in `library.json` and
@@ -31,6 +31,17 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   each) and the sidebar groups the results under each dictionary's name.
   Picking a hit switches dictionaries first, so history and bookmarks are
   recorded against the dictionary the entry came from.
+
+### Changed
+
+* Sidebar: the dictionary group is gone. The sidebar is the search field plus
+  the hits grouped by dictionary; opening, switching and closing dictionaries
+  stays in the library sheet, whose rows already carry open/switch/current and
+  close.
+* Entry reader: every open dictionary's entry for the selected word now shares
+  one scrolling page. Sections are separated by a rule and titled with the
+  dictionary name; a word only one open dictionary carries keeps the plain
+  look, without title or rule.
 
 ## [0.2.0] - 2026-11-01
 

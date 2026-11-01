@@ -28,6 +28,9 @@ public struct HTMLRenderView: View {
     private let resources: @MainActor @Sendable (String) -> Data?
     private let onEntryLink: @MainActor @Sendable (String) -> Void
     private let onOutcome: (@MainActor (EntryRenderOutcome) -> Void)?
+    /// Reports how tall the document is, so a page can stack several entries
+    /// instead of giving each one a scrolling window of its own.
+    private let onContentHeight: (@MainActor (CGFloat) -> Void)?
 
     /// - Parameters:
     ///   - html: The entry's raw HTML.
@@ -38,12 +41,14 @@ public struct HTMLRenderView: View {
         html: String,
         resources: @escaping @MainActor @Sendable (String) -> Data? = { _ in nil },
         onEntryLink: @escaping @MainActor @Sendable (String) -> Void = { _ in },
-        onOutcome: (@MainActor (EntryRenderOutcome) -> Void)? = nil
+        onOutcome: (@MainActor (EntryRenderOutcome) -> Void)? = nil,
+        onContentHeight: (@MainActor (CGFloat) -> Void)? = nil
     ) {
         self.html = html
         self.resources = resources
         self.onEntryLink = onEntryLink
         self.onOutcome = onOutcome
+        self.onContentHeight = onContentHeight
     }
 
     public var body: some View {
@@ -51,7 +56,8 @@ public struct HTMLRenderView: View {
             html: html,
             resources: resources,
             onEntryLink: onEntryLink,
-            onOutcome: onOutcome
+            onOutcome: onOutcome,
+            onContentHeight: onContentHeight
         )
     }
 }
@@ -63,6 +69,10 @@ final class HTMLRenderer: NSObject, WKNavigationDelegate {
     var onEntryLink: (@MainActor @Sendable (String) -> Void)?
     /// Reports the document's fate so the reader can replace a blank web view.
     var onOutcome: (@MainActor (EntryRenderOutcome) -> Void)?
+    /// Reports the document's height when someone is stacking entries.
+    var onContentHeight: (@MainActor (CGFloat) -> Void)?
+    /// Width the last reported height was measured at; a resize invalidates it.
+    private var measuredWidth: CGFloat?
     /// Last document handed to the web view; reloading the same HTML would only
     /// make SwiftUI redraws flicker.
     private var loadedHTML: String?
@@ -130,6 +140,39 @@ final class HTMLRenderer: NSObject, WKNavigationDelegate {
         renderLog.debug("start \(webView.url?.absoluteString ?? "-", privacy: .public)")
     }
 
+    /// Re-read the document height after the layout settled.
+    ///
+    /// The height depends on how wide the entry is laid out, so a column resize
+    /// has to re-measure; an unchanged width is skipped to keep SwiftUI from
+    /// looping on its own height updates.
+    func measureContentHeightAfterLayout() {
+        Task { @MainActor in
+            await Task.yield()
+            self.measureContentHeight()
+        }
+    }
+
+    /// Ask the document how tall it is and hand the answer to `onContentHeight`.
+    func measureContentHeight() {
+        guard onContentHeight != nil else { return }
+        let width = webView.bounds.width
+        if let measuredWidth, abs(measuredWidth - width) < 0.5 { return }
+        measuredWidth = width
+        webView.evaluateJavaScript(
+            "(function () { var body = document.body; if (!body) { return 0; } " +
+            "var style = getComputedStyle(body); " +
+            "return Math.ceil(body.getBoundingClientRect().height " +
+            "+ parseFloat(style.marginTop || 0) + parseFloat(style.marginBottom || 0)); })()"
+        ) { [weak self] value, error in
+            Task { @MainActor in
+                guard let self, error == nil, let height = value as? NSNumber else { return }
+                let reported = CGFloat(truncating: height)
+                guard reported > 0 else { return }
+                self.onContentHeight?(reported)
+            }
+        }
+    }
+
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         renderLog.debug("finish \(webView.url?.absoluteString ?? "-", privacy: .public)")
         // -1 means the document was not a complete page; measuring it would
@@ -147,6 +190,16 @@ final class HTMLRenderer: NSObject, WKNavigationDelegate {
                 renderLog.debug("visible characters: \(characters)")
                 self.onOutcome?(.loaded(visibleCharacters: characters))
             }
+        }
+        // A new document invalidates the old width, so measure it afresh.
+        measuredWidth = nil
+        measureContentHeight()
+        Task { @MainActor in
+            // Images and late fonts can still grow the document; one more look
+            // a moment later keeps the section from clipping them.
+            try? await Task.sleep(for: .milliseconds(500))
+            self.measuredWidth = nil
+            self.measureContentHeight()
         }
     }
 
@@ -305,6 +358,7 @@ private struct HTMLRenderRepresentable: NSViewRepresentable {
     let resources: @MainActor @Sendable (String) -> Data?
     let onEntryLink: @MainActor @Sendable (String) -> Void
     let onOutcome: (@MainActor (EntryRenderOutcome) -> Void)?
+    let onContentHeight: (@MainActor (CGFloat) -> Void)?
 
     func makeCoordinator() -> HTMLRenderer {
         HTMLRenderer(resources: resources)
@@ -317,11 +371,13 @@ private struct HTMLRenderRepresentable: NSViewRepresentable {
 
     func updateNSView(_ nsView: WKWebView, context: Context) {
         update(context.coordinator)
+        context.coordinator.measureContentHeightAfterLayout()
     }
 
     private func update(_ renderer: HTMLRenderer) {
         renderer.onEntryLink = onEntryLink
         renderer.onOutcome = onOutcome
+        renderer.onContentHeight = onContentHeight
         renderer.load(html: html)
     }
 }
@@ -333,6 +389,7 @@ private struct HTMLRenderRepresentable: UIViewRepresentable {
     let resources: @MainActor @Sendable (String) -> Data?
     let onEntryLink: @MainActor @Sendable (String) -> Void
     let onOutcome: (@MainActor (EntryRenderOutcome) -> Void)?
+    let onContentHeight: (@MainActor (CGFloat) -> Void)?
 
     func makeCoordinator() -> HTMLRenderer {
         HTMLRenderer(resources: resources)
@@ -345,11 +402,13 @@ private struct HTMLRenderRepresentable: UIViewRepresentable {
 
     func updateUIView(_ uiView: WKWebView, context: Context) {
         update(context.coordinator)
+        context.coordinator.measureContentHeightAfterLayout()
     }
 
     private func update(_ renderer: HTMLRenderer) {
         renderer.onEntryLink = onEntryLink
         renderer.onOutcome = onOutcome
+        renderer.onContentHeight = onContentHeight
         renderer.load(html: html)
     }
 }

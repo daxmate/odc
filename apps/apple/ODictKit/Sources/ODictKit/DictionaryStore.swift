@@ -5,6 +5,31 @@ import OSLog
 /// Library diagnostics; stale entries are dropped quietly instead of via alerts.
 private let libraryLog = Logger(subsystem: "com.daxmate.odict", category: "library")
 
+/// One dictionary's share of the detail page.
+///
+/// A word can live in several open dictionaries at once; the detail page stacks
+/// their entries on one scroll view, so each section carries its own name and
+/// its own handle-backed entry.
+public struct DictionaryEntrySection: Identifiable, Sendable, Equatable {
+    /// Library identifier of the dictionary this section belongs to.
+    public let dictionaryID: UUID
+    /// Display name, copied so the section stays readable after the item is gone.
+    public let name: String
+    /// The dictionary's entry for the key on screen.
+    public let entry: DictionaryEntry
+    /// Note about how the entry resolved (a redirect target), `nil` when direct.
+    public let notice: String?
+
+    public var id: UUID { dictionaryID }
+
+    public init(dictionaryID: UUID, name: String, entry: DictionaryEntry, notice: String?) {
+        self.dictionaryID = dictionaryID
+        self.name = name
+        self.entry = entry
+        self.notice = notice
+    }
+}
+
 /// Observable state for the read-only dictionary UI.
 @MainActor
 @Observable
@@ -48,6 +73,11 @@ public final class DictionaryStore {
     public private(set) var isDeduplicating = false
     /// Dictionaries that are open right now, in the order they were opened.
     public private(set) var openDictionaries: [OpenDictionary] = []
+    /// Entries for the key on screen, one per open dictionary, active first.
+    ///
+    /// The detail page draws these as sections, so a word carried by two
+    /// dictionaries reads on one page instead of one dictionary at a time.
+    public private(set) var entrySections: [DictionaryEntrySection] = []
     /// Results of the last search, one group per dictionary that answered.
     ///
     /// Groups follow the order in `openDictionaries`, so the sidebar does not
@@ -171,6 +201,7 @@ public final class DictionaryStore {
             }
         }
         persistOpenState(in: try? libraryDirectoryURL())
+        refreshEntrySections()
     }
 
     /// Make `id` the dictionary the detail column follows.
@@ -267,6 +298,7 @@ public final class DictionaryStore {
         selectedKey = nil
         entry = nil
         noticeMessage = nil
+        entrySections = []
     }
 
     private func resetEverything() {
@@ -889,10 +921,89 @@ public final class DictionaryStore {
         }
     }
 
-    /// Read a resource (stylesheet, image…) from the active dictionary.
-    public func resource(for key: String) -> Data? {
-        guard let activeHandle else { return nil }
-        return try? activeHandle.resource(for: key)
+    /// Read a resource (stylesheet, image…) from one open dictionary.
+    ///
+    /// Each section on the detail page resolves its own resources; a page-level
+    /// lookup would serve the active dictionary's copy to every section.
+    public func resource(for key: String, in dictionaryID: UUID) -> Data? {
+        guard let handle = handles[dictionaryID] else { return nil }
+        return try? handle.resource(for: key)
+    }
+
+    /// Resolve a key against one open dictionary without touching the selection.
+    ///
+    /// The detail page's sections navigate on their own: a link followed inside
+    /// one dictionary must not move the others. `nil` means that dictionary has
+    /// nothing for the key.
+    public func entrySection(for key: String, in dictionaryID: UUID) -> DictionaryEntrySection? {
+        guard let dictionary = openDictionaries.first(where: { $0.id == dictionaryID }),
+              let resolved = resolveSection(key: key, dictionaryID: dictionaryID)
+        else { return nil }
+        return DictionaryEntrySection(
+            dictionaryID: dictionaryID,
+            name: displayName(of: dictionary),
+            entry: resolved.entry,
+            notice: resolved.notice
+        )
+    }
+
+    /// Rebuild `entrySections` for the key on screen.
+    ///
+    /// The active dictionary leads and the rest follow the order they were
+    /// opened in; a dictionary that does not carry the key adds no section.
+    public func refreshEntrySections() {
+        guard let key = selectedKey else {
+            entrySections = []
+            return
+        }
+        let activeID = activeDictionaryID
+        var sections: [DictionaryEntrySection] = []
+        for dictionary in orderedOpenDictionaries() {
+            // The active dictionary already holds the resolved entry (and its
+            // history side effects); the others are looked up quietly.
+            let resolved: (entry: DictionaryEntry, notice: String?)?
+            if dictionary.id == activeID, let entry = self.entry, entry.key == key {
+                resolved = (entry, nil)
+            } else {
+                resolved = resolveSection(key: key, dictionaryID: dictionary.id)
+            }
+            guard let resolved else { continue }
+            sections.append(
+                DictionaryEntrySection(
+                    dictionaryID: dictionary.id,
+                    name: displayName(of: dictionary),
+                    entry: resolved.entry,
+                    notice: resolved.notice
+                )
+            )
+        }
+        entrySections = sections
+    }
+
+    /// Open dictionaries with the active one first, so it stays on top.
+    private func orderedOpenDictionaries() -> [OpenDictionary] {
+        guard let activeDictionaryID,
+              let active = openDictionaries.first(where: { $0.id == activeDictionaryID })
+        else { return openDictionaries }
+        return [active] + openDictionaries.filter { $0.id != activeDictionaryID }
+    }
+
+    /// Name shown to readers; the library copy wins over the opened one.
+    private func displayName(of dictionary: OpenDictionary) -> String {
+        library.items.first { $0.id == dictionary.id }?.displayName ?? dictionary.name
+    }
+
+    /// One dictionary's answer for a key, or `nil` when it has none.
+    private func resolveSection(
+        key: String,
+        dictionaryID: UUID
+    ) -> (entry: DictionaryEntry, notice: String?)? {
+        guard let handle = handles[dictionaryID], let result = try? handle.resolve(key) else {
+            return nil
+        }
+        guard case let .entry(entry, requestedKey, _) = result else { return nil }
+        let notice = entry.key == requestedKey ? nil : "重定向到 \(entry.key)"
+        return (entry, notice)
     }
 
     /// Load `key` from the active dictionary and show it.
@@ -929,6 +1040,7 @@ public final class DictionaryStore {
         } catch {
             errorMessage = error.localizedDescription
         }
+        refreshEntrySections()
     }
 
     /// Show an entry a grouped result names, switching dictionaries first.

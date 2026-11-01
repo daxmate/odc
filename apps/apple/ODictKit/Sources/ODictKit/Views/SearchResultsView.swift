@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// Sidebar: the dictionaries that are open and the hits of the current query,
-/// grouped by dictionary.
+/// Sidebar: the hits of the current query, grouped by dictionary.
 public struct SearchResultsView: View {
     private let store: DictionaryStore
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -48,7 +47,6 @@ public struct SearchResultsView: View {
 
     private var splitList: some View {
         List(selection: hitSelection) {
-            dictionarySection
             splitResults
             emptyResultsRow
         }
@@ -64,74 +62,12 @@ public struct SearchResultsView: View {
 
     private var stackList: some View {
         List {
-            dictionarySection
             stackResults
             emptyResultsRow
         }
         .searchable(text: queryBinding, prompt: "搜索词条")
         .onSubmit(of: .search) { store.submitQuery() }
         .navigationTitle(store.documentName ?? "ODict")
-    }
-
-    /// Every dictionary in the library, with the open ones marked.
-    ///
-    /// Tapping a row opens a closed dictionary or switches to an open one; the
-    /// trailing button closes it without forgetting the copy.
-    private var dictionarySection: some View {
-        Section("词典") {
-            if store.library.items.isEmpty {
-                Text("还没有词典")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
-            ForEach(store.library.items) { item in
-                dictionaryRow(for: item)
-            }
-        }
-    }
-
-    private func dictionaryRow(for item: LibraryItem) -> some View {
-        let isOpen = store.isOpen(item.id)
-        let isActive = store.isActive(item.id)
-        return HStack(spacing: 8) {
-            Button {
-                openOrActivate(item)
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: isOpen ? "book.fill" : "book.closed")
-                        .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
-                    Text(item.displayName)
-                        .lineLimit(1)
-                        .fontWeight(isActive ? .semibold : .regular)
-                    Spacer(minLength: 0)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(
-                isOpen
-                    ? "切换到 \(item.displayName)"
-                    : "打开 \(item.displayName)"
-            )
-            if isOpen {
-                Button {
-                    store.closeLibraryItem(id: item.id)
-                } label: {
-                    Image(systemName: "xmark.circle")
-                }
-                .buttonStyle(.borderless)
-                .accessibilityLabel("关闭 \(item.displayName)")
-            }
-        }
-        .listRowBackground(isActive ? Color.accentColor.opacity(0.12) : Color.clear)
-    }
-
-    private func openOrActivate(_ item: LibraryItem) {
-        if store.isOpen(item.id) {
-            store.activateDictionary(id: item.id)
-        } else {
-            store.open(item: item.id)
-        }
     }
 
     private var splitResults: some View {

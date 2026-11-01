@@ -371,4 +371,87 @@ final class MultiDictionaryTests: XCTestCase {
         XCTAssertEqual(store.openDictionaries.map(\.id), expected)
         XCTAssertEqual(store.activeDictionaryID, items.last?.id)
     }
+
+    // MARK: - Detail page sections
+
+    func testEntrySectionsKeepEveryOpenDictionaryThatCarriesTheKey() async throws {
+        let container = try makeContainer()
+        let items = try makeLibrary(in: container, count: 2)
+        let store = try await makeStore(container: container)
+        defer { store.close() }
+
+        try await open(items[0], in: store)
+        try await open(items[1], in: store)
+
+        await store.select(key: "apple", in: items[0].id)
+
+        XCTAssertEqual(store.entrySections.map(\.dictionaryID), [items[0].id, items[1].id])
+        XCTAssertEqual(store.entrySections.map(\.name), [items[0].displayName, items[1].displayName])
+        XCTAssertEqual(store.entrySections.map(\.entry.key), ["apple", "apple"])
+        XCTAssertNil(store.entrySections.first?.notice)
+    }
+
+    func testEntrySectionsPutTheActiveDictionaryFirst() async throws {
+        let container = try makeContainer()
+        let items = try makeLibrary(in: container, count: 2)
+        let store = try await makeStore(container: container)
+        defer { store.close() }
+
+        try await open(items[0], in: store)
+        try await open(items[1], in: store)
+
+        await store.select(key: "apple", in: items[1].id)
+
+        XCTAssertEqual(store.entrySections.map(\.dictionaryID), [items[1].id, items[0].id])
+    }
+
+    func testEntrySectionsSkipDictionariesWithoutTheKey() async throws {
+        let container = try makeContainer()
+        let items = try makeLibrary(in: container, count: 2)
+        let store = try await makeStore(container: container)
+        defer { store.close() }
+
+        try await open(items[0], in: store)
+        try await open(items[1], in: store)
+
+        await store.select(key: "not-a-word-in-the-fixture", in: items[0].id)
+
+        XCTAssertTrue(store.entrySections.isEmpty)
+    }
+
+    func testSectionLookupLeavesTheSelectionAlone() async throws {
+        let container = try makeContainer()
+        let items = try makeLibrary(in: container, count: 2)
+        let store = try await makeStore(container: container)
+        defer { store.close() }
+
+        try await open(items[0], in: store)
+        try await open(items[1], in: store)
+
+        await store.select(key: "apple", in: items[0].id)
+        let section = store.entrySection(for: "application", in: items[1].id)
+
+        XCTAssertEqual(section?.entry.key, "application")
+        XCTAssertEqual(section?.dictionaryID, items[1].id)
+        XCTAssertEqual(store.selectedKey, "apple")
+        XCTAssertEqual(store.activeDictionaryID, items[0].id)
+        XCTAssertEqual(store.entrySections.map(\.entry.key), ["apple", "apple"])
+    }
+
+    func testClosingADictionaryDropsItsSection() async throws {
+        let container = try makeContainer()
+        let items = try makeLibrary(in: container, count: 2)
+        let store = try await makeStore(container: container)
+        defer { store.close() }
+
+        try await open(items[0], in: store)
+        try await open(items[1], in: store)
+
+        await store.select(key: "apple", in: items[0].id)
+        XCTAssertEqual(store.entrySections.count, 2)
+
+        store.closeLibraryItem(id: items[1].id)
+
+        XCTAssertEqual(store.entrySections.map(\.dictionaryID), [items[0].id])
+    }
 }
