@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 import WebKit
 
@@ -11,21 +12,30 @@ import UIKit
 /// cannot run scripts.
 public struct HTMLRenderView: View {
     private let html: String
+    private let resources: @MainActor @Sendable (String) -> Data?
     private let onEntryLink: @MainActor @Sendable (String) -> Void
 
     /// - Parameters:
     ///   - html: The entry's raw HTML.
+    ///   - resources: Payload for one MDD key, `nil` when the dictionary has
+    ///     none. Served under the `odc-resource` scheme.
     ///   - onEntryLink: Called with a target key when a link uses `entry://`.
     public init(
         html: String,
+        resources: @escaping @MainActor @Sendable (String) -> Data? = { _ in nil },
         onEntryLink: @escaping @MainActor @Sendable (String) -> Void = { _ in }
     ) {
         self.html = html
+        self.resources = resources
         self.onEntryLink = onEntryLink
     }
 
     public var body: some View {
-        HTMLRenderRepresentable(html: html, onEntryLink: onEntryLink)
+        HTMLRenderRepresentable(
+            html: html,
+            resources: resources,
+            onEntryLink: onEntryLink
+        )
     }
 }
 
@@ -37,6 +47,11 @@ final class HTMLRenderer: NSObject, WKNavigationDelegate {
     /// Last document handed to the web view; reloading the same HTML would only
     /// make SwiftUI redraws flicker.
     private var loadedHTML: String?
+    /// Payload source for `odc-resource` links and the scheme handler.
+    private let resources: @MainActor (String) -> Data?
+    /// Speaker icons are links to an audio clip; the reader plays them in
+    /// place instead of navigating to a media file.
+    private let audio = ResourceAudioPlayer()
 
     /// Hands a tapped http(s) link to the system browser.
     private func openExternally(_ url: URL) {
@@ -47,9 +62,14 @@ final class HTMLRenderer: NSObject, WKNavigationDelegate {
         #endif
     }
 
-    override init() {
+    init(resources: @escaping @MainActor (String) -> Data?) {
+        self.resources = resources
         let configuration = WKWebViewConfiguration()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = false
+        configuration.setURLSchemeHandler(
+            ODCResourceSchemeHandler(resources: resources),
+            forURLScheme: ODCResource.scheme
+        )
         #if os(macOS)
         webView = AppearanceAwareWebView(frame: .zero, configuration: configuration)
         #else
@@ -72,7 +92,10 @@ final class HTMLRenderer: NSObject, WKNavigationDelegate {
     func load(html: String) {
         guard html != loadedHTML else { return }
         loadedHTML = html
-        webView.loadHTMLString(EntryHTML.document(html: html), baseURL: nil)
+        webView.loadHTMLString(
+            EntryHTML.document(html: EntryHTML.rewriteResources(html)),
+            baseURL: ODCResource.baseURL
+        )
     }
 
     func webView(
@@ -99,6 +122,13 @@ final class HTMLRenderer: NSObject, WKNavigationDelegate {
             } else {
                 decisionHandler(.allow, preferences)
             }
+        case "odc-resource":
+            if let key = ODCResource.key(from: url),
+               ODCResource.isAudio(key),
+               let payload = resources(key) {
+                audio.play(payload)
+            }
+            decisionHandler(.cancel, preferences)
         case "about", "data", "blob":
             decisionHandler(.allow, preferences)
         default:
@@ -107,6 +137,74 @@ final class HTMLRenderer: NSObject, WKNavigationDelegate {
     }
 }
 
+
+
+/// Plays one MDD audio clip when the reader taps a speaker icon.
+///
+/// The clips are short pronunciation samples, so a single player per reader
+/// is enough: the next clip stops the previous one.
+@MainActor
+private final class ResourceAudioPlayer {
+    private var player: AVAudioPlayer?
+
+    func play(_ data: Data) {
+        player?.stop()
+        guard let next = try? AVAudioPlayer(data: data) else { return }
+        player = next
+        next.play()
+    }
+}
+
+/// Serves MDD payloads to the web view under the `odc-resource` scheme.
+///
+/// The handler answers on the main actor and reads straight from the open
+/// repository; a missing key is a 404, which leaves the entry readable.
+@MainActor
+final class ODCResourceSchemeHandler: NSObject, WKURLSchemeHandler {
+    private let resources: @MainActor (String) -> Data?
+
+    init(resources: @escaping @MainActor (String) -> Data?) {
+        self.resources = resources
+        super.init()
+    }
+
+    func webView(_ webView: WKWebView, start urlSchemeTask: any WKURLSchemeTask) {
+        guard let url = urlSchemeTask.request.url else {
+            urlSchemeTask.didFailWithError(URLError(.badURL))
+            return
+        }
+        guard let key = ODCResource.key(from: url), let data = resources(key) else {
+            let response = HTTPURLResponse(
+                url: url,
+                statusCode: 404,
+                httpVersion: nil,
+                headerFields: nil
+            )
+            if let response {
+                urlSchemeTask.didReceive(response)
+                urlSchemeTask.didReceive(Data())
+                urlSchemeTask.didFinish()
+            } else {
+                urlSchemeTask.didFailWithError(URLError(.badURL))
+            }
+            return
+        }
+        let response = URLResponse(
+            url: url,
+            mimeType: ODCResource.mimeType(for: key),
+            expectedContentLength: data.count,
+            textEncodingName: nil
+        )
+        urlSchemeTask.didReceive(response)
+        urlSchemeTask.didReceive(data)
+        urlSchemeTask.didFinish()
+    }
+
+    func webView(_ webView: WKWebView, stop urlSchemeTask: any WKURLSchemeTask) {
+        // The payload is handed over synchronously in `start`, so there is
+        // nothing to cancel here.
+    }
+}
 #if os(macOS)
 
 /// Keeps the page background transparent when the window changes appearance;
@@ -121,10 +219,11 @@ private final class AppearanceAwareWebView: WKWebView {
 
 private struct HTMLRenderRepresentable: NSViewRepresentable {
     let html: String
+    let resources: @MainActor @Sendable (String) -> Data?
     let onEntryLink: @MainActor @Sendable (String) -> Void
 
     func makeCoordinator() -> HTMLRenderer {
-        HTMLRenderer()
+        HTMLRenderer(resources: resources)
     }
 
     func makeNSView(context: Context) -> WKWebView {
@@ -146,10 +245,11 @@ private struct HTMLRenderRepresentable: NSViewRepresentable {
 
 private struct HTMLRenderRepresentable: UIViewRepresentable {
     let html: String
+    let resources: @MainActor @Sendable (String) -> Data?
     let onEntryLink: @MainActor @Sendable (String) -> Void
 
     func makeCoordinator() -> HTMLRenderer {
-        HTMLRenderer()
+        HTMLRenderer(resources: resources)
     }
 
     func makeUIView(context: Context) -> WKWebView {

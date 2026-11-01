@@ -43,7 +43,14 @@ final class MDXImportTests: XCTestCase {
             "encrypted": null,
             "records": 339814
           },
-          "output_bytes": 221196288
+          "output_bytes": 221196288,
+          "mdd_files": [
+            { "path": "/tmp/dictionary.mdd", "entries": 3, "bytes": 4096 },
+            { "path": "/tmp/dictionary.1.mdd", "entries": 2, "bytes": 2048 }
+          ],
+          "resource_count": 5,
+          "resource_bytes": 6144,
+          "warnings": ["/tmp/dictionary.2.mdd: unexpected end of file"]
         }
         """
         let report = try MDXImportReport.decode(from: Data(json.utf8))
@@ -53,7 +60,14 @@ final class MDXImportTests: XCTestCase {
         XCTAssertEqual(report.corruptBlocks.first?.ordinal, 1601)
         XCTAssertEqual(report.header.engineVersion, "2.0")
         XCTAssertNil(report.scanWarning)
-        XCTAssertEqual(report.summary, "已导入 339814 条，跳过 1 个损坏块（123 条）")
+        XCTAssertEqual(report.mddFiles.count, 2)
+        XCTAssertEqual(report.mddFiles.first?.entries, 3)
+        XCTAssertEqual(report.resourceCount, 5)
+        XCTAssertEqual(report.resourceBytes, 6144)
+        XCTAssertEqual(report.warnings.count, 1)
+        XCTAssertTrue(report.summary.hasPrefix("已导入 339814 条，跳过 1 个损坏块（123 条）"))
+        XCTAssertTrue(report.summary.contains("资源 5 个"))
+        XCTAssertTrue(report.summary.contains("dictionary.2.mdd"))
     }
 
     func testSummaryKeepsTheScanWarning() throws {
@@ -132,5 +146,50 @@ final class MDXImportTests: XCTestCase {
         } catch MDXImportError.unsupportedSource {
             // Expected.
         }
+    }
+
+    // MARK: - MDD volume discovery
+
+    func testVolumesAreDiscoveredInImportOrder() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "odc-volumes-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let names = [
+            "dictionary.10.mdd",
+            "dictionary.2.mdd",
+            "dictionary.mdd",
+            "dictionary.mdx",
+            "dictionary.1.mdd",
+            "other.mdd",
+        ]
+        for name in names {
+            FileManager.default.createFile(
+                atPath: directory.appending(path: name).path,
+                contents: Data()
+            )
+        }
+        let source = directory.appending(path: "dictionary.mdx")
+        let found = MDXImporter.volumes(for: source).map { $0.lastPathComponent }
+        XCTAssertEqual(
+            found,
+            ["dictionary.mdd", "dictionary.1.mdd", "dictionary.2.mdd", "dictionary.10.mdd"]
+        )
+    }
+
+    func testVolumeDiscoveryIgnoresOtherDictionaries() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "odc-volumes-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let names = ["dictionary.mdx", "dictionary-extra.mdd", "dictionary.x.mdd", "other.3.mdd"]
+        for name in names {
+            FileManager.default.createFile(
+                atPath: directory.appending(path: name).path,
+                contents: Data()
+            )
+        }
+        let source = directory.appending(path: "dictionary.mdx")
+        XCTAssertEqual(MDXImporter.volumes(for: source), [])
     }
 }

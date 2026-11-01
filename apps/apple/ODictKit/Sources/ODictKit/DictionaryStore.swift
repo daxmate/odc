@@ -188,9 +188,20 @@ public final class DictionaryStore {
     public func openDocument(url: URL) {
         if url.pathExtension.lowercased() == "mdx" {
             importMDX(url: url)
+        } else if isDirectory(url), !FileManager.default.fileExists(
+            atPath: url.appending(path: "odc.db").path
+        ), let mdx = MDXImporter.singleMDX(in: url) {
+            // A picked folder that is not a repository but holds one MDX:
+            // import that dictionary, so its sibling MDD volumes are readable.
+            importMDX(url: mdx)
         } else {
             open(url: url)
         }
+    }
+
+    /// Whether `url` points at a directory on disk.
+    private func isDirectory(_ url: URL) -> Bool {
+        (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
     }
 
     /// Convert `url` into a standalone `.odc` document and open the result.
@@ -513,6 +524,15 @@ public final class DictionaryStore {
             hits = []
             errorMessage = error.localizedDescription
         }
+    }
+
+    /// Payload for an MDD resource key, `nil` when the dictionary has none.
+    ///
+    /// The entry reader calls this from the web view's scheme handler, so it
+    /// must stay synchronous and cheap: the core reads one indexed block.
+    public func resource(for key: String) -> Data? {
+        guard let dictionary else { return nil }
+        return try? dictionary.resource(for: key)
     }
 
     // MARK: - Selection

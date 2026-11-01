@@ -151,4 +151,76 @@ final class EntryHTMLTests: XCTestCase {
     func testEntryTargetIsNilForOtherSchemes() {
         XCTAssertNil(EntryHTML.entryTarget(from: URL(string: "https://example.com/apple")!))
     }
+
+    // MARK: - rewriteResources(_:)
+
+    func testRelativeImageSourceIsRoutedToTheResourceScheme() {
+        let html = "<p><img src=\"pic/apple.png\"></p>"
+        XCTAssertTrue(
+            EntryHTML.rewriteResources(html)
+                .contains("src=\"odc-resource:///pic/apple.png\"")
+        )
+    }
+
+    func testBackslashPathsAreNormalised() {
+        let html = "<img src=\"\\pic\\apple.png\">"
+        XCTAssertTrue(
+            EntryHTML.rewriteResources(html)
+                .contains("src=\"odc-resource:///pic/apple.png\"")
+        )
+    }
+
+    func testAbsoluteAndEntryLinksAreUntouched() {
+        let html = """
+        <img src="https://example.com/a.png">
+        <a href="entry://apple">apple</a>
+        <a href="#top">top</a>
+        <img src="data:image/png;base64,AAAA">
+        """
+        let rewritten = EntryHTML.rewriteResources(html)
+        XCTAssertTrue(rewritten.contains("src=\"https://example.com/a.png\""))
+        XCTAssertTrue(rewritten.contains("href=\"entry://apple\""))
+        XCTAssertTrue(rewritten.contains("href=\"#top\""))
+        XCTAssertTrue(rewritten.contains("src=\"data:image/png;base64,AAAA\""))
+    }
+
+    func testCssURLsAreRewritten() {
+        let html = "<style>.icon { background: url(\\pic\\icon.png); }</style>"
+        XCTAssertTrue(
+            EntryHTML.rewriteResources(html)
+                .contains("url(odc-resource:///pic/icon.png)")
+        )
+    }
+
+    func testAudioElementsAreRouted() {
+        let html = "<audio controls src=\"\\sound\\apple.mp3\"></audio>"
+        XCTAssertTrue(
+            EntryHTML.rewriteResources(html)
+                .contains("src=\"odc-resource:///sound/apple.mp3\"")
+        )
+    }
+
+    func testHtmlWithoutResourcesIsUnchanged() {
+        let html = "<p>apple</p>"
+        XCTAssertEqual(EntryHTML.rewriteResources(html), html)
+    }
+
+    func testSoundLinksAreRoutedToTheRepository() {
+        let html = "<a href=\"sound://hwd/ame/8/memory.mp3\"><img src=\"img/spkr_b.png\"></a>"
+        let rewritten = EntryHTML.rewriteResources(html)
+        XCTAssertTrue(
+            rewritten.contains("href=\"odc-resource:///hwd/ame/8/memory.mp3\""),
+            rewritten
+        )
+        XCTAssertTrue(rewritten.contains("src=\"odc-resource:///img/spkr_b.png\""), rewritten)
+    }
+
+    func testDoubleSlashResourcesAreRouted() {
+        let html = "<audio src=\"//sound/apple.mp3\"></audio>"
+        XCTAssertTrue(
+            EntryHTML.rewriteResources(html)
+                .contains("src=\"odc-resource:///sound/apple.mp3\"")
+        )
+    }
+
 }

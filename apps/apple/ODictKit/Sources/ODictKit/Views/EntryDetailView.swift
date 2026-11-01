@@ -55,9 +55,13 @@ public struct EntryDetailView: View {
     /// The dictionary's own HTML leads; the parsed fields stay one disclosure away.
     private func renderedEntry(_ entry: DictionaryEntry, html: String) -> some View {
         VStack(spacing: 0) {
-            HTMLRenderView(html: html) { target in
-                Task { await store.select(key: target) }
-            }
+            HTMLRenderView(
+                html: html,
+                resources: { key in store.resource(for: key) },
+                onEntryLink: { target in
+                    Task { await store.select(key: target) }
+                }
+            )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             DisclosureGroup("结构化释义") {
                 ScrollView {

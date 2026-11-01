@@ -76,6 +76,13 @@ public struct MDXImportReport: Decodable, Equatable, Sendable {
         public let records: UInt64
     }
 
+    /// One MDD volume that was imported.
+    public struct MDDFile: Decodable, Equatable, Sendable {
+        public let path: String
+        public let entries: Int
+        public let bytes: UInt64
+    }
+
     /// One record block the importer refused to read.
     public struct CorruptBlock: Decodable, Equatable, Sendable {
         public let ordinal: UInt64
@@ -100,6 +107,44 @@ public struct MDXImportReport: Decodable, Equatable, Sendable {
     public let scanWarning: String?
     public let header: Header
     public let outputBytes: UInt64
+    /// MDD volumes read next to the source, in import order.
+    public let mddFiles: [MDDFile]
+    /// Resources stored for the entries after the import.
+    public let resourceCount: Int
+    /// Payload bytes of those resources.
+    public let resourceBytes: UInt64
+    /// Non-fatal problems: unreadable or corrupt MDD volumes.
+    public let warnings: [String]
+
+    /// Keys the report uses; the MDD fields stay optional so a report from an
+    /// older core still decodes.
+    private enum CodingKeys: String, CodingKey {
+        case importedEntries, written, removed, skippedBlocks, skippedEntries
+        case corruptBlocks, deduplicated, skippedEmpty, skippedOversized
+        case workingSet, scanWarning, header, outputBytes
+        case mddFiles, resourceCount, resourceBytes, warnings
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        importedEntries = try container.decode(Int.self, forKey: .importedEntries)
+        written = try container.decode(Int.self, forKey: .written)
+        removed = try container.decode(Int.self, forKey: .removed)
+        skippedBlocks = try container.decode(Int.self, forKey: .skippedBlocks)
+        skippedEntries = try container.decode(Int.self, forKey: .skippedEntries)
+        corruptBlocks = try container.decode([CorruptBlock].self, forKey: .corruptBlocks)
+        deduplicated = try container.decode(Int.self, forKey: .deduplicated)
+        skippedEmpty = try container.decode(Int.self, forKey: .skippedEmpty)
+        skippedOversized = try container.decode(Int.self, forKey: .skippedOversized)
+        workingSet = try container.decode(Int.self, forKey: .workingSet)
+        scanWarning = try container.decodeIfPresent(String.self, forKey: .scanWarning)
+        header = try container.decode(Header.self, forKey: .header)
+        outputBytes = try container.decode(UInt64.self, forKey: .outputBytes)
+        mddFiles = try container.decodeIfPresent([MDDFile].self, forKey: .mddFiles) ?? []
+        resourceCount = try container.decodeIfPresent(Int.self, forKey: .resourceCount) ?? 0
+        resourceBytes = try container.decodeIfPresent(UInt64.self, forKey: .resourceBytes) ?? 0
+        warnings = try container.decodeIfPresent([String].self, forKey: .warnings) ?? []
+    }
 
     /// One-line, user-facing summary of the conversion.
     public var summary: String {
@@ -110,7 +155,20 @@ public struct MDXImportReport: Decodable, Equatable, Sendable {
         if let scanWarning, !scanWarning.isEmpty {
             parts.append("⚠︎ \(scanWarning)")
         }
+        if resourceCount > 0 {
+            parts.append("资源 \(resourceCount) 个（\(Self.byteCount(resourceBytes))）")
+        } else if !mddFiles.isEmpty {
+            parts.append("未读到资源")
+        }
+        for warning in warnings {
+            parts.append("⚠︎ \(warning)")
+        }
         return parts.joined(separator: "，")
+    }
+
+    /// Human-readable byte count, e.g. "12.4 MB".
+    static func byteCount(_ bytes: UInt64) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
     }
 
     /// Decode a report produced by the C ABI.
@@ -167,34 +225,67 @@ public enum MDXImporter {
         progress: (@Sendable (MDXImportPhase) -> Void)?
     ) throws -> MDXImportResult {
         progress?(.preparing)
-        let scoped = source.startAccessingSecurityScopedResource()
+        // The picker only grants the file the user chose. Sibling MDD volumes
+        // need their own scope, which the importer holds for the whole run.
+        var scopes: [(url: URL, active: Bool)] = []
+        func claim(_ url: URL) -> URL {
+            scopes.append((url, url.startAccessingSecurityScopedResource()))
+            return url
+        }
         defer {
-            if scoped {
-                source.stopAccessingSecurityScopedResource()
+            for scope in scopes where scope.active {
+                scope.url.stopAccessingSecurityScopedResource()
             }
         }
+        _ = claim(source)
 
         guard source.pathExtension.lowercased() == "mdx" else {
             throw MDXImportError.unsupportedSource(source.lastPathComponent)
         }
         let output = try outputURL(for: source, documents: documents)
 
+        let volumes = volumes(for: source).map(claim)
         progress?(.importing)
-        let report = try runCore(source: source, output: output)
+        let report = try runCore(source: source, output: output, volumes: volumes)
         progress?(.finished)
         return MDXImportResult(outputURL: output, report: report)
     }
 
-    private static func runCore(source: URL, output: URL) throws -> MDXImportReport {
+    private static func runCore(
+        source: URL,
+        output: URL,
+        volumes: [URL]
+    ) throws -> MDXImportReport {
         var reportPointer: UnsafeMutablePointer<CChar>?
         var errorPointer: UnsafeMutablePointer<CChar>?
         let sourcePath = source.path
         let outputPath = output.path
-        let code = sourcePath.withCString { sourceCString in
+        let volumeList = volumes.isEmpty ? nil : volumes.map(\.path)
+        let volumeJSON = volumeList.flatMap { list -> Data? in
+            try? JSONSerialization.data(withJSONObject: list, options: [])
+        }
+        let code: Int32 = sourcePath.withCString { sourceCString in
             outputPath.withCString { outputCString in
-                odc_import_mdx_to_odc(sourceCString, outputCString, &reportPointer, &errorPointer)
+                if let volumeJSON, let json = String(data: volumeJSON, encoding: .utf8) {
+                    return json.withCString { jsonCString in
+                        odc_import_mdx_to_odc_with_mdd(
+                            sourceCString,
+                            outputCString,
+                            jsonCString,
+                            &reportPointer,
+                            &errorPointer
+                        )
+                    }
+                }
+                return odc_import_mdx_to_odc(
+                    sourceCString,
+                    outputCString,
+                    &reportPointer,
+                    &errorPointer
+                )
             }
         }
+
 
         let failure = errorPointer.map { pointer -> String in
             defer { odc_string_free(pointer) }
@@ -212,6 +303,74 @@ public enum MDXImporter {
         defer { odc_string_free(reportPointer) }
         let data = Data(bytes: reportPointer, count: strlen(reportPointer))
         return try MDXImportReport.decode(from: data)
+    }
+
+
+    /// The only `.mdx` at the top level of `directory`, when exactly one exists.
+    ///
+    /// Lets the file importer accept the dictionary folder itself, which is
+    /// the only way a sandboxed app gets read access to the sibling `.mdd`
+    /// volumes.
+    public static func singleMDX(
+        in directory: URL,
+        fileManager: FileManager = .default
+    ) -> URL? {
+        guard let entries = try? fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return nil }
+        let candidates = entries.filter { $0.pathExtension.lowercased() == "mdx" }
+        return candidates.count == 1 ? candidates[0] : nil
+    }
+
+    /// MDD volumes that belong to `source`, in import order.
+    ///
+    /// The main volume (`<name>.mdd`) comes first, then the numbered ones in
+    /// ascending numeric order, so `.10` sorts after `.2`. An unreadable
+    /// directory (a sandbox without scope on the folder) simply yields no
+    /// volumes; the core repeats the discovery when the list is empty.
+    public static func volumes(
+        for source: URL,
+        fileManager: FileManager = .default
+    ) -> [URL] {
+        let stem = source.deletingPathExtension().lastPathComponent.lowercased()
+        guard !stem.isEmpty else { return [] }
+        let directory = source.deletingLastPathComponent()
+        guard let entries = try? fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+        var main: URL?
+        var numbered: [(Int, URL)] = []
+        for url in entries {
+            guard let number = volumeNumber(of: url.lastPathComponent, stem: stem) else {
+                continue
+            }
+            if number == 0 {
+                main = main ?? url
+            } else {
+                numbered.append((number, url))
+            }
+        }
+        numbered.sort { $0.0 < $1.0 }
+        return (main.map { [$0] } ?? []) + numbered.map(\.1)
+    }
+
+    /// Volume number encoded in `name` for a dictionary called `stem`.
+    private static func volumeNumber(of name: String, stem: String) -> Int? {
+        let lowered = name.lowercased()
+        guard lowered.hasSuffix(".mdd") else { return nil }
+        let base = String(lowered.dropLast(4))
+        if base == stem { return 0 }
+        let prefix = stem + "."
+        guard base.hasPrefix(prefix) else { return nil }
+        let suffix = base.dropFirst(prefix.count)
+        guard !suffix.isEmpty, suffix.allSatisfy(\.isNumber), let number = Int(suffix) else {
+            return nil
+        }
+        return number
     }
 
     private static func destinationDirectory(

@@ -9,6 +9,8 @@ public enum OdcError: LocalizedError, Equatable {
     case searchFailed(String)
     /// `odc_repo_entry_json` failed (including "entry not found").
     case entryFailed(String)
+    /// `odc_repo_resource_len` / `odc_repo_resource_copy` failed.
+    case resourceFailed(String)
     /// `limit` was outside the range the C ABI accepts.
     case invalidLimit(Int)
     /// The dictionary was already closed.
@@ -22,6 +24,8 @@ public enum OdcError: LocalizedError, Equatable {
             return "无法打开词典：\(detail)"
         case .searchFailed(let detail):
             return "搜索失败：\(detail)"
+        case .resourceFailed(let detail):
+            return "读取资源失败：\(detail)"
         case .entryFailed(let detail):
             return "读取词条失败：\(detail)"
         case .invalidLimit(let limit):
@@ -120,6 +124,48 @@ public final class OdcDictionary {
         repo = nil
     }
 
+
+    /// Payload stored for `key`, or `nil` when the dictionary has no such
+    /// resource.
+    ///
+    /// The key is normalised by the core (backslashes, leading slashes and
+    /// case are all tolerated), so `pic/apple.png` and `\\pic\\Apple.png`
+    /// reach the same payload.
+    public func resource(for key: String) throws -> Data? {
+        let handle = try requireHandle()
+        var error: UnsafeMutablePointer<CChar>?
+        var length: UInt64 = 0
+        let found = key.withCString { keyPointer in
+            odc_repo_resource_len(handle, keyPointer, &length, &error)
+        }
+        switch found {
+        case 0:
+            return nil
+        case 1:
+            break
+        default:
+            throw OdcError.resourceFailed(Self.take(error) ?? "无法读取资源：\(key)")
+        }
+        let count = Int(length)
+        var bytes = [UInt8](repeating: 0, count: count)
+        var copied = 0
+        let code = bytes.withUnsafeMutableBufferPointer { buffer in
+            key.withCString { keyPointer in
+                odc_repo_resource_copy(
+                    handle,
+                    keyPointer,
+                    buffer.baseAddress,
+                    buffer.count,
+                    &copied,
+                    &error
+                )
+            }
+        }
+        guard code == 1 else {
+            throw OdcError.resourceFailed(Self.take(error) ?? "无法读取资源：\(key)")
+        }
+        return Data(bytes.prefix(copied))
+    }
     private func requireHandle() throws -> OpaquePointer {
         guard let repo else { throw OdcError.closed }
         return repo.pointer

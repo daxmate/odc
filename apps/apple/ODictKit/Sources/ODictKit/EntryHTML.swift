@@ -86,6 +86,56 @@ public enum EntryHTML {
         return text
     }
 
+
+    /// Routes every relative `src`/`href` and CSS `url(...)` reference to
+    /// the `odc-resource` scheme.
+    ///
+    /// Absolute URLs, fragments and schemes the entry may legitimately carry
+    /// are left untouched (see `ODCResource.url(for:)`); MDD keys written with
+    /// backslashes or a leading slash are normalised on the way through.
+    public static func rewriteResources(_ html: String) -> String {
+        let attributePattern = "(?i)\\b(?:src|href)\\s*=\\s*(?:\"[^\"]*\"|'[^']*')"
+        let withAttributes = replacingMatches(in: html, pattern: attributePattern) { match in
+            rewriteAttribute(match)
+        }
+        let cssPattern = "(?i)url\\(\\s*(?:\"[^\"]*\"|'[^']*'|[^)]*?)\\s*\\)"
+        return replacingMatches(in: withAttributes, pattern: cssPattern) { match in
+            rewriteCSSURL(match)
+        }
+    }
+
+    /// Rewrites one `src="..."` / `href='...'` match, preserving quotes.
+    private static func rewriteAttribute(_ match: String) -> String {
+        guard let equals = match.firstIndex(of: "=") else { return match }
+        let prefix = String(match[match.startIndex...equals])
+        let value = unquoted(String(match[match.index(after: equals)...]))
+        guard let url = ODCResource.url(for: value) else { return match }
+        return prefix + "\"" + url.absoluteString + "\""
+    }
+
+    /// Rewrites one `url(...)` token, keeping the author's quoting.
+    private static func rewriteCSSURL(_ match: String) -> String {
+        guard let open = match.firstIndex(of: "("),
+              let close = match.lastIndex(of: ")"), open < close
+        else { return match }
+        let raw = String(match[match.index(after: open)..<close])
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = ODCResource.url(for: unquoted(trimmed)) else { return match }
+        let quote = trimmed.hasPrefix("'") ? "'" : (trimmed.hasPrefix("\"") ? "\"" : "")
+        return "url(\(quote)\(url.absoluteString)\(quote))"
+    }
+
+    /// The value inside `"..."` or `'...'`, or the value itself.
+    private static func unquoted(_ raw: String) -> String {
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard text.count >= 2 else { return text }
+        if (text.hasPrefix("\"") && text.hasSuffix("\"")) ||
+            (text.hasPrefix("'") && text.hasSuffix("'")) {
+            return String(text.dropFirst().dropLast())
+        }
+        return text
+    }
+
     /// Target key of an `entry://` link: scheme dropped, percent-decoded,
     /// fragment and query removed. Case is preserved. Returns `nil` when the
     /// link carries no key.
