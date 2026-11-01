@@ -75,6 +75,67 @@ final class DictionaryStoreTests: XCTestCase {
 
     /// A throwaway library root, so tests never read or write the user's real
     /// Application Support/ODict folder.
+    // MARK: - Startup migration
+
+    func testRestoreMovesAnExternalDictionaryIntoTheLibrary() async throws {
+        let container = try makeContainer()
+        let outside = try Fixture.temporaryDirectory()
+        addTeardownBlock { try? FileManager.default.removeItem(at: outside) }
+        let externalCopy = outside.appending(path: "demo.odc", directoryHint: .isDirectory)
+        try FileManager.default.copyItem(at: Fixture.demoRepository, to: externalCopy)
+        let item = LibraryItem(
+            displayName: "demo",
+            storedName: externalCopy.path,
+            sourceName: "demo",
+            sourceBytes: 4096
+        )
+        try LibraryStore.save(
+            LibraryState(items: [item], lastOpenedID: item.id),
+            to: container
+        )
+
+        let store = DictionaryStore(container: container)
+        defer { store.close() }
+        store.restore()
+        try await waitUntil { store.documentURL != nil }
+
+        XCTAssertNil(store.errorMessage)
+        XCTAssertTrue(store.migrationIssues.isEmpty)
+        let opened = try XCTUnwrap(store.documentURL)
+        XCTAssertEqual(opened.path, container.appending(path: "\(item.id.uuidString).odc").path)
+        // The index now points into the library, so the next launch skips the move.
+        let reloaded = LibraryStore.load(from: container)
+        XCTAssertEqual(reloaded.items.count, 1)
+        XCTAssertTrue(LibraryStore.isStored(reloaded.items[0], in: container))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: externalCopy.appending(path: "odc.db").path))
+    }
+
+    func testRestoreKeepsAnUnreadableEntryAndReportsIt() async throws {
+        let container = try makeContainer()
+        let outside = try Fixture.temporaryDirectory()
+        addTeardownBlock { try? FileManager.default.removeItem(at: outside) }
+        let broken = outside.appending(path: "broken.odc", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: broken, withIntermediateDirectories: true)
+        try Data("not a database".utf8).write(to: broken.appending(path: "odc.db"))
+        let item = LibraryItem(
+            displayName: "broken",
+            storedName: broken.path,
+            sourceName: "broken",
+            sourceBytes: 64
+        )
+        try LibraryStore.save(LibraryState(items: [item]), to: container)
+
+        let store = DictionaryStore(container: container)
+        defer { store.close() }
+        store.restore()
+        try await waitUntil { !store.migrationIssues.isEmpty }
+
+        XCTAssertNil(store.documentURL)
+        XCTAssertEqual(store.migrationIssues.count, 1)
+        XCTAssertEqual(store.migrationIssues[0].displayName, "broken")
+        XCTAssertEqual(LibraryStore.load(from: container).items.count, 1)
+    }
+
     private func makeContainer() throws -> URL {
         let container = try Fixture.temporaryDirectory()
         addTeardownBlock { try? FileManager.default.removeItem(at: container) }

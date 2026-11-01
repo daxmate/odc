@@ -7,7 +7,10 @@ import Foundation
 /// copy instead of asking the reader to pick the file again.
 public struct LibraryItem: Codable, Identifiable, Sendable, Equatable {
     /// Identifier of the copy: the `<uuid>.odc` directory name without extension.
-    public let id: UUID
+    ///
+    /// Mutable because migrating a copy into the library folder can rename it
+    /// when its old name is taken; `storedName` and `id` move together.
+    public var id: UUID
     /// Name shown in the UI.
     public var displayName: String
     /// Directory holding `odc.db`, relative to the library directory.
@@ -304,8 +307,15 @@ public enum LibraryStore {
     }
 
     /// Directory of the copy, e.g. `<library>/<uuid>.odc`.
+    ///
+    /// Entries written by an older build can carry an absolute path instead of
+    /// a name inside the library; resolving those keeps them openable so the
+    /// startup migration can copy them in rather than drop them.
     public static func copyDirectory(for item: LibraryItem, in root: URL) -> URL {
-        root.appending(path: item.storedName, directoryHint: .isDirectory)
+        if item.storedName.hasPrefix("/") {
+            return URL(fileURLWithPath: item.storedName, isDirectory: true)
+        }
+        return root.appending(path: item.storedName, directoryHint: .isDirectory)
     }
 
     /// Database the C ABI opens, e.g. `<library>/<uuid>.odc/odc.db`.
@@ -451,6 +461,229 @@ public enum LibraryStore {
             .replacingOccurrences(of: ":", with: "-")
         let backup = url.appendingPathExtension("bak-\(stamp)")
         try? FileManager.default.moveItem(at: url, to: backup)
+    }
+
+    // MARK: - Moving entries into the library folder
+
+    /// One entry the startup migration could not move into the library folder.
+    ///
+    /// The entry stays in `library.json` exactly as it was, so a retry after
+    /// the file becomes readable works and nothing is lost silently.
+    public struct MigrationIssue: Equatable, Sendable, Identifiable {
+        /// Identifier of the entry that stayed behind.
+        public let id: UUID
+        /// Name shown in the UI.
+        public let displayName: String
+        /// Reader-facing explanation, already localised.
+        public let reason: String
+
+        public init(id: UUID, displayName: String, reason: String) {
+            self.id = id
+            self.displayName = displayName
+            self.reason = reason
+        }
+    }
+
+    /// Outcome of `migrateExternalCopies`.
+    public struct MigrationReport: Equatable, Sendable {
+        /// Entries whose copy now lives in the library folder.
+        public let migrated: [LibraryItem]
+        /// Entries that kept living outside it.
+        public let issues: [MigrationIssue]
+
+        public var isEmpty: Bool { migrated.isEmpty && issues.isEmpty }
+    }
+
+    /// Why one copy could not be moved into the library folder.
+    public enum MigrationError: LocalizedError, Equatable {
+        /// The copy is not where `library.json` says it is.
+        case sourceMissing(String)
+        /// An iCloud placeholder that has not been downloaded yet.
+        case sourceNotDownloaded(String)
+        /// `copyItem` refused; the payload is the system message.
+        case copyFailed(String)
+        /// The copy exists but does not open as a dictionary.
+        case verificationFailed(String)
+
+        public var errorDescription: String? {
+            switch self {
+            case .sourceMissing(let name):
+                return "「\(name)」的原件已不在原位置，未能迁入词典库。"
+            case .sourceNotDownloaded(let name):
+                return "「\(name)」的原件是 iCloud 尚未下载的占位文件，请先在访达中下载后重启应用。"
+            case .copyFailed(let detail):
+                return "复制原件时出错：\(detail)"
+            case .verificationFailed(let detail):
+                return "复制出的副本无法打开：\(detail)"
+            }
+        }
+    }
+
+    /// True when the entry's copy already sits inside `directory`.
+    public static func isStored(_ item: LibraryItem, in directory: URL) -> Bool {
+        let root = directory.standardizedFileURL.path
+        let copy = copyDirectory(for: item, in: directory).standardizedFileURL.path
+        guard copy != root else { return false }
+        let prefix = root.hasSuffix("/") ? root : root + "/"
+        return copy.hasPrefix(prefix)
+    }
+
+    /// Copy every entry that still lives outside the library folder into it.
+    ///
+    /// Runs once per launch and is idempotent: an entry that already points
+    /// into `directory` is left alone, and the copy keeps the entry's own
+    /// identifier (falling back to a fresh one when that name is taken).
+    /// The original file is only read, never moved or deleted.
+    ///
+    /// - Parameters:
+    ///   - directory: Library folder (`Application Support/ODict`).
+    ///   - state: Library index, updated in place for the entries that moved.
+    ///   - verify: Opens a copy to prove it is usable. The default checks the
+    ///     SQLite header; the app passes a real `OdcDictionary` open.
+    public static func migrateExternalCopies(
+        in directory: URL,
+        state: inout LibraryState,
+        verify: (URL) throws -> Void = verifyRepository,
+        fileManager: FileManager = .default
+    ) -> MigrationReport {
+        let external = state.items.filter { !isStored($0, in: directory) }
+        guard !external.isEmpty else {
+            return MigrationReport(migrated: [], issues: [])
+        }
+        var migrated: [LibraryItem] = []
+        var issues: [MigrationIssue] = []
+        for item in external {
+            do {
+                let copy = try adopt(item, into: directory, verify: verify, fileManager: fileManager)
+                replace(item.id, with: copy, in: &state)
+                migrated.append(copy)
+            } catch {
+                issues.append(
+                    MigrationIssue(
+                        id: item.id,
+                        displayName: item.displayName,
+                        reason: error.localizedDescription
+                    )
+                )
+            }
+        }
+        return MigrationReport(migrated: migrated, issues: issues)
+    }
+
+    /// Copy one entry into `directory` and return the updated entry.
+    ///
+    /// Keeps `item.id` as the stored name when free; otherwise throws away a
+    /// stale half-copy (when it does not open) or takes a fresh identifier.
+    public static func adopt(
+        _ item: LibraryItem,
+        into directory: URL,
+        verify: (URL) throws -> Void = verifyRepository,
+        fileManager: FileManager = .default
+    ) throws -> LibraryItem {
+        let source = copyDirectory(for: item, in: directory).standardizedFileURL
+        // An empty or escaping `storedName` resolves to the library itself or a
+        // parent of it; copying that would recurse. Treat it as a missing copy.
+        let root = directory.standardizedFileURL.path
+        guard source.path != root,
+              !root.hasPrefix(source.path + "/"),
+              fileManager.fileExists(atPath: source.path) else {
+            throw MigrationError.sourceMissing(item.displayName)
+        }
+        try refuseUndownloadedPlaceholder(source, displayName: item.displayName)
+
+        var storedName = "\(item.id.uuidString).odc"
+        let preferred = directory.appending(path: storedName, directoryHint: .isDirectory)
+        if fileManager.fileExists(atPath: preferred.path) {
+            // An earlier run may have copied this entry and stopped before
+            // saving the index. Reuse that copy when it still opens; otherwise
+            // keep it untouched and write the new copy under a fresh name.
+            if (try? verify(preferred)) != nil {
+                return renamed(item, storedName: storedName)
+            }
+            storedName = "\(UUID().uuidString).odc"
+        }
+
+        let destination = directory.appending(path: storedName, directoryHint: .notDirectory)
+        do {
+            try copy(source, to: destination, fileManager: fileManager)
+            try verify(destination)
+        } catch {
+            try? fileManager.removeItem(at: destination)
+            throw error
+        }
+        return renamed(item, storedName: storedName)
+    }
+
+    /// Structural check used when the caller has no dictionary handle to open
+    /// with: the copy holds an `odc.db` that starts with the SQLite header.
+    public static func verifyRepository(_ url: URL) throws {
+        let database = url.appending(path: "odc.db", directoryHint: .notDirectory)
+        let handle: FileHandle
+        do {
+            handle = try FileHandle(forReadingFrom: database)
+        } catch {
+            throw MigrationError.verificationFailed(error.localizedDescription)
+        }
+        defer { try? handle.close() }
+        let header = (try? handle.read(upToCount: 16)) ?? Data()
+        guard header.count == 16,
+              String(decoding: header.prefix(15), as: UTF8.self) == "SQLite format 3" else {
+            throw MigrationError.verificationFailed("文件不是 SQLite 词典库")
+        }
+    }
+
+    private static func copy(
+        _ source: URL,
+        to destination: URL,
+        fileManager: FileManager
+    ) throws {
+        let values = try source.resourceValues(forKeys: [.isDirectoryKey])
+        do {
+            if values.isDirectory == true {
+                try fileManager.copyItem(at: source, to: destination)
+            } else {
+                try fileManager.createDirectory(at: destination, withIntermediateDirectories: false)
+                try fileManager.copyItem(
+                    at: source,
+                    to: destination.appending(path: "odc.db", directoryHint: .notDirectory)
+                )
+            }
+        } catch {
+            throw MigrationError.copyFailed(error.localizedDescription)
+        }
+    }
+
+    /// Fail early, with a readable reason, on an iCloud file that was never
+    /// downloaded: `copyItem` would otherwise block, or die with
+    /// "Resource deadlock avoided" after the UI already started.
+    private static func refuseUndownloadedPlaceholder(
+        _ url: URL,
+        displayName: String
+    ) throws {
+        let values = try? url.resourceValues(
+            forKeys: [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey]
+        )
+        guard values?.isUbiquitousItem == true else { return }
+        guard values?.ubiquitousItemDownloadingStatus != .current else { return }
+        throw MigrationError.sourceNotDownloaded(displayName)
+    }
+
+    private static func renamed(_ item: LibraryItem, storedName: String) -> LibraryItem {
+        var copy = item
+        copy.storedName = storedName
+        let stem = (storedName as NSString).deletingPathExtension
+        if let id = UUID(uuidString: stem) {
+            copy.id = id
+        }
+        return copy
+    }
+
+    private static func replace(_ id: UUID, with copy: LibraryItem, in state: inout LibraryState) {
+        guard let index = state.items.firstIndex(where: { $0.id == id }) else { return }
+        state.items[index] = copy
+        if state.lastOpenedID == id {
+            state.lastOpenedID = copy.id
+        }
     }
 
     private static func makeEncoder() -> JSONEncoder {

@@ -94,9 +94,33 @@ public struct LibraryListView: View {
             )
         } else {
             List {
+                if !store.migrationIssues.isEmpty {
+                    Section("未能迁入词典库") {
+                        ForEach(store.migrationIssues) { issue in
+                            migrationRow(for: issue)
+                        }
+                    }
+                }
                 ForEach(store.library.items) { item in
                     row(for: item)
                 }
+            }
+        }
+    }
+
+    /// A dictionary whose copy could not be moved into the library folder.
+    ///
+    /// The entry is still listed below and still opens from where it lives; the
+    /// row only explains why the move did not happen.
+    private func migrationRow(for issue: LibraryStore.MigrationIssue) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "exclamationmark.triangle")
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(issue.displayName)
+                Text(issue.reason)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
     }

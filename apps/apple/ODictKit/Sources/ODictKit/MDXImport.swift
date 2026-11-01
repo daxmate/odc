@@ -370,9 +370,9 @@ public struct MDXImportReport: Decodable, Equatable, Sendable {
 public enum MDXImporter {
     /// Destination for the converted copy of `source`.
     ///
-    /// The file lands next to the source as `<name>.odc`. When that directory
-    /// is not writable it falls back to `documents` (the caller's Documents
-    /// directory by default). Existing files are never replaced: the
+    /// The file lands in `documents` when the caller passes one (the library
+    /// passes its staging folder) and in `importStagingDirectory` otherwise —
+    /// never next to the source. Existing files are never replaced: the
     /// `-1`, `-2`, … suffixes keep every conversion.
     public static func outputURL(
         for source: URL,
@@ -384,7 +384,6 @@ public enum MDXImporter {
             throw MDXImportError.unsupportedSource(source.lastPathComponent)
         }
         let directory = destinationDirectory(
-            for: source,
             documents: documents,
             fileManager: fileManager
         )
@@ -439,6 +438,12 @@ public enum MDXImporter {
             throw MDXImportError.unsupportedSource(source.lastPathComponent)
         }
         let output = try outputURL(for: source, documents: documents)
+        // The destination is only resolved by `outputURL`; create it here, once
+        // there is something to write into it.
+        try FileManager.default.createDirectory(
+            at: output.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
 
         let volumes = volumes(for: source).map(claim)
         onProgress?(MDXImportProgress.preparingSample)
@@ -615,17 +620,42 @@ public enum MDXImporter {
         return number
     }
 
+    /// Folder a conversion is written to.
+    ///
+    /// Conversions live in the app's own storage. They used to be written next
+    /// to the source `.mdx` whenever that folder was writable, which left a
+    /// stray `<name>.odc` in the reader's own folder and made the same
+    /// dictionary exist in two places. The library hands over its staging
+    /// folder explicitly; anything else lands in `importStagingDirectory`.
     private static func destinationDirectory(
-        for source: URL,
         documents: URL?,
         fileManager: FileManager
     ) -> URL {
-        let sibling = source.deletingLastPathComponent()
-        if fileManager.isWritableFile(atPath: sibling.path) {
-            return sibling
-        }
         if let documents {
             return documents
+        }
+        return importStagingDirectory(fileManager: fileManager)
+    }
+
+    /// Default home for conversions the caller did not place itself:
+    /// `<Application Support>/ODict/Imports`.
+    ///
+    /// Only the path is resolved here; `convert` creates the folder when it has
+    /// something to write, so asking for a destination has no side effects.
+    /// The user's Documents directory is a last resort for a container that has
+    /// no Application Support at all.
+    public static func importStagingDirectory(
+        fileManager: FileManager = .default
+    ) -> URL {
+        if let support = try? fileManager.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: false
+        ) {
+            return support
+                .appending(path: "ODict", directoryHint: .isDirectory)
+                .appending(path: "Imports", directoryHint: .isDirectory)
         }
         if let documents = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first {
             return documents

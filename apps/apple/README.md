@@ -56,8 +56,8 @@ apps/apple/
 
 ## How opening works
 
-1. The picker returns a security-scoped URL (a `.odc` file, or a repository
-   directory produced by the CLI).
+1. The picker returns a security-scoped URL (a `.odc` file, a `.mdx` file, or
+   a repository directory produced by the CLI).
 2. `DocumentLibrary` copies it into
    `Application Support/ODict/<uuid>.odc` before opening, so the app never
    reopens the user's file inside the sandbox. A picked single file is copied
@@ -65,6 +65,26 @@ apps/apple/
    expects.
 3. `OdcDictionary` (main-actor confined, because the C handle is not thread
    safe) opens the copy; `DictionaryStore` drives the UI.
+
+An MDX conversion is written to `Application Support/ODict/Imports`, never next
+to the source `.mdx`; once the library holds its own copy the staged `.odc` is
+deleted. `library.json` (in the same folder) is the index; nothing outside that
+folder is needed to reopen a dictionary.
+
+### Startup migration
+
+`DictionaryStore.performRestore` asks `LibraryStore.migrateExternalCopies` to
+copy any entry whose `storedName` still resolves outside the library folder
+(an absolute path from an older build, or a name with `..`) into
+`<uuid>.odc` inside it, opens the copy to prove it works, and only then
+rewrites the index. The move is idempotent: an entry already inside is skipped,
+and a name that is taken gets a fresh identifier instead of being overwritten.
+
+A copy that cannot be read — deleted, an iCloud placeholder that was never
+downloaded, or damaged — leaves its entry untouched and shows up in the library
+sheet ("未能迁入词典库") with the reason; the failure is logged under
+`com.daxmate.odict` `library`. The original file is only read, never moved or
+deleted.
 
 ## Known limitations (v0)
 

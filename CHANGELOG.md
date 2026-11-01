@@ -21,9 +21,19 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 * MDX import copies stylesheets that entries link to but the MDD volumes do not
   carry, reading them from beside the .mdx file (LDOCE6++ ships ldoce6ec.css
   that way). MdxImportReport.stylesheets counts them.
+* App storage: a conversion is written to `Application Support/ODict/Imports`
+  instead of the folder holding the source `.mdx`, and the staged `.odc` is
+  deleted once the library holds its own copy.
+* App storage: on launch, entries in `library.json` whose copy still lives
+  outside the library folder are copied in, opened to prove they work, and the
+  index is rewritten. A copy that cannot be read keeps its entry and is listed
+  in the library sheet with the reason; source files are never deleted.
 
 ### Changed
 
+* `MDXImporter.outputURL` no longer prefers the source folder even when it is
+  writable; conversions go into the app's storage unless the caller names a
+  directory.
 * Storage layout version 2 (`meta.schema_version = 2`): blocks are addressed by
   a local integer id instead of a 32-byte hash in every entry row, `entries.content_hash`
   and `field_hashes` keep only the first 8 bytes of BLAKE3, and the

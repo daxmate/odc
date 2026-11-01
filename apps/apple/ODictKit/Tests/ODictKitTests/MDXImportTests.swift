@@ -93,24 +93,47 @@ final class MDXImportTests: XCTestCase {
         XCTAssertThrowsError(try MDXImportReport.decode(from: Data("not json".utf8)))
     }
 
-    func testOutputLandsNextToTheSource() throws {
+    func testOutputNeverLandsNextToTheSource() throws {
+        let directory = try Fixture.temporaryDirectory()
+        let source = directory.appending(path: "汉语大词典.mdx")
+        try Data("x".utf8).write(to: source)
+        // The source folder is writable; the conversion must still not go there.
+        XCTAssertTrue(FileManager.default.isWritableFile(atPath: directory.path))
+
+        let staging = try Fixture.temporaryDirectory()
+        let output = try MDXImporter.outputURL(for: source, documents: staging)
+        XCTAssertEqual(output.lastPathComponent, "汉语大词典.odc")
+        XCTAssertEqual(output.deletingLastPathComponent(), staging)
+        let siblings = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+        XCTAssertEqual(siblings, ["汉语大词典.mdx"])
+    }
+
+    func testDefaultOutputLivesInApplicationSupport() throws {
         let directory = try Fixture.temporaryDirectory()
         let source = directory.appending(path: "汉语大词典.mdx")
         try Data("x".utf8).write(to: source)
 
         let output = try MDXImporter.outputURL(for: source)
-        XCTAssertEqual(output.lastPathComponent, "汉语大词典.odc")
-        XCTAssertEqual(output.deletingLastPathComponent(), directory)
+        let support = try XCTUnwrap(
+            FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        )
+        XCTAssertTrue(
+            output.standardizedFileURL.path.hasPrefix(support.standardizedFileURL.path + "/"),
+            "expected \(output.path) inside \(support.path)"
+        )
+        XCTAssertTrue(output.path.contains("/ODict/Imports/"), output.path)
+        XCTAssertNotEqual(output.deletingLastPathComponent(), directory)
     }
 
     func testExistingOutputsGetANumericSuffix() throws {
         let directory = try Fixture.temporaryDirectory()
+        let staging = try Fixture.temporaryDirectory()
         let source = directory.appending(path: "Big.mdx")
         try Data("x".utf8).write(to: source)
-        try Data("1".utf8).write(to: directory.appending(path: "Big.odc"))
-        try Data("2".utf8).write(to: directory.appending(path: "Big-1.odc"))
+        try Data("1".utf8).write(to: staging.appending(path: "Big.odc"))
+        try Data("2".utf8).write(to: staging.appending(path: "Big-1.odc"))
 
-        let output = try MDXImporter.outputURL(for: source)
+        let output = try MDXImporter.outputURL(for: source, documents: staging)
         XCTAssertEqual(output.lastPathComponent, "Big-2.odc")
     }
 

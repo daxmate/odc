@@ -26,6 +26,11 @@ public final class DictionaryStore {
     /// Non-fatal note about the current entry (for example a redirect target
     /// the dictionary does not carry). The entry itself stays on screen.
     public private(set) var noticeMessage: String?
+    /// Entries the startup migration could not move into the library folder.
+    ///
+    /// They stay usable: opening one reads the copy where it already lives.
+    /// The library sheet lists them so a failed migration is never silent.
+    public private(set) var migrationIssues: [LibraryStore.MigrationIssue] = []
 
     /// True while a document is being imported or a search is running.
     public private(set) var isLoading = false
@@ -246,17 +251,26 @@ public final class DictionaryStore {
                 try await openExisting(existing, in: directory)
                 return
             }
-            let result = try await MDXImporter.convert(source: url, onProgress: { [weak self] sample in
-                Task { @MainActor in
-                    self?.importProgress = sample
-                    self?.importPhase = sample.phase
+            // The conversion is a staging artefact: it lands in the library's
+            // own folder, never next to the source the reader picked.
+            let staging = directory.appending(path: "Imports", directoryHint: .isDirectory)
+            try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+            let result = try await MDXImporter.convert(
+                source: url,
+                documents: staging,
+                onProgress: { [weak self] sample in
+                    Task { @MainActor in
+                        self?.importProgress = sample
+                        self?.importPhase = sample.phase
+                    }
                 }
-            })
+            )
             guard !Task.isCancelled else { return }
             importPhase = nil
             importProgress = nil
             importSummary = result.report.summary
             await performOpen(url: result.outputURL, source: descriptor)
+            discardStagedConversion(result.outputURL, in: staging)
         } catch is CancellationError {
             importPhase = nil
             importProgress = nil
@@ -373,7 +387,28 @@ public final class DictionaryStore {
             return
         }
         var state = LibraryStore.load(from: directory)
+        // Copies still living outside the library folder move in first, so the
+        // prune below sees them where they will stay. A failed move keeps the
+        // entry and is reported in the library sheet instead of blocking the
+        // launch (an iCloud placeholder is the usual reason).
+        let migration = LibraryStore.migrateExternalCopies(in: directory, state: &state) { url in
+            let opened = try OdcDictionary(url: url)
+            opened.close()
+        }
+        if !migration.migrated.isEmpty {
+            libraryLog.info(
+                "migrated \(migration.migrated.count) dictionar\(migration.migrated.count == 1 ? "y" : "ies") into the library"
+            )
+        }
+        for issue in migration.issues {
+            libraryLog.warning(
+                "could not migrate \(issue.displayName, privacy: .public): \(issue.reason, privacy: .public)"
+            )
+        }
         let pruned = LibraryStore.pruneMissing(in: &state, directory: directory)
+        // A failed move keeps its entry; the prune above still drops entries
+        // whose copy is gone for good, so those are not reported twice.
+        migrationIssues = migration.issues.filter { !pruned.contains($0.id) }
         // Copies that predate `library.json` (older builds kept no index) are
         // registered so the reader sees them instead of an empty window.
         let adopted = LibraryStore.adoptableCopies(in: directory, registered: state)
@@ -384,7 +419,7 @@ public final class DictionaryStore {
         if !pruned.isEmpty {
             libraryLog.warning("dropped \(pruned.count) missing librar\(pruned.count == 1 ? "y item" : "y items")")
         }
-        if !pruned.isEmpty || !adopted.isEmpty {
+        if !pruned.isEmpty || !adopted.isEmpty || !migration.migrated.isEmpty {
             saveLibrary(in: directory)
         }
         if !adopted.isEmpty {
@@ -465,6 +500,18 @@ public final class DictionaryStore {
         } catch {
             libraryLog.error("could not save the library: \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    /// Delete a conversion that only existed to be copied into the library.
+    ///
+    /// Anything outside `staging` (a `.odc` the reader picked, or a file an
+    /// older build left next to its source) is left alone.
+    private func discardStagedConversion(_ url: URL, in staging: URL) {
+        let root = staging.standardizedFileURL.path
+        let target = url.standardizedFileURL.path
+        let prefix = root.hasSuffix("/") ? root : root + "/"
+        guard target.hasPrefix(prefix) else { return }
+        try? FileManager.default.removeItem(at: url)
     }
 
     private func libraryDirectoryURL() throws -> URL {
