@@ -46,7 +46,7 @@ final class DictionaryStoreTests: XCTestCase {
     }
 
     func testOpeningAURLPopulatesTheStore() async throws {
-        let store = DictionaryStore()
+        let store = DictionaryStore(container: try makeContainer())
         defer { store.close() }
 
         // Same entry point the document handlers use (onOpenURL / NSApplicationDelegate).
@@ -63,7 +63,7 @@ final class DictionaryStoreTests: XCTestCase {
     }
 
     func testCloseAfterOpeningRemovesTheCopy() async throws {
-        let store = DictionaryStore()
+        let store = DictionaryStore(container: try makeContainer())
         store.open(url: Fixture.demoRepository)
         try await waitUntil { store.documentURL != nil }
         let copy = try XCTUnwrap(store.documentURL)
@@ -71,6 +71,14 @@ final class DictionaryStoreTests: XCTestCase {
         store.close()
         XCTAssertNil(store.documentURL)
         XCTAssertFalse(FileManager.default.fileExists(atPath: copy.path))
+    }
+
+    /// A throwaway library root, so tests never read or write the user's real
+    /// Application Support/ODict folder.
+    private func makeContainer() throws -> URL {
+        let container = try Fixture.temporaryDirectory()
+        addTeardownBlock { try? FileManager.default.removeItem(at: container) }
+        return container
     }
 
     private func waitUntil(

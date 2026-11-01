@@ -32,6 +32,34 @@ final class DocumentLibraryTests: XCTestCase {
         XCTAssertEqual(try dictionary.search("ban").map(\.key), ["banana"])
     }
 
+    func testApplicationSupportContainerIsTheLibraryFolder() throws {
+        let container = try DocumentLibrary.applicationSupportContainer()
+
+        XCTAssertEqual(container.lastPathComponent, "ODict")
+        var isDirectory: ObjCBool = false
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: container.path, isDirectory: &isDirectory),
+            "opening a dictionary must not depend on an earlier import having made the folder"
+        )
+        XCTAssertTrue(isDirectory.boolValue)
+    }
+
+    func testLibraryContainerCreatesAMissingFolder() throws {
+        let support = try Fixture.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: support) }
+        let expected = support.appending(path: "ODict", directoryHint: .isDirectory)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: expected.path))
+
+        let created = try DocumentLibrary.libraryContainer(in: support)
+
+        XCTAssertEqual(created, expected)
+        var isDirectory: ObjCBool = false
+        XCTAssertTrue(FileManager.default.fileExists(atPath: created.path, isDirectory: &isDirectory))
+        XCTAssertTrue(isDirectory.boolValue)
+        // Idempotent: an existing folder is not an error.
+        XCTAssertEqual(try DocumentLibrary.libraryContainer(in: support), expected)
+    }
+
     func testRemovingAMissingCopyIsIgnored() throws {
         let missing = URL(fileURLWithPath: "/nonexistent/ODictKitTests/copy.odc")
         DocumentLibrary.removeCopy(at: missing)

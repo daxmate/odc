@@ -30,7 +30,21 @@ public enum DocumentLibrary {
             appropriateFor: nil,
             create: true
         )
-        return support.appending(path: "ODict", directoryHint: .isDirectory)
+        return try libraryContainer(in: support)
+    }
+
+    /// Ensure that `<support>/ODict` exists and return it.
+    ///
+    /// On a fresh install (or after the user clears Application Support)
+    /// `FileManager` creates Application Support but not the app's own
+    /// subfolder. Callers such as `LibraryStore.orphanCopy(in:…)` enumerate
+    /// that folder straight away, so opening a dictionary on first launch
+    /// failed with "no such file". Creating it here — idempotently — removes
+    /// the dependency on an earlier import having made the directory.
+    static func libraryContainer(in support: URL) throws -> URL {
+        let container = support.appending(path: "ODict", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: container, withIntermediateDirectories: true)
+        return container
     }
 
     /// Copy the picked URL into a fresh `<uuid>.odc` entry and return it.
@@ -59,6 +73,8 @@ public enum DocumentLibrary {
             guard values.isRegularFile == true else {
                 throw DocumentLibraryError.unsupportedItem(url.lastPathComponent)
             }
+            // The parent container is created above; a pre-existing destination
+            // entry must still fail loudly rather than be merged into.
             try fileManager.createDirectory(at: destination, withIntermediateDirectories: false)
             let database = destination.appending(path: "odc.db", directoryHint: .notDirectory)
             try fileManager.copyItem(at: url, to: database)
