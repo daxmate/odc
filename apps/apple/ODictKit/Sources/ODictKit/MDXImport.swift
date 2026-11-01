@@ -85,19 +85,35 @@ public struct MDXImportProgress: Equatable, Sendable {
     /// Whether `fraction` measures a known total. False while the size of the
     /// job is unknown, which is when the banner falls back to a spinner.
     public let isDeterminate: Bool
+    /// When the core handed the job over for packing, if it has.
+    ///
+    /// The final write has no sample of its own, so the banner counts seconds
+    /// from this instant instead of inventing a percentage.
+    public let committingSince: Date?
 
     public init(
         stage: MDXImportStage,
         fraction: Double,
         title: String,
         detail: String,
-        isDeterminate: Bool
+        isDeterminate: Bool,
+        committingSince: Date? = nil
     ) {
         self.stage = stage
         self.fraction = fraction
         self.title = title
         self.detail = detail
         self.isDeterminate = isDeterminate
+        self.committingSince = committingSince
+    }
+
+    /// Detail line plus the seconds spent writing the package.
+    ///
+    /// Returns `detail` unchanged outside the committing stage.
+    public func elapsedDetail(at date: Date = Date()) -> String {
+        guard stage == .committing, let committingSince else { return detail }
+        let seconds = max(0, Int(date.timeIntervalSince(committingSince).rounded(.down)))
+        return "\(detail) · 已用 \(seconds) 秒"
     }
 
     /// Whole percent, clamped to 0…100.
@@ -138,8 +154,14 @@ public struct MDXImportProgressTally {
     private var resourcesDone: UInt64 = 0
     private var lastFraction: Double = 0
     private var finished = false
+    private var committingSince: Date?
+    private let now: @Sendable () -> Date
 
-    public init() {}
+    /// - Parameter now: Clock used to stamp the committing stage; injectable
+    ///   so the elapsed-seconds line is testable.
+    public init(now: @escaping @Sendable () -> Date = { Date() }) {
+        self.now = now
+    }
 
     /// Fold one core sample into the running total.
     public mutating func apply(
@@ -161,15 +183,26 @@ public struct MDXImportProgressTally {
             resourcesTotal = total
             resourcesDone = min(done, total)
             entriesDone = entriesTotal
-        case .committing, .finished:
+        case .committing:
             entriesDone = entriesTotal
             resourcesDone = resourcesTotal
-            finished = stage == .finished
+            // Stamped once: the core sends a single sample for this stage, but
+            // a repeated one must not restart the clock.
+            committingSince = committingSince ?? now()
+        case .finished:
+            entriesDone = entriesTotal
+            resourcesDone = resourcesTotal
+            finished = true
         }
         let grandTotal = entriesTotal + resourcesTotal
         let measured: Double
-        if grandTotal == 0 {
-            measured = finished || stage == .committing ? 1 : 0
+        if stage == .committing {
+            // Everything the core measured is written; packing the container
+            // is the caller's job and reports nothing. Hold the bar where the
+            // writing stages left it rather than claiming 100%.
+            measured = lastFraction
+        } else if grandTotal == 0 {
+            measured = finished ? 1 : 0
         } else {
             measured = Double(entriesDone + resourcesDone) / Double(grandTotal)
         }
@@ -185,9 +218,12 @@ public struct MDXImportProgressTally {
                 done: done,
                 total: total,
                 volumeIndex: volumeIndex,
-                volumeCount: volumeCount
+                volumeCount: volumeCount,
+                entriesTotal: entriesTotal,
+                resourcesTotal: resourcesTotal
             ),
-            isDeterminate: grandTotal > 0
+            isDeterminate: grandTotal > 0 && stage != .committing,
+            committingSince: committingSince
         )
     }
 
@@ -201,7 +237,9 @@ public struct MDXImportProgressTally {
         done: UInt64,
         total: UInt64,
         volumeIndex: UInt32,
-        volumeCount: UInt32
+        volumeCount: UInt32,
+        entriesTotal: UInt64,
+        resourcesTotal: UInt64
     ) -> String {
         switch stage {
         case .preparing:
@@ -209,16 +247,30 @@ public struct MDXImportProgressTally {
         case .entries:
             return "词条 \(grouped(min(done, total))) / \(grouped(total))"
         case .resources:
-            var text = "资源 \(grouped(min(done, total))) / \(grouped(total))"
+            // The media copy is the long part of an illustrated dictionary, so
+            // the banner counts resources, not entries, while it runs.
+            var text = "导入资源 \(grouped(min(done, total))) / \(grouped(total)) 个"
             if volumeCount > 0 {
                 text += " · 卷 \(volumeIndex)/\(volumeCount)"
             }
             return text
         case .committing:
-            return "共 \(grouped(total)) 条"
+            return "正在写入词典包（\(contents(entriesTotal: entriesTotal, resourcesTotal: resourcesTotal))），请勿退出"
         case .finished:
             return ""
         }
+    }
+
+    /// What the package holds, for the committing line.
+    private static func contents(entriesTotal: UInt64, resourcesTotal: UInt64) -> String {
+        var parts: [String] = []
+        if entriesTotal > 0 {
+            parts.append("\(grouped(entriesTotal)) 条")
+        }
+        if resourcesTotal > 0 {
+            parts.append("\(grouped(resourcesTotal)) 个资源")
+        }
+        return parts.isEmpty ? "词典数据" : parts.joined(separator: " + ")
     }
 
     /// Thousands separator, stable across locales so the tests and the UI agree.

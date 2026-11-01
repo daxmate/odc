@@ -26,7 +26,7 @@ public struct ImportProgressView: View {
                 Text(title)
                     .font(.callout)
                 if !progress.detail.isEmpty {
-                    Text(progress.detail)
+                    detail
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
@@ -45,5 +45,19 @@ public struct ImportProgressView: View {
     private var title: String {
         guard progress.isDeterminate else { return progress.title }
         return "\(progress.title) · \(progress.percent)%"
+    }
+
+    /// Counts under the bar. The packing stage has no samples of its own, so it
+    /// shows the seconds elapsed instead — a spinner with no movement reads as
+    /// a hang for a 1.3 GB dictionary.
+    @ViewBuilder
+    private var detail: some View {
+        if progress.stage == .committing, progress.committingSince != nil {
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                Text(progress.elapsedDetail(at: context.date))
+            }
+        } else {
+            Text(progress.detail)
+        }
     }
 }

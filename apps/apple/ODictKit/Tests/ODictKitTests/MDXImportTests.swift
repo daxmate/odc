@@ -234,7 +234,7 @@ final class MDXImportTests: XCTestCase {
 
         let volumes = tally.apply(stage: .resources, done: 100, total: 100, volumeIndex: 2, volumeCount: 2)
         XCTAssertEqual(volumes.fraction, 1, accuracy: 0.0001)
-        XCTAssertEqual(volumes.detail, "资源 100 / 100 · 卷 2/2")
+        XCTAssertEqual(volumes.detail, "导入资源 100 / 100 个 · 卷 2/2")
         XCTAssertEqual(volumes.percent, 100)
         XCTAssertEqual(volumes.title, "导入资源")
     }
@@ -250,8 +250,79 @@ final class MDXImportTests: XCTestCase {
             volumeIndex: 2,
             volumeCount: 2
         )
-        XCTAssertEqual(sample.detail, "资源 45,000 / 182,429 · 卷 2/2")
+        XCTAssertEqual(sample.detail, "导入资源 45,000 / 182,429 个 · 卷 2/2")
         XCTAssertEqual(sample.percent, 42, "97,738 of 235,167 records")
+    }
+
+    func testResourcesStageCountsResourcesInsteadOfEntries() {
+        var tally = MDXImportProgressTally()
+        _ = tally.apply(stage: .preparing, done: 0, total: 4, volumeIndex: 0, volumeCount: 1)
+        let entriesDone = tally.apply(
+            stage: .entries,
+            done: 265_000,
+            total: 265_000,
+            volumeIndex: 0,
+            volumeCount: 0
+        )
+        XCTAssertEqual(entriesDone.detail, "词条 265,000 / 265,000")
+
+        // Copying the media is the long part of an illustrated dictionary, so
+        // the banner has to show it moving instead of the finished entry count.
+        let first = tally.apply(stage: .resources, done: 1, total: 4, volumeIndex: 1, volumeCount: 1)
+        XCTAssertEqual(first.title, "导入资源")
+        XCTAssertEqual(first.detail, "导入资源 1 / 4 个 · 卷 1/1")
+        XCTAssertTrue(first.isDeterminate)
+        XCTAssertGreaterThanOrEqual(first.fraction, entriesDone.fraction, "fraction stays continuous")
+
+        let last = tally.apply(stage: .resources, done: 4, total: 4, volumeIndex: 1, volumeCount: 1)
+        XCTAssertEqual(last.detail, "导入资源 4 / 4 个 · 卷 1/1")
+        XCTAssertGreaterThan(last.fraction, first.fraction)
+        XCTAssertEqual(last.fraction, 1, accuracy: 0.0001)
+    }
+
+    func testCommittingStageIsIndeterminate() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        var tally = MDXImportProgressTally(now: { start })
+        _ = tally.apply(stage: .preparing, done: 0, total: 2_000, volumeIndex: 0, volumeCount: 1)
+        _ = tally.apply(stage: .entries, done: 265_000, total: 265_000, volumeIndex: 0, volumeCount: 0)
+        let writing = tally.apply(stage: .resources, done: 1_200, total: 2_000, volumeIndex: 1, volumeCount: 1)
+
+        let committing = tally.apply(
+            stage: .committing,
+            done: 266_200,
+            total: 266_200,
+            volumeIndex: 0,
+            volumeCount: 0
+        )
+        XCTAssertFalse(committing.isDeterminate, "packing has no samples of its own")
+        XCTAssertEqual(committing.fraction, writing.fraction, accuracy: 0.0001, "no fake 100%")
+        XCTAssertEqual(committing.title, "写入 / 打包")
+        XCTAssertEqual(committing.detail, "正在写入词典包（265,000 条 + 2,000 个资源），请勿退出")
+        XCTAssertEqual(committing.committingSince, start)
+        XCTAssertEqual(
+            committing.elapsedDetail(at: start.addingTimeInterval(12)),
+            "正在写入词典包（265,000 条 + 2,000 个资源），请勿退出 · 已用 12 秒"
+        )
+
+        // A repeated sample must not restart the clock.
+        let repeated = tally.apply(
+            stage: .committing,
+            done: 266_200,
+            total: 266_200,
+            volumeIndex: 0,
+            volumeCount: 0
+        )
+        XCTAssertEqual(repeated.committingSince, start)
+        XCTAssertEqual(
+            repeated.elapsedDetail(at: start.addingTimeInterval(30)),
+            "正在写入词典包（265,000 条 + 2,000 个资源），请勿退出 · 已用 30 秒"
+        )
+        XCTAssertFalse(repeated.isDeterminate)
+
+        let finished = tally.finish()
+        XCTAssertEqual(finished.fraction, 1, accuracy: 0.0001)
+        XCTAssertTrue(finished.isDeterminate)
+        XCTAssertEqual(finished.elapsedDetail(at: start.addingTimeInterval(90)), "")
     }
 
     func testProgressTallyNeverMovesBackwards() {
@@ -270,7 +341,8 @@ final class MDXImportTests: XCTestCase {
         XCTAssertFalse(empty.isDeterminate, "an unknown total keeps the spinner")
 
         let committing = tally.apply(stage: .committing, done: 0, total: 0, volumeIndex: 0, volumeCount: 0)
-        XCTAssertEqual(committing.fraction, 1)
+        XCTAssertEqual(committing.fraction, 0, "packing reports nothing, so the bar holds still")
+        XCTAssertFalse(committing.isDeterminate)
 
         let finished = tally.finish()
         XCTAssertEqual(finished.fraction, 1)
