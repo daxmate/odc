@@ -102,6 +102,16 @@ fn source_schema_version(connection: &Connection) -> Result<i64> {
         .unwrap_or(1))
 }
 
+/// Whether the attached `src` database has a table called `name`.
+fn source_has_table(transaction: &rusqlite::Transaction<'_>, name: &str) -> Result<bool> {
+    let count: i64 = transaction.query_row(
+        "SELECT COUNT(*) FROM src.sqlite_master WHERE type = 'table' AND name = ?1",
+        params![name],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
+}
+
 /// Whether the repository marks itself as shallow.
 pub(crate) fn is_shallow(connection: &Connection) -> Result<bool> {
     Ok(
@@ -118,6 +128,7 @@ fn write_pack(
 ) -> Result<PackReport> {
     let mut target = store::open(out)?;
     store::create_schema(&target)?;
+    store::ensure_resources_table(&target)?;
     target.execute(
         "ATTACH DATABASE ?1 AS src",
         params![db_path.to_string_lossy().as_ref()],
@@ -157,11 +168,24 @@ fn write_pack(
     // id, so entry rows keep pointing at the same block. A version 1 source
     // addresses blocks by hash, so the id is resolved while copying.
     let source_version = source_schema_version(&transaction)?;
+    // Resources are optional: a database written before MDD support has no
+    // table, and attaching it must not fail.
+    let has_resources = source_has_table(&transaction, "resources")?;
     if shallow {
-        let referenced = if source_version >= 2 {
+        // Entries and resources both point at blocks; a shallow pack keeps
+        // exactly the payload its index can reach.
+        let entries = if source_version >= 2 {
             "SELECT b.block_hash FROM src.entries e JOIN src.blocks b ON b.id = e.block_id"
         } else {
             "SELECT block_hash FROM src.entries"
+        };
+        let referenced = if has_resources {
+            format!(
+                "{entries} UNION
+                 SELECT b.block_hash FROM src.resources r JOIN src.blocks b ON b.id = r.block_id"
+            )
+        } else {
+            entries.to_string()
         };
         transaction.execute(
             &format!(
@@ -198,6 +222,13 @@ fn write_pack(
             params![store::DIGEST_PREFIX as i64],
         )?;
         store::truncate_field_hashes(&transaction)?;
+    }
+    if has_resources {
+        transaction.execute(
+            "INSERT INTO main.resources(key, block_id, size)
+             SELECT key, block_id, size FROM src.resources",
+            [],
+        )?;
     }
     if shallow {
         transaction.execute(

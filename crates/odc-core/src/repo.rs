@@ -185,6 +185,7 @@ impl Repo {
             "format_version",
             store::FORMAT_VERSION.as_bytes(),
         )?;
+        store::ensure_resources_table(&connection)?;
         let created = chrono_free_now();
         store::set_meta(&connection, "created_at", created.to_string().as_bytes())?;
         let repo = Self {
@@ -215,6 +216,7 @@ impl Repo {
         store::migrate(&connection)?;
         let version = store::schema_version(&connection)?;
         store::install_entry_view(&connection, version)?;
+        store::ensure_resources_table(&connection)?;
         Ok(Self {
             connection,
             dir,
@@ -501,6 +503,73 @@ impl Repo {
             .connection
             .query_row("SELECT COUNT(*) FROM blocks", [], |row| row.get(0))?;
         Ok(usize::try_from(count).unwrap_or(0))
+    }
+
+    /// Number of MDD resources stored in the repository.
+    pub fn resource_count(&self) -> Result<usize> {
+        let count: i64 =
+            self.connection
+                .query_row("SELECT COUNT(*) FROM resources", [], |row| row.get(0))?;
+        Ok(usize::try_from(count).unwrap_or(0))
+    }
+
+    /// Combined payload size of every stored resource, in bytes.
+    pub fn resource_bytes(&self) -> Result<u64> {
+        let total: i64 = self.connection.query_row(
+            "SELECT COALESCE(SUM(size), 0) FROM resources",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(u64::try_from(total).unwrap_or(0))
+    }
+
+    /// Payload stored under the normalised resource `key`.
+    ///
+    /// The lookup falls back to a case-insensitive comparison because MDD
+    /// packs are written on machines where `pic/Apple.png` and
+    /// `pic/apple.png` are the same file.
+    pub fn resource(&self, key: &str) -> Result<Option<Vec<u8>>> {
+        let key = crate::mdd_import::normalize_resource_key(key);
+        self.connection
+            .query_row(
+                "SELECT b.codec, b.raw_size, b.data
+                 FROM resources r JOIN blocks b ON b.id = r.block_id
+                 WHERE r.key = ?1 COLLATE NOCASE
+                 LIMIT 1",
+                params![key],
+                |row| {
+                    let codec_id: i64 = row.get(0)?;
+                    let raw_size: i64 = row.get(1)?;
+                    let data: Vec<u8> = row.get(2)?;
+                    Ok((codec_id, raw_size, data))
+                },
+            )
+            .optional()?
+            .map(|(codec_id, raw_size, data)| {
+                decode_block_data(codec_id, usize::try_from(raw_size).unwrap_or(0), &data)
+            })
+            .transpose()
+    }
+
+    /// Store one resource under `key`, replacing a previous payload.
+    pub fn put_resource(&mut self, key: &str, bytes: &[u8]) -> Result<()> {
+        let transaction = self.connection.unchecked_transaction()?;
+        put_resource_row(&transaction, key, bytes)?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Store a batch of `(key, payload)` pairs in one transaction.
+    ///
+    /// Returns the number of rows written. Payloads are content addressed, so
+    /// a repeated resource costs one index row and no block.
+    pub fn put_resources(&mut self, resources: &[(String, Vec<u8>)]) -> Result<usize> {
+        let transaction = self.connection.unchecked_transaction()?;
+        for (key, bytes) in resources {
+            put_resource_row(&transaction, key, bytes)?;
+        }
+        transaction.commit()?;
+        Ok(resources.len())
     }
 
     /// Visit every committed entry in key order.
@@ -1755,6 +1824,39 @@ struct Staged {
     display: String,
     content_hash: [u8; 32],
     field_hashes: Vec<u8>,
+}
+
+/// Store one resource payload and point the index at its block.
+///
+/// The payload is written verbatim (`codec::RAW`): MDD entries are already
+/// compressed media and the block table is content addressed, so identical
+/// payloads are stored once no matter how many keys reference them.
+fn put_resource_row(connection: &Connection, key: &str, bytes: &[u8]) -> Result<()> {
+    let key = crate::mdd_import::normalize_resource_key(key);
+    let block_hash = hash::blake3(bytes);
+    let existing: Option<i64> = connection
+        .query_row(
+            "SELECT id FROM blocks WHERE block_hash = ?1",
+            params![block_hash.as_slice()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let block_id = match existing {
+        Some(id) => id,
+        None => {
+            connection.execute(
+                "INSERT INTO blocks(block_hash, codec, raw_size, data) VALUES (?1, ?2, ?3, ?4)",
+                params![block_hash.as_slice(), codec::RAW, bytes.len() as i64, bytes],
+            )?;
+            connection.last_insert_rowid()
+        }
+    };
+    connection.execute(
+        "INSERT INTO resources(key, block_id, size) VALUES (?1, ?2, ?3)
+         ON CONFLICT(key) DO UPDATE SET block_id = excluded.block_id, size = excluded.size",
+        params![key, block_id, bytes.len() as i64],
+    )?;
+    Ok(())
 }
 
 /// How many blocks a commit wrote and how many it found already stored.

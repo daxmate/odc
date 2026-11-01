@@ -6,9 +6,10 @@
 //! logic in `main.rs`; it now only prints the returned
 //! `MdxImportReport`.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
+use crate::mdd_import::{self, MddImportReport, MddVolumeReport};
 use crate::mdx::{entry_from_record, MdxHeader, MdxKeys, MdxSource};
 use crate::mdx_scan::{self, CorruptBlock};
 use crate::repo::Repo;
@@ -26,6 +27,17 @@ pub struct MdxImportOptions {
     pub limit: Option<usize>,
     /// Called with the number of entries written so far.
     pub progress: Option<Box<dyn FnMut(usize)>>,
+    /// Import the sibling MDD volumes (default `true`).
+    ///
+    /// The volumes are `<stem>.mdd`, `<stem>.1.mdd`, `<stem>.2.mdd` … next
+    /// to the MDX file; a volume that cannot be read only produces a warning.
+    pub import_mdd: bool,
+    /// Explicit MDD volumes to read, in import order.
+    ///
+    /// `None` discovers the volumes next to the MDX file. A caller that
+    /// already listed the files (a sandboxed app, for instance) passes them
+    /// here; unreadable entries still only produce warnings.
+    pub mdd_volumes: Option<Vec<PathBuf>>,
 }
 
 impl Default for MdxImportOptions {
@@ -35,6 +47,8 @@ impl Default for MdxImportOptions {
             prune: false,
             limit: None,
             progress: None,
+            import_mdd: true,
+            mdd_volumes: None,
         }
     }
 }
@@ -47,6 +61,8 @@ impl std::fmt::Debug for MdxImportOptions {
             .field("prune", &self.prune)
             .field("limit", &self.limit)
             .field("progress", &self.progress.is_some())
+            .field("import_mdd", &self.import_mdd)
+            .field("mdd_volumes", &self.mdd_volumes)
             .finish()
     }
 }
@@ -82,6 +98,14 @@ pub struct MdxImportReport {
     /// The import then read the original file unchanged, so corrupt-block
     /// recovery was unavailable for that file.
     pub scan_warning: Option<String>,
+    /// MDD volumes imported next to the MDX file, in import order.
+    pub mdd_files: Vec<MddVolumeReport>,
+    /// Resources reachable from the entries after the import.
+    pub resource_count: usize,
+    /// Payload bytes of those resources.
+    pub resource_bytes: u64,
+    /// Non-fatal problems: unreadable or corrupt MDD volumes, per line.
+    pub warnings: Vec<String>,
 }
 
 /// Import an MDX file into `repo`.
@@ -101,6 +125,8 @@ pub fn import_mdx(
         prune,
         limit,
         mut progress,
+        import_mdd,
+        mdd_volumes,
     } = options;
 
     // The repaired copy owns a temporary file that is removed when dropped, so
@@ -181,6 +207,17 @@ pub fn import_mdx(
         },
     )?;
 
+    // Resources are written after the entries, in the same call: a failed MDX
+    // import therefore never leaves a resource set behind. Volumes commit one
+    // batch at a time, so a corrupt volume keeps what it already wrote.
+    let mut warnings = Vec::new();
+    let mdd = if import_mdd {
+        let volumes = mdd_volumes.unwrap_or_else(|| mdd_import::discover_volumes(path));
+        mdd_import::import_volumes(repo, &volumes, &mut warnings)?
+    } else {
+        MddImportReport::default()
+    };
+
     Ok(MdxImportReport {
         imported_entries: taken,
         written: report.written,
@@ -194,5 +231,9 @@ pub fn import_mdx(
         working_set: report.total,
         header,
         scan_warning,
+        mdd_files: mdd.volumes,
+        resource_count: mdd.resources,
+        resource_bytes: mdd.resource_bytes,
+        warnings,
     })
 }

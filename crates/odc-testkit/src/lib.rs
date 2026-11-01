@@ -32,6 +32,28 @@ pub fn write_v2_mdx(path: &Path, entries: &[(&str, &str)]) -> io::Result<()> {
     Ok(())
 }
 
+/// Write an MDD resource file from caller-supplied `(path, payload)` pairs.
+///
+/// Resource names are written verbatim, including the backslashes and leading
+/// slash real dictionaries use, so the importer's normalisation is exercised.
+///
+/// # Errors
+///
+/// Propagates builder and I/O failures.
+pub fn write_mdd(path: &Path, resources: &[(&str, &[u8])]) -> io::Result<()> {
+    let mut builder = mdictlib::MddBuilder::new();
+    for (name, bytes) in resources {
+        builder
+            .add_resource(name, bytes)
+            .map_err(|error| io::Error::other(error.to_string()))?;
+    }
+    let file = std::fs::File::create(path)?;
+    builder
+        .finish(io::BufWriter::new(file))
+        .map_err(|error| io::Error::other(error.to_string()))?;
+    Ok(())
+}
+
 /// Write a version 1.2 MDX file with UTF-16LE keys and records.
 ///
 /// The file uses one key block and one record block, zlib compression and no

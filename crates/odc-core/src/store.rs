@@ -154,6 +154,28 @@ pub fn install_entry_view(connection: &Connection, version: i64) -> Result<()> {
     Ok(())
 }
 
+/// Statement that adds the MDD resource index.
+///
+/// Resource payloads stay in `blocks` with [`codec::RAW`]: an MDD entry is
+/// already a compressed image or audio file, so recompressing it would only
+/// cost time. The table maps the normalised resource path to its block and
+/// keeps the payload size for reporting.
+///
+/// The table is created on every open, which keeps databases written by older
+/// builds readable without a schema-version bump.
+pub const RESOURCES_SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS resources(
+    key TEXT PRIMARY KEY,
+    block_id INTEGER NOT NULL,
+    size INTEGER NOT NULL
+);";
+
+/// Adds the `resources` table to a database of any layout version.
+pub fn ensure_resources_table(connection: &Connection) -> Result<()> {
+    connection.execute_batch(RESOURCES_SCHEMA)?;
+    Ok(())
+}
+
 /// Rewrite a version 1 database into the current layout.
 ///
 /// Makes the file writable as v2 and returns `true` when a rewrite happened.

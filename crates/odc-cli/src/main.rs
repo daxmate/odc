@@ -622,8 +622,10 @@ fn run() -> odc_core::Result<ExitCode> {
                 println!("working set: {} entries", status.total);
             }
             println!(
-                "index: {} entries, {} blocks",
-                status.entries, status.blocks
+                "index: {} entries, {} blocks, {} resources",
+                status.entries,
+                status.blocks,
+                repo.resource_count()?
             );
             Ok(ExitCode::SUCCESS)
         }
@@ -892,6 +894,8 @@ fn import_mdx(
         skip_corrupt_blocks: true,
         prune,
         limit,
+        import_mdd: true,
+        mdd_volumes: None,
         progress: if progress {
             Some(Box::new(move |written: usize| {
                 if written >= next_mark {
@@ -931,6 +935,25 @@ fn import_mdx(
         println!(
             "mdx: {} duplicate keys suffixed, {} empty skipped, {} oversized skipped",
             report.deduplicated, report.skipped_empty, report.skipped_oversized
+        );
+    }
+    for volume in &report.mdd_files {
+        println!(
+            "mdd: {} resources ({} bytes) from {}",
+            volume.entries,
+            volume.bytes,
+            volume.path.display()
+        );
+    }
+    for warning in &report.warnings {
+        eprintln!("mdd: warning: {warning}");
+    }
+    if report.resource_count > 0 || !report.mdd_files.is_empty() {
+        println!(
+            "resources: {} ({} bytes, {} volumes)",
+            report.resource_count,
+            report.resource_bytes,
+            report.mdd_files.len()
         );
     }
     if report.skipped_blocks > 0 {
