@@ -88,6 +88,20 @@ pub(crate) fn pack(
     Ok(report)
 }
 
+/// SQLite layout version of the attached source database.
+fn source_schema_version(connection: &Connection) -> Result<i64> {
+    let raw: Option<Vec<u8>> = connection
+        .query_row(
+            "SELECT value FROM src.meta WHERE key = ?1",
+            params![store::META_SCHEMA_VERSION],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(raw
+        .and_then(|bytes| String::from_utf8_lossy(&bytes).trim().parse::<i64>().ok())
+        .unwrap_or(1))
+}
+
 /// Whether the repository marks itself as shallow.
 pub(crate) fn is_shallow(connection: &Connection) -> Result<bool> {
     Ok(
@@ -112,7 +126,8 @@ fn write_pack(
     let transaction = target.transaction()?;
     transaction.execute(
         "INSERT INTO main.meta(key, value)
-         SELECT key, value FROM src.meta WHERE key NOT IN ('shallow', 'merge')",
+         SELECT key, value FROM src.meta
+         WHERE key NOT IN ('shallow', 'merge', 'schema_version', 'workset_clean')",
         [],
     )?;
     transaction.execute(
@@ -138,28 +153,51 @@ fn write_pack(
             insert_index.execute([hash.as_slice()])?;
         }
     }
-    transaction.execute(
-        "INSERT INTO main.entries(word, display, block_hash, offset, length,
-                                  content_hash, field_hashes)
-         SELECT word, display, block_hash, offset, length, content_hash, field_hashes
-         FROM src.entries",
-        [],
-    )?;
+    // Block ids are copied verbatim: the source rowid becomes the destination
+    // id, so entry rows keep pointing at the same block. A version 1 source
+    // addresses blocks by hash, so the id is resolved while copying.
+    let source_version = source_schema_version(&transaction)?;
     if shallow {
+        let referenced = if source_version >= 2 {
+            "SELECT b.block_hash FROM src.entries e JOIN src.blocks b ON b.id = e.block_id"
+        } else {
+            "SELECT block_hash FROM src.entries"
+        };
         transaction.execute(
-            "INSERT INTO main.blocks(block_hash, codec, raw_size, data)
-             SELECT block_hash, codec, raw_size, data FROM src.blocks
-             WHERE block_hash IN (SELECT block_hash FROM src.entries)",
+            &format!(
+                "INSERT INTO main.blocks(id, block_hash, codec, raw_size, data)
+                 SELECT rowid, block_hash, codec, raw_size, data FROM src.blocks
+                 WHERE block_hash IN ({referenced})"
+            ),
             [],
         )?;
     } else {
         // Every block left in the store was produced by a reachable commit;
         // `gc` is what removes blocks no retained revision needs.
         transaction.execute(
-            "INSERT INTO main.blocks(block_hash, codec, raw_size, data)
-             SELECT block_hash, codec, raw_size, data FROM src.blocks",
+            "INSERT INTO main.blocks(id, block_hash, codec, raw_size, data)
+             SELECT rowid, block_hash, codec, raw_size, data FROM src.blocks",
             [],
         )?;
+    }
+    if source_version >= 2 {
+        transaction.execute(
+            "INSERT INTO main.entries(word, display, block_id, offset, length,
+                                      content_hash, field_hashes)
+             SELECT word, display, block_id, offset, length, content_hash, field_hashes
+             FROM src.entries",
+            [],
+        )?;
+    } else {
+        transaction.execute(
+            "INSERT INTO main.entries(word, display, block_id, offset, length,
+                                      content_hash, field_hashes)
+             SELECT e.word, e.display, b.rowid, e.offset, e.length,
+                    substr(e.content_hash, 1, ?1), e.field_hashes
+             FROM src.entries e JOIN src.blocks b ON b.block_hash = e.block_hash",
+            params![store::DIGEST_PREFIX as i64],
+        )?;
+        store::truncate_field_hashes(&transaction)?;
     }
     if shallow {
         transaction.execute(

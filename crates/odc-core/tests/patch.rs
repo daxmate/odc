@@ -45,7 +45,7 @@ fn head(repo: &Repo) -> [u8; 32] {
 fn block_set(dir: &Path) -> BTreeSet<[u8; 32]> {
     let connection = rusqlite::Connection::open(dir.join("odc.db")).expect("db");
     let mut statement = connection
-        .prepare("SELECT DISTINCT block_hash FROM entries")
+        .prepare("SELECT DISTINCT b.block_hash FROM entries e JOIN blocks b ON b.id = e.block_id")
         .expect("statement");
     let rows = statement
         .query_map([], |row| row.get::<_, Vec<u8>>(0))

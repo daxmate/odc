@@ -134,3 +134,51 @@ cheaper than carrying that space forever. Small edits stay vacuum-free.
 The same layout is preserved for old databases: opening one rebuilds `staging`
 with a nullable `payload` column and copies every row, including uncommitted
 payloads.
+
+## Layout version 2: block ids and digest prefixes
+
+A dictionary import is dominated by *index metadata*, not by the compressed
+blocks. On LDOCE6 (147,909 entries, 711 MiB of extracted HTML) the zstd blocks
+occupied 112.6 MiB of a 191.4 MiB database; the rest was the materialised entry
+index. Four of those columns were pure repetition:
+
+* `entries.block_hash` — 32 bytes per row, identical for every entry in the
+  same block, plus an index over the same column.
+* `entries.content_hash` — 32 bytes per row, although the index only ever asks
+  "did this change?".
+* `entries.field_hashes` — one 32-byte digest per payload field, six per row.
+* `staging` — a full copy of the index held in the working set, deleted and
+  rebuilt on every commit.
+
+Version 2 of the SQLite layout addresses each of them without touching the
+content model:
+
+* **Block ids.** `blocks.id` is the block number, `entries.block_id` points at
+  it, and the `entries_block` index is gone. A block number is a *local*
+  handle: content is still addressed by `block_hash` (which the block table
+  keeps as a unique key), so two libraries can hold the same block under
+  different ids. Anything that copies blocks between databases must therefore
+  copy by hash and let the destination assign ids — `pack` does exactly that,
+  and so does every test that forges a fork.
+* **Digest prefixes.** `content_hash` and each `field_hashes` value keep the
+  first 8 bytes of BLAKE3. A 64-bit prefix makes an accidental collision
+  negligible (2^-64) for comparisons that only distinguish "same" from
+  "different", and the Merkle leaf still uses the full 32-byte digest that
+  commit time computes from the payload. Commit hashes therefore stay identical
+  between layout 1 and layout 2: the layout is a cache, not a format.
+* **Working set dropped after commit.** `commit` deletes `staging` and records
+  `meta.workset_clean`; `status` answers from that flag and the rows are copied
+  back from `entries` the first time a writer needs them.
+
+Version 1 databases remain readable: opening one installs a connection-local
+view that exposes the old column names, so every read path is written once. The
+first write rewrites the tables in place and records `meta.schema_version = 2`.
+Read-only users never pay for a migration, and a v1 file stays byte-identical
+until something actually writes to it.
+
+The trade-off is precision: the index can no longer compare a payload against
+a *specific* 32-byte digest, only against its first 8 bytes. `verify` closes
+that gap by recomputing the full digest from the block payload it decodes
+anyway, and it folds the entry tree in the same pass, so a full verification
+still proves every leaf of the committed tree.
+

@@ -169,6 +169,8 @@ node  = BLAKE3(0x01 || left || right)
 * 奇数个节点时最后一个**直接上提**（不复制）。
 * 空集合根 = 32 字节 0（`0x00…00`）。
 * 结果记为 `entry_root`。
+* `content_hash` 永远是**完整 32 字节**的 `BLAKE3-256(canonical_cbor(payload))`。SQLite 索引里只保留它的
+  8 字节前缀（§9）是存储细节，不改变本节的树；同一内容在布局版本 1 与 2 上必须得到同一个 `entry_root`。
 
 ### 8.2 块根
 
@@ -195,14 +197,15 @@ commit_hash = BLAKE3(
 
 ## 9. 存储（SQLite 参考实现）
 
-SQLite 布局是实现细节，但参考实现固定如下（M0）：
+SQLite 布局是实现细节，但参考实现固定如下（布局版本 2）：
 
 ```sql
 CREATE TABLE meta(key TEXT PRIMARY KEY, value BLOB NOT NULL);
-CREATE TABLE blocks(block_hash BLOB PRIMARY KEY, codec INTEGER NOT NULL,
-                    raw_size INTEGER NOT NULL, data BLOB NOT NULL);
+CREATE TABLE blocks(id INTEGER PRIMARY KEY, block_hash BLOB NOT NULL UNIQUE,
+                    codec INTEGER NOT NULL, raw_size INTEGER NOT NULL,
+                    data BLOB NOT NULL);
 CREATE TABLE entries(word TEXT PRIMARY KEY, display TEXT NOT NULL,
-                     block_hash BLOB NOT NULL, offset INTEGER NOT NULL,
+                     block_id INTEGER NOT NULL, offset INTEGER NOT NULL,
                      length INTEGER NOT NULL, content_hash BLOB NOT NULL,
                      field_hashes BLOB NOT NULL);
 CREATE TABLE commits(commit_hash BLOB PRIMARY KEY, parent BLOB NOT NULL,
@@ -218,7 +221,15 @@ CREATE TABLE staging(word TEXT PRIMARY KEY, display TEXT NOT NULL,
                      payload BLOB, content_hash BLOB NOT NULL);
 ```
 
-* `entries` 是 HEAD 的物化索引；`offset`/`length` 指向块内该 record 的字节区间。
+* `entries` 是 HEAD 的物化索引；`block_id` 指向 `blocks.id`（块号），`offset`/`length` 指向块内该
+  record 的字节区间。块号是**本库局部**的句柄：跨库搬运块必须按 `block_hash` 复制、由目标库重新发号
+  （`pack` 即如此），不能直接复制 `id`。
+* `entries.content_hash` 与 `field_hashes` 内每个字段摘要都只存 BLAKE3 的**前 8 字节**（64 bit）。
+  词条树的叶子仍用完整 32 字节摘要（提交时由 payload 现算），因此提交哈希与格式 0.1 完全一致；
+  索引只做"内容是否变化"的比较，64 bit 前缀的意外碰撞概率是 2⁻⁶⁴。
+* `meta.schema_version = 2` 标记 SQLite 布局版本。版本 1 的库（`entries.block_hash`、32 字节摘要、
+  `entries_block` 索引）仍可读、可查、可导出；第一次写入（import / commit / patch / merge / gc）时
+  在原位重写为版本 2 并写入该键。`format_version` 不变：两种布局描述同一个 block/commit 模型。
 * 块用 zstd 存储，参考实现的写入档位是 **level 9**（读路径与档位无关：帧头自带参数）。
 * 提交成功后 `staging` 被整体清空，`meta.workset_clean = "1"` 表示工作区等于 HEAD；
   下一次写入前按需从 `entries` 重建（只复制 word / display / content_hash，payload 由块按需取回）。

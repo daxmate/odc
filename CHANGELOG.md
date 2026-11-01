@@ -6,6 +6,22 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ## [Unreleased]
 
+### Changed
+
+* Storage layout version 2 (`meta.schema_version = 2`): blocks are addressed by
+  a local integer id instead of a 32-byte hash in every entry row, `entries.content_hash`
+  and `field_hashes` keep only the first 8 bytes of BLAKE3, and the
+  `entries_block` index is gone. Commit hashes are unchanged: the Merkle leaf
+  still uses the full digest computed from the payload.
+* Blocks are written with zstd level 9 instead of 3 (roughly 8% smaller on
+  dictionary-sized payloads).
+* CDC block target is 1 MiB instead of 256 KiB, so each zstd frame covers a
+  longer window at the cost of coarser dedupe granularity.
+* A successful commit drops the working set instead of keeping an index mirror;
+  the rows are rebuilt from `entries` on the next write.
+* Version 1 databases stay readable and are rewritten in place by the first
+  write. On LDOCE6 the import drops from 191.4 MiB to ~121 MiB.
+
 ### Added
 
 * Apple clients: `apps/apple/` ships the **ODict** (iOS) and **ODict Desktop**

@@ -205,7 +205,7 @@ fn forged_slice_is_rejected() {
             .execute(
                 "UPDATE entries SET offset = (SELECT offset FROM entries WHERE word = 'word-00001'),
                                      length = (SELECT length FROM entries WHERE word = 'word-00001'),
-                                     block_hash = (SELECT block_hash FROM entries WHERE word = 'word-00001')
+                                     block_id = (SELECT block_id FROM entries WHERE word = 'word-00001')
                  WHERE word = 'word-00000'",
                 [],
             )

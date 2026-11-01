@@ -14,7 +14,7 @@ use crate::hash;
 use crate::merge::{self, Strategy};
 use crate::repo::{self, CommitRecord, Repo, DEFAULT_AUTHOR};
 use crate::snapshot;
-use crate::store::codec;
+use crate::store::{self, codec};
 use crate::varint;
 use rusqlite::params;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -390,7 +390,7 @@ impl Universe {
 fn head_block_hashes(repo: &Repo) -> Result<Vec<[u8; 32]>> {
     let mut statement = repo
         .connection
-        .prepare("SELECT DISTINCT block_hash FROM entries")?;
+        .prepare("SELECT DISTINCT block_hash FROM entry_index")?;
     let rows = statement.query_map([], |row| row.get::<_, Vec<u8>>(0))?;
     let mut hashes = Vec::new();
     for row in rows {
@@ -683,18 +683,22 @@ fn write_target(
         transaction.execute("DELETE FROM entries", [])?;
         {
             let mut insert_entry = transaction.prepare(
-                "INSERT INTO entries(word, display, block_hash, offset, length,
+                "INSERT INTO entries(word, display, block_id, offset, length,
                                  content_hash, field_hashes)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             )?;
+            let mut block_id_of =
+                transaction.prepare("SELECT id FROM blocks WHERE block_hash = ?1")?;
             for row in &state.rows {
+                let block_id: i64 =
+                    block_id_of.query_row(params![row.block_hash.as_slice()], |row| row.get(0))?;
                 insert_entry.execute(params![
                     &row.word,
                     &row.display,
-                    row.block_hash.as_slice(),
+                    block_id,
                     row.offset,
                     row.length,
-                    row.content_hash.as_slice(),
+                    &row.content_hash[..store::DIGEST_PREFIX],
                     &row.field_hashes,
                 ])?;
             }
@@ -709,7 +713,7 @@ fn write_target(
                 insert_staging.execute(params![
                     &row.word,
                     &row.display,
-                    row.content_hash.as_slice(),
+                    &row.content_hash[..store::DIGEST_PREFIX],
                 ])?;
             }
         }

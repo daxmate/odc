@@ -56,13 +56,21 @@ fn import_commits(target: &Path, source: &Path) {
             params![source.join("odc.db").to_string_lossy().to_string()],
         )
         .expect("attach");
-    for table in ["commits", "commit_index", "blocks"] {
+    for table in ["commits", "commit_index"] {
         connection
             .execute_batch(&format!(
                 "INSERT OR IGNORE INTO main.{table} SELECT * FROM fork.{table};"
             ))
             .expect("copy objects");
     }
+    // Block ids are local to a database: copy the content-addressed rows and
+    // let the destination assign its own ids.
+    connection
+        .execute_batch(
+            "INSERT OR IGNORE INTO main.blocks(block_hash, codec, raw_size, data)
+             SELECT block_hash, codec, raw_size, data FROM fork.blocks;",
+        )
+        .expect("copy blocks");
     connection
         .execute_batch("DETACH DATABASE fork;")
         .expect("detach");

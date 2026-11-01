@@ -213,6 +213,8 @@ impl Repo {
         let connection = store::open(&db_path)?;
         store::check_version(&connection)?;
         store::migrate(&connection)?;
+        let version = store::schema_version(&connection)?;
+        store::install_entry_view(&connection, version)?;
         Ok(Self {
             connection,
             dir,
@@ -308,6 +310,19 @@ impl Repo {
         value.map(|bytes| hash_from_blob(&bytes)).transpose()
     }
 
+    /// Rewrite a version 1 database into the current layout before writing.
+    ///
+    /// Reading a v1 repository never touches the file; the first write is the
+    /// point where the layout is upgraded and `meta.schema_version` becomes 2.
+    pub(crate) fn ensure_writable(&mut self) -> Result<()> {
+        if store::upgrade_to_v2(&self.connection)? {
+            // The rewrite leaves the old table pages on the free list; give the
+            // space back once instead of carrying it for the life of the file.
+            self.connection.execute_batch("VACUUM")?;
+        }
+        Ok(())
+    }
+
     /// Rebuild the working set from HEAD when the previous commit dropped it.
     ///
     /// Only committed rows are copied back, and only their index metadata: the
@@ -329,6 +344,7 @@ impl Repo {
 
     /// Insert or replace entries in the working set.
     pub fn import(&mut self, entries: &[Entry], prune: bool) -> Result<ImportReport> {
+        self.ensure_writable()?;
         self.ensure_workset()?;
         let transaction = self.connection.transaction()?;
         {
@@ -343,7 +359,7 @@ impl Repo {
                     entry.word,
                     entry.display,
                     entry.encode_payload(),
-                    entry.content_hash().as_slice()
+                    entry.content_hash()[..store::DIGEST_PREFIX].to_vec()
                 ])?;
             }
         }
@@ -397,7 +413,7 @@ impl Repo {
                     entry.word,
                     entry.display,
                     entry.encode_payload(),
-                    entry.content_hash().as_slice()
+                    entry.content_hash()[..store::DIGEST_PREFIX].to_vec()
                 ])?;
             }
         }
@@ -428,6 +444,7 @@ impl Repo {
         F: FnMut() -> Result<Option<Entry>>,
         P: FnMut(usize),
     {
+        self.ensure_writable()?;
         self.ensure_workset()?;
         if prune {
             self.connection.execute_batch(
@@ -495,9 +512,9 @@ impl Repo {
     where
         F: FnMut(Entry) -> Result<()>,
     {
-        let mut statement = self
-            .connection
-            .prepare("SELECT word, block_hash, offset, length FROM entries ORDER BY word ASC")?;
+        let mut statement = self.connection.prepare(
+            "SELECT word, block_hash, offset, length FROM entry_index ORDER BY word ASC",
+        )?;
         let mut rows = statement.query([])?;
         let mut cached: Option<(Vec<u8>, Vec<u8>)> = None;
         let mut count = 0usize;
@@ -613,6 +630,7 @@ impl Repo {
     /// straight into the database file. Peak memory is one block plus that
     /// block's entry metadata, never the whole dictionary.
     pub fn commit(&mut self, message: &str, author: &str, ts: i64) -> Result<CommitOutcome> {
+        self.ensure_writable()?;
         let status = self.status()?;
         if status.is_clean() {
             return Err(Error::NoChanges);
@@ -634,30 +652,40 @@ impl Repo {
              DELETE FROM staging_location;
              INSERT INTO staging_location(word, block_hash, offset, length)
                  SELECT s.word, e.block_hash, e.offset, e.length
-                 FROM staging s JOIN entries e ON e.word = s.word
+                 FROM staging s JOIN entry_index e ON e.word = s.word
                  WHERE s.payload IS NULL;",
         )?;
         transaction.execute("DELETE FROM entries", [])?;
 
-        let mut new_blocks = 0usize;
-        let mut reused_blocks = 0usize;
+        let mut tally = BlockTally::default();
         let mut entry_count = 0u64;
         let mut entries_root = hash::MerkleAccumulator::new();
         let mut records: Vec<Record> = Vec::new();
         let mut staged: Vec<Staged> = Vec::new();
         let mut chunker = cdc::StreamChunker::new();
 
+        // The index only keeps digest prefixes, but the commit index snapshot
+        // and the Merkle tree are defined on the full 32-byte digest. Collect
+        // them per entry while the payload is in hand; a TEMP table keeps the
+        // peak memory flat on dictionaries with hundreds of thousands of rows.
+        transaction.execute_batch(
+            "CREATE TEMP TABLE IF NOT EXISTS commit_digests(word TEXT PRIMARY KEY, digest BLOB NOT NULL);
+             DELETE FROM commit_digests;",
+        )?;
+
         {
+            let mut insert_digest =
+                transaction.prepare("INSERT INTO commit_digests(word, digest) VALUES (?1, ?2)")?;
             let mut select = transaction.prepare(
                 "SELECT word, display, payload, content_hash FROM staging ORDER BY word ASC",
             )?;
             let mut insert_entry = transaction.prepare(
-                "INSERT INTO entries(word, display, block_hash, offset, length,
+                "INSERT INTO entries(word, display, block_id, offset, length,
                                      content_hash, field_hashes)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             )?;
             let mut block_exists =
-                transaction.prepare("SELECT 1 FROM blocks WHERE block_hash = ?1")?;
+                transaction.prepare("SELECT id FROM blocks WHERE block_hash = ?1")?;
             let mut insert_block = transaction.prepare(
                 "INSERT INTO blocks(block_hash, codec, raw_size, data) VALUES (?1, ?2, ?3, ?4)",
             )?;
@@ -670,7 +698,7 @@ impl Repo {
             while let Some(row) = rows.next()? {
                 let word: String = row.get(0)?;
                 let display: String = row.get(1)?;
-                let content_hash = hash_from_blob(&row.get::<_, Vec<u8>>(3)?)?;
+                let stored_digest: Vec<u8> = row.get(3)?;
                 let payload: Vec<u8> = match row.get::<_, Option<Vec<u8>>>(2)? {
                     Some(payload) => payload,
                     None => {
@@ -693,11 +721,22 @@ impl Repo {
                             &mut reader,
                             &(block_hash, location.1, location.2),
                             &word,
-                            &content_hash,
+                            &stored_digest,
                         )?
                     }
                 };
+                // The index keeps a digest prefix; the tree and the commit
+                // index snapshot are defined on the full payload digest, which
+                // is recomputed here from the bytes that are about to be cut
+                // into a block.
+                let content_hash = hash::blake3(&payload);
+                if !digest_matches(&stored_digest, &content_hash) {
+                    return Err(Error::Inconsistent(format!(
+                        "working entry {word} does not match its content hash"
+                    )));
+                }
                 let field_hashes = cbor::encode(&field_hashes_of(&payload)?);
+                insert_digest.execute(params![&word, content_hash.as_slice()])?;
                 entries_root.push(hash::leaf_hash(word.as_bytes(), &content_hash));
                 entry_count += 1;
 
@@ -705,13 +744,13 @@ impl Repo {
                 let mut cut = chunker.push(&record);
                 if cut == cdc::Cut::Before {
                     write_block(
+                        &transaction,
                         &mut insert_entry,
                         &mut block_exists,
                         &mut insert_block,
                         &records,
                         &staged,
-                        &mut new_blocks,
-                        &mut reused_blocks,
+                        &mut tally,
                     )?;
                     records.clear();
                     staged.clear();
@@ -726,13 +765,13 @@ impl Repo {
                 });
                 if cut == cdc::Cut::After {
                     write_block(
+                        &transaction,
                         &mut insert_entry,
                         &mut block_exists,
                         &mut insert_block,
                         &records,
                         &staged,
-                        &mut new_blocks,
-                        &mut reused_blocks,
+                        &mut tally,
                     )?;
                     records.clear();
                     staged.clear();
@@ -740,13 +779,13 @@ impl Repo {
             }
             if !records.is_empty() {
                 write_block(
+                    &transaction,
                     &mut insert_entry,
                     &mut block_exists,
                     &mut insert_block,
                     &records,
                     &staged,
-                    &mut new_blocks,
-                    &mut reused_blocks,
+                    &mut tally,
                 )?;
                 records.clear();
                 staged.clear();
@@ -768,7 +807,7 @@ impl Repo {
         let block_root = {
             let mut accumulator = hash::MerkleAccumulator::new();
             let mut select = transaction
-                .prepare("SELECT DISTINCT block_hash FROM entries ORDER BY block_hash ASC")?;
+                .prepare("SELECT DISTINCT block_hash FROM entry_index ORDER BY block_hash ASC")?;
             let mut rows = select.query([])?;
             while let Some(row) = rows.next()? {
                 let digest = hash_from_blob(&row.get::<_, Vec<u8>>(0)?)?;
@@ -791,7 +830,7 @@ impl Repo {
             let mut writer = snapshot::SnapshotWriter::new(encoder, entry_count)?;
             {
                 let mut select = transaction
-                    .prepare("SELECT word, content_hash FROM entries ORDER BY word ASC")?;
+                    .prepare("SELECT word, digest FROM commit_digests ORDER BY word ASC")?;
                 let mut rows = select.query([])?;
                 while let Some(row) = rows.next()? {
                     let word: String = row.get(0)?;
@@ -876,8 +915,8 @@ impl Repo {
 
         Ok(CommitOutcome {
             commit,
-            new_blocks,
-            reused_blocks,
+            new_blocks: tally.new_blocks,
+            reused_blocks: tally.reused_blocks,
             entries: usize::try_from(entry_count).unwrap_or(usize::MAX),
         })
     }
@@ -1036,7 +1075,7 @@ impl Repo {
         let row = self
             .connection
             .query_row(
-                "SELECT block_hash, offset, length FROM entries WHERE word = ?1",
+                "SELECT block_hash, offset, length FROM entry_index WHERE word = ?1",
                 params![key],
                 |row| {
                     Ok((
@@ -1096,10 +1135,8 @@ impl Repo {
             let Some(digest) = digest else {
                 return Ok(None);
             };
-            let content_hash = hash_from_blob(&digest)?;
-            return Ok(Some(self.payload_from_index(&key, &content_hash)?));
+            return Ok(Some(self.payload_from_index(&key, &digest)?));
         };
-        let content_hash = hash_from_blob(&content_hash)?;
         match payload {
             Some(payload) => Ok(Some(payload)),
             None => Ok(Some(self.payload_from_index(&key, &content_hash)?)),
@@ -1118,11 +1155,11 @@ impl Repo {
         Ok(Some(entry))
     }
 
-    fn payload_from_index(&self, word: &str, content_hash: &[u8; 32]) -> Result<Vec<u8>> {
+    fn payload_from_index(&self, word: &str, content_hash: &[u8]) -> Result<Vec<u8>> {
         let row = self
             .connection
             .query_row(
-                "SELECT block_hash, offset, length FROM entries WHERE word = ?1",
+                "SELECT block_hash, offset, length FROM entry_index WHERE word = ?1",
                 params![word],
                 |row| {
                     Ok((
@@ -1289,6 +1326,7 @@ impl Repo {
         let mut blocks = 0usize;
         let mut entries = 0usize;
         let mut commits = 0usize;
+        let mut entry_root = hash::MerkleAccumulator::new();
 
         {
             let mut statement = self
@@ -1339,9 +1377,13 @@ impl Repo {
         }
 
         {
+            // Word order keeps consecutive entries in one block, so the tree
+            // can be folded here: version 2 only stores digest prefixes, and
+            // the full digest is recomputed from the payload that is decoded
+            // for verification anyway.
             let mut statement = self.connection.prepare(
                 "SELECT word, display, block_hash, offset, length, content_hash, field_hashes
-                 FROM entries ORDER BY block_hash",
+                 FROM entry_index ORDER BY word",
             )?;
             let mut loaded: Option<(Vec<u8>, Option<Vec<u8>>)> = None;
             let rows = statement.query_map([], |row| {
@@ -1389,9 +1431,9 @@ impl Repo {
                 if record.key != word.as_bytes() {
                     errors.push(format!("entry {word}: block key does not match"));
                 }
-                if hash::blake3(&record.payload)
-                    != hash_from_blob(&content_hash).unwrap_or(ZERO_HASH)
-                {
+                let digest = hash::blake3(&record.payload);
+                entry_root.push(hash::leaf_hash(word.as_bytes(), &digest));
+                if !digest_matches(&content_hash, &digest) {
                     errors.push(format!("entry {word}: content hash mismatch"));
                 }
                 match Entry::decode_payload(&record.payload) {
@@ -1402,33 +1444,15 @@ impl Repo {
                     }
                     Err(error) => errors.push(format!("entry {word}: {error}")),
                 }
-                match field_hashes_of(&record.payload) {
-                    Ok(expected) => {
-                        if cbor::encode(&expected) != field_hashes {
-                            errors.push(format!("entry {word}: field hashes mismatch"));
-                        }
-                    }
+                match field_hashes_match(&field_hashes, &record.payload) {
+                    Ok(true) => {}
+                    Ok(false) => errors.push(format!("entry {word}: field hashes mismatch")),
                     Err(error) => errors.push(format!("entry {word}: {error}")),
                 }
             }
         }
 
-        let head_entry_root = {
-            let mut statement = self
-                .connection
-                .prepare("SELECT word, content_hash FROM entries ORDER BY word ASC")?;
-            let rows = statement.query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
-            })?;
-            let mut accumulator = hash::MerkleAccumulator::new();
-            for row in rows {
-                let (word, content_hash) = row?;
-                if let Ok(digest) = hash_from_blob(&content_hash) {
-                    accumulator.push(hash::leaf_hash(word.as_bytes(), &digest));
-                }
-            }
-            accumulator.finish()
-        };
+        let head_entry_root = entry_root.finish();
 
         {
             let mut statement = self.connection.prepare(
@@ -1539,6 +1563,7 @@ impl Repo {
     /// `log` and `diff` working. `dry_run` reports what would be freed
     /// without writing; `vacuum` rebuilds the database file afterwards.
     pub fn gc(&mut self, keep_last: usize, dry_run: bool, vacuum: bool) -> Result<GcReport> {
+        self.ensure_writable()?;
         if keep_last == 0 {
             return Err(Error::InvalidArgument(
                 "gc requires --keep-last of at least 1".to_string(),
@@ -1604,7 +1629,7 @@ impl Repo {
             let mut statement = self.connection.prepare(
                 "SELECT block_hash, LENGTH(data) FROM blocks
                  WHERE NOT EXISTS (
-                     SELECT 1 FROM entries WHERE entries.block_hash = blocks.block_hash
+                     SELECT 1 FROM entry_index WHERE entry_index.block_hash = blocks.block_hash
                  )",
             )?;
             let mut rows = statement.query([])?;
@@ -1668,13 +1693,52 @@ pub(crate) fn field_hashes_of(payload: &[u8]) -> Result<Value> {
     let mut pairs = Vec::new();
     for (key, item) in value.entries() {
         if let Some(name) = key.as_text() {
+            let digest = hash::blake3(&cbor::encode(item));
             pairs.push((
                 Value::Text(name.to_string()),
-                Value::Bytes(hash::blake3(&cbor::encode(item)).to_vec()),
+                Value::Bytes(digest[..store::DIGEST_PREFIX].to_vec()),
             ));
         }
     }
     Ok(Value::Map(pairs))
+}
+
+/// Compare a stored digest against a freshly computed one.
+///
+/// Version 1 stored the full 32 bytes, version 2 stores the first
+/// [`store::DIGEST_PREFIX`] bytes; the comparison uses the shorter of the two so
+/// both layouts verify against the same payload.
+pub(crate) fn digest_matches(stored: &[u8], computed: &[u8; 32]) -> bool {
+    let end = stored.len().min(computed.len());
+    end > 0 && stored[..end] == computed[..end]
+}
+
+/// Normalise a `field_hashes` CBOR map into sorted (name, digest) pairs.
+fn digest_map(value: &Value) -> Vec<(String, Vec<u8>)> {
+    let mut out: Vec<(String, Vec<u8>)> = value
+        .entries()
+        .filter_map(|(key, item)| Some((key.as_text()?.to_string(), item.as_bytes()?.to_vec())))
+        .collect();
+    out.sort_by(|left, right| left.0.cmp(&right.0));
+    out
+}
+
+/// Compare a stored `field_hashes` blob with the digests of a payload.
+fn field_hashes_match(stored: &[u8], payload: &[u8]) -> Result<bool> {
+    let expected = digest_map(&field_hashes_of(payload)?);
+    let actual = digest_map(&cbor::decode(stored)?);
+    if expected.len() != actual.len() {
+        return Ok(false);
+    }
+    Ok(expected
+        .iter()
+        .zip(&actual)
+        .all(|((name, left), (other, right))| {
+            name == other && left.len().min(right.len()) > 0 && {
+                let end = left.len().min(right.len());
+                left[..end] == right[..end]
+            }
+        }))
 }
 
 fn chrono_free_now() -> i64 {
@@ -1693,15 +1757,22 @@ struct Staged {
     field_hashes: Vec<u8>,
 }
 
+/// How many blocks a commit wrote and how many it found already stored.
+#[derive(Default)]
+struct BlockTally {
+    new_blocks: usize,
+    reused_blocks: usize,
+}
+
 /// Encode one cut block, store it if new and index its entries.
 fn write_block(
+    connection: &Connection,
     entries: &mut rusqlite::Statement<'_>,
     exists: &mut rusqlite::Statement<'_>,
     insert: &mut rusqlite::Statement<'_>,
     records: &[Record],
     staged: &[Staged],
-    new_blocks: &mut usize,
-    reused_blocks: &mut usize,
+    tally: &mut BlockTally,
 ) -> Result<()> {
     if records.is_empty() {
         return Ok(());
@@ -1712,27 +1783,32 @@ fn write_block(
     let present: Option<i64> = exists
         .query_row(params![block_hash.as_slice()], |row| row.get(0))
         .optional()?;
-    if present.is_some() {
-        *reused_blocks += 1;
-    } else {
-        let data = compress(&raw)?;
-        insert.execute(params![
-            block_hash.as_slice(),
-            codec::ZSTD,
-            raw.len() as i64,
-            data,
-        ])?;
-        *new_blocks += 1;
-    }
+    let block_id = match present {
+        Some(id) => {
+            tally.reused_blocks += 1;
+            id
+        }
+        None => {
+            let data = compress(&raw)?;
+            insert.execute(params![
+                block_hash.as_slice(),
+                codec::ZSTD,
+                raw.len() as i64,
+                data,
+            ])?;
+            tally.new_blocks += 1;
+            connection.last_insert_rowid()
+        }
+    };
     for (index, offset) in decoded.offsets.iter().enumerate() {
         let item = &staged[index];
         entries.execute(params![
             item.word,
             item.display,
-            block_hash.as_slice(),
+            block_id,
             *offset as i64,
             records[index].encoded_len() as i64,
-            item.content_hash.as_slice(),
+            &item.content_hash[..store::DIGEST_PREFIX],
             item.field_hashes,
         ])?;
     }
@@ -1890,7 +1966,7 @@ pub(crate) fn hydrate_payload(
     reader: &mut BlockReader<'_>,
     slice: &([u8; 32], i64, i64),
     word: &str,
-    content_hash: &[u8; 32],
+    content_hash: &[u8],
 ) -> Result<Vec<u8>> {
     let record = reader.record(slice)?;
     if record.key != word.as_bytes() {
@@ -1898,7 +1974,7 @@ pub(crate) fn hydrate_payload(
             "block record does not match working entry {word}"
         )));
     }
-    if hash::blake3(&record.payload) != *content_hash {
+    if !digest_matches(content_hash, &hash::blake3(&record.payload)) {
         return Err(Error::Inconsistent(format!(
             "block record for {word} does not match its content hash"
         )));
@@ -2038,9 +2114,10 @@ fn stage_merge_rows(connection: &Connection, rows: &mut [MergeRow]) -> Result<(u
     mark_workset_dirty(connection)?;
     {
         let mut insert_entry = connection.prepare(
-            "INSERT INTO entries(word, display, block_hash, offset, length, content_hash, field_hashes)
+            "INSERT INTO entries(word, display, block_id, offset, length, content_hash, field_hashes)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         )?;
+        let mut block_id_of = connection.prepare("SELECT id FROM blocks WHERE block_hash = ?1")?;
         let mut insert_staging = connection
             .prepare("INSERT INTO staging(word, display, content_hash) VALUES (?1, ?2, ?3)")?;
         let mut reader = BlockReader::new(connection);
@@ -2073,16 +2150,22 @@ fn stage_merge_rows(connection: &Connection, rows: &mut [MergeRow]) -> Result<(u
                 .ok_or_else(|| {
                     Error::Inconsistent(format!("merge row {} has no block location", row.word))
                 })?;
+            let block_id: i64 =
+                block_id_of.query_row(params![block_hash.as_slice()], |row| row.get(0))?;
             insert_entry.execute(params![
                 &row.word,
                 &display,
-                block_hash.as_slice(),
+                block_id,
                 offset,
                 length,
-                row.content_hash.as_slice(),
+                &row.content_hash[..store::DIGEST_PREFIX],
                 field_hashes,
             ])?;
-            insert_staging.execute(params![&row.word, &display, row.content_hash.as_slice(),])?;
+            insert_staging.execute(params![
+                &row.word,
+                &display,
+                &row.content_hash[..store::DIGEST_PREFIX],
+            ])?;
         }
     }
     Ok((new_blocks, reused_blocks))
@@ -2106,15 +2189,17 @@ impl Repo {
         let (new_blocks, reused_blocks) = stage_merge_rows(&transaction, rows)?;
 
         let (entry_root, observed) = {
+            // The merged rows carry the full 32-byte digest of their payload; the
+            // index only stores a prefix, so the tree is folded from the rows.
+            let mut ordered: Vec<(&str, [u8; 32])> = rows
+                .iter()
+                .map(|row| (row.word.as_str(), row.content_hash))
+                .collect();
+            ordered.sort_by(|left, right| left.0.cmp(right.0));
             let mut accumulator = hash::MerkleAccumulator::new();
-            let mut select =
-                transaction.prepare("SELECT word, content_hash FROM entries ORDER BY word ASC")?;
-            let mut rows = select.query([])?;
             let mut count = 0u64;
-            while let Some(row) = rows.next()? {
-                let word: String = row.get(0)?;
-                let digest = hash_from_blob(&row.get::<_, Vec<u8>>(1)?)?;
-                accumulator.push(hash::leaf_hash(word.as_bytes(), &digest));
+            for (word, digest) in &ordered {
+                accumulator.push(hash::leaf_hash(word.as_bytes(), digest));
                 count += 1;
             }
             (accumulator.finish(), count)
@@ -2127,7 +2212,7 @@ impl Repo {
         let block_root = {
             let mut accumulator = hash::MerkleAccumulator::new();
             let mut select = transaction
-                .prepare("SELECT DISTINCT block_hash FROM entries ORDER BY block_hash ASC")?;
+                .prepare("SELECT DISTINCT block_hash FROM entry_index ORDER BY block_hash ASC")?;
             let mut rows = select.query([])?;
             while let Some(row) = rows.next()? {
                 let digest = hash_from_blob(&row.get::<_, Vec<u8>>(0)?)?;
@@ -2174,13 +2259,15 @@ impl Repo {
                     .map_err(|error| Error::Io(error.to_string()))?;
             let mut writer = snapshot::SnapshotWriter::new(encoder, entry_count)?;
             {
-                let mut select = transaction
-                    .prepare("SELECT word, content_hash FROM staging ORDER BY word ASC")?;
-                let mut rows = select.query([])?;
-                while let Some(row) = rows.next()? {
-                    let word: String = row.get(0)?;
-                    let digest = hash_from_blob(&row.get::<_, Vec<u8>>(1)?)?;
-                    writer.push(&word, &digest)?;
+                // The merged rows carry the full digest; `staging` only keeps
+                // the prefix that the working-set comparison needs.
+                let mut ordered: Vec<(&str, [u8; 32])> = rows
+                    .iter()
+                    .map(|row| (row.word.as_str(), row.content_hash))
+                    .collect();
+                ordered.sort_by(|left, right| left.0.cmp(right.0));
+                for (word, digest) in &ordered {
+                    writer.push(word, digest)?;
                 }
             }
             let (encoder, raw_size) = writer.finish()?;

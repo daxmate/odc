@@ -24,6 +24,26 @@ pub const META_WORKSET_CLEAN: &str = "workset_clean";
 /// Default database file name inside a repository directory.
 pub const DB_FILE: &str = "odc.db";
 
+/// SQLite layout version written into `meta.schema_version`.
+///
+/// Version 1 is the format shipped before 0.2: 32-byte digests in
+/// `entries`, block references by hash, one full index snapshot per commit.
+/// Version 2 stores block ids, 8-byte digest prefixes and delta snapshots.
+/// The `format_version` string does not change: both layouts describe the same
+/// block/commit model, and v1 repositories stay readable.
+pub const SCHEMA_VERSION: i64 = 2;
+
+/// Meta key holding the SQLite layout version.
+pub const META_SCHEMA_VERSION: &str = "schema_version";
+
+/// Number of leading digest bytes kept in the index.
+///
+/// `content_hash` and every `field_hashes` entry keep the first
+/// `DIGEST_PREFIX` bytes of BLAKE3. 64 bits make an accidental collision
+/// negligible (2^-64) while cutting the index metadata by 75%; the Merkle tree
+/// still uses the full 32-byte digest, so commit hashes do not depend on it.
+pub const DIGEST_PREFIX: usize = 8;
+
 /// Compression codec identifiers stored in `blocks.codec` / `commit_index.codec`.
 #[allow(dead_code)]
 pub mod codec {
@@ -36,7 +56,8 @@ pub mod codec {
 const SCHEMA: &str = r"
 CREATE TABLE meta(key TEXT PRIMARY KEY, value BLOB NOT NULL);
 CREATE TABLE blocks(
-    block_hash BLOB PRIMARY KEY,
+    id INTEGER PRIMARY KEY,
+    block_hash BLOB NOT NULL UNIQUE,
     codec INTEGER NOT NULL,
     raw_size INTEGER NOT NULL,
     data BLOB NOT NULL
@@ -44,13 +65,12 @@ CREATE TABLE blocks(
 CREATE TABLE entries(
     word TEXT PRIMARY KEY,
     display TEXT NOT NULL,
-    block_hash BLOB NOT NULL,
+    block_id INTEGER NOT NULL,
     offset INTEGER NOT NULL,
     length INTEGER NOT NULL,
     content_hash BLOB NOT NULL,
     field_hashes BLOB NOT NULL
 );
-CREATE INDEX entries_block ON entries(block_hash);
 CREATE TABLE commits(
     commit_hash BLOB PRIMARY KEY,
     parent BLOB NOT NULL,
@@ -90,6 +110,144 @@ pub fn open(path: &Path) -> Result<Connection> {
 /// Create every table and index. Fails if the schema already exists.
 pub fn create_schema(connection: &Connection) -> Result<()> {
     connection.execute_batch(SCHEMA)?;
+    set_meta(
+        connection,
+        META_SCHEMA_VERSION,
+        SCHEMA_VERSION.to_string().as_bytes(),
+    )?;
+    install_entry_view(connection, SCHEMA_VERSION)?;
+    Ok(())
+}
+
+/// Layout version of an open database; a missing marker means version 1.
+pub fn schema_version(connection: &Connection) -> Result<i64> {
+    let Some(raw) = get_meta(connection, META_SCHEMA_VERSION)? else {
+        return Ok(1);
+    };
+    String::from_utf8_lossy(&raw)
+        .parse::<i64>()
+        .map_err(|_| Error::Inconsistent("meta.schema_version is not an integer".to_string()))
+}
+
+/// Install the connection-local `entry_index` view every read path uses.
+///
+/// Version 2 stores block references as `blocks.id`; the view joins the hash
+/// back in so readers keep addressing blocks by content hash, exactly as they
+/// did on version 1. Version 1 databases expose the columns they already have.
+/// A TEMP view lives in the connection temporary schema, so opening a v1
+/// repository for reading never writes to the file.
+pub fn install_entry_view(connection: &Connection, version: i64) -> Result<()> {
+    connection.execute("DROP VIEW IF EXISTS entry_index", [])?;
+    let sql = if version >= 2 {
+        "CREATE TEMP VIEW entry_index AS
+         SELECT e.word AS word, e.display AS display, b.block_hash AS block_hash,
+                e.block_id AS block_id, e.offset AS offset, e.length AS length,
+                e.content_hash AS content_hash, e.field_hashes AS field_hashes
+         FROM entries e JOIN blocks b ON b.id = e.block_id"
+    } else {
+        "CREATE TEMP VIEW entry_index AS
+         SELECT word, display, block_hash, NULL AS block_id, offset, length,
+                content_hash, field_hashes
+         FROM entries"
+    };
+    connection.execute(sql, [])?;
+    Ok(())
+}
+
+/// Rewrite a version 1 database into the current layout.
+///
+/// Makes the file writable as v2 and returns `true` when a rewrite happened.
+/// The content-addressed payload (blocks, commits, refs) is untouched: only
+/// the index columns move to block ids and digest prefixes.
+pub fn upgrade_to_v2(connection: &Connection) -> Result<bool> {
+    if schema_version(connection)? >= SCHEMA_VERSION {
+        return Ok(false);
+    }
+    // The connection-local view references `entries`; drop it before the tables
+    // are rebuilt and install the version 2 flavour once the rewrite commits.
+    connection.execute("DROP VIEW IF EXISTS entry_index", [])?;
+    let transaction = connection.unchecked_transaction()?;
+    transaction.execute_batch(
+        "CREATE TABLE blocks_v2(
+             id INTEGER PRIMARY KEY,
+             block_hash BLOB NOT NULL UNIQUE,
+             codec INTEGER NOT NULL,
+             raw_size INTEGER NOT NULL,
+             data BLOB NOT NULL
+         );
+         INSERT INTO blocks_v2(block_hash, codec, raw_size, data)
+             SELECT block_hash, codec, raw_size, data FROM blocks ORDER BY rowid;
+         DROP TABLE blocks;
+         ALTER TABLE blocks_v2 RENAME TO blocks;
+         CREATE TABLE entries_v2(
+             word TEXT PRIMARY KEY,
+             display TEXT NOT NULL,
+             block_id INTEGER NOT NULL,
+             offset INTEGER NOT NULL,
+             length INTEGER NOT NULL,
+             content_hash BLOB NOT NULL,
+             field_hashes BLOB NOT NULL
+         );
+         INSERT INTO entries_v2(word, display, block_id, offset, length, content_hash, field_hashes)
+             SELECT e.word, e.display, b.id, e.offset, e.length,
+                    substr(e.content_hash, 1, 8), e.field_hashes
+             FROM entries e JOIN blocks b ON b.block_hash = e.block_hash;
+         DROP TABLE entries;
+         ALTER TABLE entries_v2 RENAME TO entries;
+         CREATE TABLE staging_v2(
+             word TEXT PRIMARY KEY,
+             display TEXT NOT NULL,
+             payload BLOB,
+             content_hash BLOB NOT NULL
+         );
+         INSERT INTO staging_v2(word, display, payload, content_hash)
+             SELECT word, display, payload, substr(content_hash, 1, 8) FROM staging;
+         DROP TABLE staging;
+         ALTER TABLE staging_v2 RENAME TO staging;",
+    )?;
+    truncate_field_hashes(&transaction)?;
+    transaction.execute("DELETE FROM meta WHERE key = ?1", [META_WORKSET_CLEAN])?;
+    transaction.commit()?;
+    set_meta(
+        connection,
+        META_SCHEMA_VERSION,
+        SCHEMA_VERSION.to_string().as_bytes(),
+    )?;
+    install_entry_view(connection, SCHEMA_VERSION)?;
+    Ok(true)
+}
+
+/// Re-encode `field_hashes` maps at `DIGEST_PREFIX` bytes.
+pub(crate) fn truncate_field_hashes(connection: &Connection) -> Result<()> {
+    let mut updates: Vec<(String, Vec<u8>)> = Vec::new();
+    {
+        let mut statement = connection.prepare("SELECT word, field_hashes FROM entries")?;
+        let mut rows = statement.query([])?;
+        while let Some(row) = rows.next()? {
+            let word: String = row.get(0)?;
+            let encoded: Vec<u8> = row.get(1)?;
+            let value = crate::cbor::decode(&encoded)?;
+            let mut pairs = Vec::new();
+            for (key, item) in value.entries() {
+                let Some(name) = key.as_text() else {
+                    continue;
+                };
+                let bytes = item.as_bytes().ok_or_else(|| {
+                    Error::Inconsistent(format!("entry {word}: field hash is not a byte string"))
+                })?;
+                let end = bytes.len().min(DIGEST_PREFIX);
+                pairs.push((
+                    crate::cbor::Value::Text(name.to_string()),
+                    crate::cbor::Value::Bytes(bytes[..end].to_vec()),
+                ));
+            }
+            updates.push((word, crate::cbor::encode(&crate::cbor::Value::Map(pairs))));
+        }
+    }
+    let mut update = connection.prepare("UPDATE entries SET field_hashes = ?2 WHERE word = ?1")?;
+    for (word, encoded) in updates {
+        update.execute(rusqlite::params![word, encoded])?;
+    }
     Ok(())
 }
 

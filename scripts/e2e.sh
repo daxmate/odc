@@ -216,10 +216,16 @@ import sqlite3, sys
 target, source = sys.argv[1], sys.argv[2]
 connection = sqlite3.connect(target)
 connection.execute("ATTACH DATABASE ? AS fork", (source,))
-for table in ("commits", "commit_index", "blocks"):
+for table in ("commits", "commit_index"):
     connection.execute(
         "INSERT OR IGNORE INTO main." + table + " SELECT * FROM fork." + table
     )
+# Block ids are local to a database: copy the content-addressed rows and let
+# the destination assign its own ids.
+connection.execute(
+    "INSERT OR IGNORE INTO main.blocks(block_hash, codec, raw_size, data)"
+    " SELECT block_hash, codec, raw_size, data FROM fork.blocks"
+)
 connection.commit()
 connection.execute("DETACH DATABASE fork")
 connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")

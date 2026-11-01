@@ -132,7 +132,9 @@ apps/apple/               iOS / macOS SwiftUI 客户端（ODict / ODict Desktop�
 * **block = 不可变字节串**：`ODB1` 魔数，记录按 key 排序，尾部偏移索引；
 * **CDC**：gear 表由 BLAKE3 导出，min 16 KiB / max 1 MiB，哈希命中断块；
 * **哈希**：`block_hash` 基于未压缩字节，换压缩算法不影响互认；
-* **commit**：`ts/author/message` 不进入哈希，同一内容树永远同一 commit `hash`。
+* **commit**：`ts/author/message` 不进入哈希，同一内容树永远同一 commit `hash`；
+* **索引**：SQLite 索引存块号与 8 字节摘要前缀（布局版本 2，`meta.schema_version = 2`），
+  提交哈希仍按完整 32 字节摘要计算；版本 1 的库可读可查，第一次写入时原位升级。
 
 详见 [docs/odc-spec.md](docs/odc-spec.md)。
 

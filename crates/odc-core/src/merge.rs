@@ -450,7 +450,7 @@ struct OursEntry {
 
 fn ours_index(connection: &Connection) -> Result<HashMap<String, OursEntry>> {
     let mut statement =
-        connection.prepare("SELECT word, display, block_hash, offset, length FROM entries")?;
+        connection.prepare("SELECT word, display, block_hash, offset, length FROM entry_index")?;
     let mut rows = statement.query([])?;
     let mut out = HashMap::new();
     while let Some(row) = rows.next()? {
