@@ -365,3 +365,21 @@ fn reimport_replaces_the_payload_for_a_key() {
         "the old payload is no longer indexed"
     );
 }
+
+#[test]
+fn gc_keeps_resource_blocks() {
+    let fixture = Fixture::new("gc");
+    write_mdd(&fixture.volume(""), &[("\\pic\\apple.png", IMAGE)]).expect("mdd");
+    fixture.import(MdxImportOptions::default());
+    let mut repo = fixture.open();
+    repo.commit("import", "tester", 1_700_000_000)
+        .expect("commit");
+
+    // No entries reference the resource block, so a naive sweep would drop it.
+    let report = repo.gc(1, false, false).expect("gc");
+    assert_eq!(report.removed_blocks, 0, "{report:?}");
+    assert_eq!(
+        repo.resource("pic/apple.png").expect("lookup"),
+        Some(IMAGE.to_vec())
+    );
+}

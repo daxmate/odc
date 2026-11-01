@@ -1696,9 +1696,14 @@ impl Repo {
         let mut freed_block_bytes = 0u64;
         {
             let mut statement = self.connection.prepare(
+                // Resources are not part of any commit, so they are kept by
+                // their own index instead of the entries that reference them.
                 "SELECT block_hash, LENGTH(data) FROM blocks
                  WHERE NOT EXISTS (
                      SELECT 1 FROM entry_index WHERE entry_index.block_hash = blocks.block_hash
+                 )
+                 AND NOT EXISTS (
+                     SELECT 1 FROM resources r WHERE r.block_id = blocks.id
                  )",
             )?;
             let mut rows = statement.query([])?;
