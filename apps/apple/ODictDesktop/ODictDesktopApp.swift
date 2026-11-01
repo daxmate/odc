@@ -13,6 +13,7 @@ struct ODictDesktopApp: App {
             DictionaryRootView(store: store, isImporterPresented: $isImporterPresented)
                 .frame(minWidth: 720, minHeight: 480)
                 .onAppear {
+                    store.restore()
                     appDelegate.connect { urls in
                         for url in urls {
                             store.openDocument(url: url)
@@ -29,7 +30,7 @@ struct ODictDesktopApp: App {
                 .keyboardShortcut("o", modifiers: .command)
             }
             CommandGroup(after: .saveItem) {
-                Button("Close Dictionary") {
+                Button("Close Dictionary and Delete Copy") {
                     store.close()
                 }
                 .keyboardShortcut("w", modifiers: [.command, .shift])

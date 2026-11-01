@@ -4,6 +4,7 @@ import SwiftUI
 public struct DictionaryRootView: View {
     private let store: DictionaryStore
     @Binding private var isImporterPresented: Bool
+    @State private var isLibraryPresented = false
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     public init(store: DictionaryStore, isImporterPresented: Binding<Bool>) {
@@ -58,6 +59,9 @@ public struct DictionaryRootView: View {
             .odictOnOpenURL { url in
                 openDocument(url)
             }
+            .sheet(isPresented: $isLibraryPresented) {
+                LibraryListView(store: store)
+            }
     }
 
     /// MDX files are converted into a standalone document first.
@@ -68,7 +72,7 @@ public struct DictionaryRootView: View {
     @ViewBuilder
     private var content: some View {
         if store.documentURL == nil {
-            EmptyStateView(isImporterPresented: $isImporterPresented)
+            EmptyStateView(store: store, isImporterPresented: $isImporterPresented)
         } else {
             loadedContent
         }
@@ -107,7 +111,12 @@ public struct DictionaryRootView: View {
     #endif
 
     private var openButton: some ToolbarContent {
-        ToolbarItem(placement: .primaryAction) {
+        ToolbarItemGroup(placement: .primaryAction) {
+            Button {
+                isLibraryPresented = true
+            } label: {
+                Label("词典库", systemImage: "books.vertical")
+            }
             Button {
                 isImporterPresented = true
             } label: {

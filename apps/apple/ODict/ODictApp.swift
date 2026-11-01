@@ -9,6 +9,9 @@ struct ODictApp: App {
     var body: some Scene {
         WindowGroup {
             DictionaryRootView(store: store, isImporterPresented: $isImporterPresented)
+                .task {
+                    store.restore()
+                }
         }
     }
 }

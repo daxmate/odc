@@ -1,10 +1,13 @@
 import SwiftUI
 
-/// Shown until a dictionary is opened: an explanation plus an Open button.
+/// Shown until a dictionary is opened: the library (when it has entries)
+/// plus an Open button.
 public struct EmptyStateView: View {
+    private let store: DictionaryStore
     @Binding private var isImporterPresented: Bool
 
-    public init(isImporterPresented: Binding<Bool>) {
+    public init(store: DictionaryStore, isImporterPresented: Binding<Bool>) {
+        self.store = store
         _isImporterPresented = isImporterPresented
     }
 
@@ -15,9 +18,30 @@ public struct EmptyStateView: View {
                 .foregroundStyle(.tint)
             Text("ODict")
                 .font(.largeTitle.weight(.semibold))
-            Text(explanation)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+            if store.library.items.isEmpty {
+                Text(explanation)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            } else {
+                Text("最近词典")
+                    .font(.headline)
+                VStack(spacing: 6) {
+                    ForEach(store.library.items) { item in
+                        Button {
+                            store.open(item: item.id)
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "book.closed")
+                                Text(item.displayName)
+                                    .lineLimit(1)
+                                Spacer(minLength: 0)
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+                .frame(maxWidth: 320)
+            }
             Button("打开词典…") {
                 isImporterPresented = true
             }
