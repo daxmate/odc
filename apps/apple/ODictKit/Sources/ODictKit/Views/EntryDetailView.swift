@@ -38,30 +38,51 @@ public struct EntryDetailView: View {
         }
     }
 
+    @ViewBuilder
     private func entryView(_ entry: DictionaryEntry) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                header(entry)
-                if !entry.defs.isEmpty {
-                    definitions(entry.defs)
-                }
-                if let rawHTML = entry.rawHTML, !rawHTML.isEmpty {
-                    DisclosureGroup("原始 HTML") {
-                        Text(rawHTML)
-                            .font(.caption.monospaced())
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.top, 6)
-                    }
-                }
-                if !entry.extra.isEmpty {
-                    extraFields(entry.extra)
-                }
+        if let rawHTML = entry.rawHTML, !rawHTML.isEmpty {
+            renderedEntry(entry, html: rawHTML)
+        } else {
+            ScrollView {
+                structuredContent(entry)
+                    .padding(24)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(24)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .textSelection(.enabled)
         }
-        .textSelection(.enabled)
+    }
+
+    /// The dictionary's own HTML leads; the parsed fields stay one disclosure away.
+    private func renderedEntry(_ entry: DictionaryEntry, html: String) -> some View {
+        VStack(spacing: 0) {
+            HTMLRenderView(html: html) { target in
+                Task { await store.select(key: target) }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            DisclosureGroup("结构化释义") {
+                ScrollView {
+                    structuredContent(entry)
+                        .padding(.top, 8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 260)
+                .textSelection(.enabled)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+        }
+    }
+
+    private func structuredContent(_ entry: DictionaryEntry) -> some View {
+        VStack(alignment: .leading, spacing: 20) {
+            header(entry)
+            if !entry.defs.isEmpty {
+                definitions(entry.defs)
+            }
+            if !entry.extra.isEmpty {
+                extraFields(entry.extra)
+            }
+        }
     }
 
     private func header(_ entry: DictionaryEntry) -> some View {
