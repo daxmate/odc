@@ -1,4 +1,5 @@
 import AVFoundation
+import os
 import SwiftUI
 import WebKit
 
@@ -8,12 +9,25 @@ import AppKit
 import UIKit
 #endif
 
+/// What the reader got from the web view for the document it just loaded.
+public enum EntryRenderOutcome: Equatable, Sendable {
+    /// The document finished loading and had this many characters of visible text.
+    case loaded(visibleCharacters: Int)
+    /// The document never loaded; the caller should fall back to the parsed entry.
+    case failed(String)
+}
+
+/// Navigation diagnostics for the entry reader: watch them with
+/// `log stream --predicate 'subsystem == "com.daxmate.odict" && category == "render"'`.
+private let renderLog = Logger(subsystem: "com.daxmate.odict", category: "render")
+
 /// Shows an entry's HTML exactly as the dictionary wrote it, in a web view that
 /// cannot run scripts.
 public struct HTMLRenderView: View {
     private let html: String
     private let resources: @MainActor @Sendable (String) -> Data?
     private let onEntryLink: @MainActor @Sendable (String) -> Void
+    private let onOutcome: (@MainActor (EntryRenderOutcome) -> Void)?
 
     /// - Parameters:
     ///   - html: The entry's raw HTML.
@@ -23,18 +37,21 @@ public struct HTMLRenderView: View {
     public init(
         html: String,
         resources: @escaping @MainActor @Sendable (String) -> Data? = { _ in nil },
-        onEntryLink: @escaping @MainActor @Sendable (String) -> Void = { _ in }
+        onEntryLink: @escaping @MainActor @Sendable (String) -> Void = { _ in },
+        onOutcome: (@MainActor (EntryRenderOutcome) -> Void)? = nil
     ) {
         self.html = html
         self.resources = resources
         self.onEntryLink = onEntryLink
+        self.onOutcome = onOutcome
     }
 
     public var body: some View {
         HTMLRenderRepresentable(
             html: html,
             resources: resources,
-            onEntryLink: onEntryLink
+            onEntryLink: onEntryLink,
+            onOutcome: onOutcome
         )
     }
 }
@@ -44,6 +61,8 @@ public struct HTMLRenderView: View {
 final class HTMLRenderer: NSObject, WKNavigationDelegate {
     let webView: WKWebView
     var onEntryLink: (@MainActor @Sendable (String) -> Void)?
+    /// Reports the document's fate so the reader can replace a blank web view.
+    var onOutcome: (@MainActor (EntryRenderOutcome) -> Void)?
     /// Last document handed to the web view; reloading the same HTML would only
     /// make SwiftUI redraws flicker.
     private var loadedHTML: String?
@@ -98,6 +117,55 @@ final class HTMLRenderer: NSObject, WKNavigationDelegate {
         )
     }
 
+    // MARK: - Navigation
+
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        renderLog.debug("start \(webView.url?.absoluteString ?? "-", privacy: .public)")
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        renderLog.debug("finish \(webView.url?.absoluteString ?? "-", privacy: .public)")
+        // -1 means the document was not a complete page; measuring it would
+        // report a blank entry that is only mid-load.
+        webView.evaluateJavaScript("document.readyState === 'complete' && document.body ? document.body.innerText.length : -1") { [weak self] value, error in
+            Task { @MainActor in
+                guard let self else { return }
+                if let error {
+                    renderLog.error("measure failed: \(error.localizedDescription, privacy: .public)")
+                    self.onOutcome?(.failed(error.localizedDescription))
+                    return
+                }
+                let characters = (value as? NSNumber)?.intValue ?? -1
+                guard characters >= 0 else { return }
+                renderLog.debug("visible characters: \(characters)")
+                self.onOutcome?(.loaded(visibleCharacters: characters))
+            }
+        }
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        didFail navigation: WKNavigation!,
+        withError error: any Error
+    ) {
+        reportFailure(error)
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        didFailProvisionalNavigation navigation: WKNavigation!,
+        withError error: any Error
+    ) {
+        reportFailure(error)
+    }
+
+    /// A superseded load reports a cancellation error; that is not a failure.
+    private func reportFailure(_ error: any Error) {
+        guard (error as NSError).code != NSURLErrorCancelled else { return }
+        renderLog.error("failed: \(error.localizedDescription, privacy: .public)")
+        onOutcome?(.failed(error.localizedDescription))
+    }
+
     func webView(
         _ webView: WKWebView,
         decidePolicyFor navigationAction: WKNavigationAction,
@@ -123,12 +191,20 @@ final class HTMLRenderer: NSObject, WKNavigationDelegate {
                 decisionHandler(.allow, preferences)
             }
         case "odc-resource":
-            if let key = ODCResource.key(from: url),
-               ODCResource.isAudio(key),
-               let payload = resources(key) {
+            let key = ODCResource.key(from: url)
+            if let key, ODCResource.isAudio(key), let payload = resources(key) {
                 audio.play(payload)
+                // A tapped speaker icon plays in place instead of navigating.
+                decisionHandler(.cancel, preferences)
+            } else if navigationAction.navigationType == .linkActivated {
+                // A link to a resource (an image, say) must not replace the entry.
+                decisionHandler(.cancel, preferences)
+            } else {
+                // What is left is the document `loadHTMLString` is loading (its
+                // base URL carries no key) and the resources it references.
+                // Cancelling those leaves the reader on a blank page.
+                decisionHandler(.allow, preferences)
             }
-            decisionHandler(.cancel, preferences)
         case "about", "data", "blob":
             decisionHandler(.allow, preferences)
         default:
@@ -221,6 +297,7 @@ private struct HTMLRenderRepresentable: NSViewRepresentable {
     let html: String
     let resources: @MainActor @Sendable (String) -> Data?
     let onEntryLink: @MainActor @Sendable (String) -> Void
+    let onOutcome: (@MainActor (EntryRenderOutcome) -> Void)?
 
     func makeCoordinator() -> HTMLRenderer {
         HTMLRenderer(resources: resources)
@@ -237,6 +314,7 @@ private struct HTMLRenderRepresentable: NSViewRepresentable {
 
     private func update(_ renderer: HTMLRenderer) {
         renderer.onEntryLink = onEntryLink
+        renderer.onOutcome = onOutcome
         renderer.load(html: html)
     }
 }
@@ -247,6 +325,7 @@ private struct HTMLRenderRepresentable: UIViewRepresentable {
     let html: String
     let resources: @MainActor @Sendable (String) -> Data?
     let onEntryLink: @MainActor @Sendable (String) -> Void
+    let onOutcome: (@MainActor (EntryRenderOutcome) -> Void)?
 
     func makeCoordinator() -> HTMLRenderer {
         HTMLRenderer(resources: resources)
@@ -263,6 +342,7 @@ private struct HTMLRenderRepresentable: UIViewRepresentable {
 
     private func update(_ renderer: HTMLRenderer) {
         renderer.onEntryLink = onEntryLink
+        renderer.onOutcome = onOutcome
         renderer.load(html: html)
     }
 }

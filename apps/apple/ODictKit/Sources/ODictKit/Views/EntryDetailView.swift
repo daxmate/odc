@@ -4,6 +4,9 @@ import SwiftUI
 public struct EntryDetailView: View {
     private let store: DictionaryStore
     private let explicitKey: String?
+    /// Set when the web view could not show the entry; the parsed fields take
+    /// its place instead of a blank panel.
+    @State private var renderFailure: String?
 
     /// Detail column driven by the store's current selection.
     public init(store: DictionaryStore) {
@@ -55,25 +58,56 @@ public struct EntryDetailView: View {
     /// The dictionary's own HTML leads; the parsed fields stay one disclosure away.
     private func renderedEntry(_ entry: DictionaryEntry, html: String) -> some View {
         VStack(spacing: 0) {
-            HTMLRenderView(
-                html: html,
-                resources: { key in store.resource(for: key) },
-                onEntryLink: { target in
-                    Task { await store.select(key: target) }
-                }
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            DisclosureGroup("结构化释义") {
+            if let renderFailure {
                 ScrollView {
-                    structuredContent(entry)
-                        .padding(.top, 8)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    VStack(alignment: .leading, spacing: 16) {
+                        Label(renderFailure, systemImage: "exclamationmark.triangle")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                        structuredContent(entry)
+                    }
+                    .padding(24)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxHeight: 260)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .textSelection(.enabled)
+            } else {
+                HTMLRenderView(
+                    html: html,
+                    resources: { key in store.resource(for: key) },
+                    onEntryLink: { target in
+                        Task { await store.select(key: target) }
+                    },
+                    onOutcome: { outcome in
+                        renderFailure = Self.fallbackMessage(for: outcome)
+                    }
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                DisclosureGroup("结构化释义") {
+                    ScrollView {
+                        structuredContent(entry)
+                            .padding(.top, 8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 260)
+                    .textSelection(.enabled)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
+        }
+        .onChange(of: html) { renderFailure = nil }
+    }
+
+    /// Message shown in place of the web view, or `nil` when it drew the entry.
+    static func fallbackMessage(for outcome: EntryRenderOutcome) -> String? {
+        switch outcome {
+        case .loaded(let characters) where characters > 0:
+            return nil
+        case .loaded:
+            return "这篇词条没有可显示的正文，已切换到结构化释义。"
+        case .failed(let reason):
+            return "词条正文加载失败（\(reason)），已切换到结构化释义。"
         }
     }
 
