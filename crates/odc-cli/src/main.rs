@@ -861,6 +861,98 @@ fn print_entry(entry: &Entry) {
     }
 }
 
+/// Turns stage-scoped core samples into one line per stage and percent.
+///
+/// The core already caps the callback at about ten samples per second; this
+/// prints only when the stage changes or the overall percentage moves, so a
+/// 180k-resource import stays readable in a terminal.
+#[derive(Default)]
+struct ProgressTally {
+    entries_total: u64,
+    entries_done: u64,
+    resources_total: u64,
+    resources_done: u64,
+    last_percent: u64,
+    last_stage: Option<odc_core::ImportStage>,
+}
+
+impl ProgressTally {
+    fn observe(&mut self, sample: odc_core::ImportProgress) -> Option<String> {
+        use odc_core::ImportStage;
+        match sample.stage {
+            ImportStage::Preparing => {
+                self.resources_total = sample.total;
+                self.resources_done = 0;
+                self.entries_done = 0;
+            }
+            ImportStage::Entries => {
+                self.entries_total = sample.total;
+                self.entries_done = sample.done;
+            }
+            ImportStage::Resources => {
+                self.resources_total = sample.total;
+                self.resources_done = sample.done;
+                self.entries_done = self.entries_total;
+            }
+            ImportStage::Committing => {
+                self.entries_done = self.entries_total;
+                self.resources_done = self.resources_total;
+            }
+        }
+        let overall = percent(
+            self.entries_done + self.resources_done,
+            self.entries_total + self.resources_total,
+        );
+        if self.last_stage == Some(sample.stage) && overall <= self.last_percent {
+            return None;
+        }
+        self.last_stage = Some(sample.stage);
+        self.last_percent = overall;
+        let line = match sample.stage {
+            ImportStage::Preparing => format!(
+                "progress: preparing {overall}% · resources {} · volumes {}",
+                thousands(sample.total),
+                sample.volume_count
+            ),
+            ImportStage::Entries => format!(
+                "progress: entries {overall}% · {} / {}",
+                thousands(sample.done),
+                thousands(sample.total)
+            ),
+            ImportStage::Resources => {
+                let volumes = if sample.volume_count > 0 {
+                    format!(" · volume {}/{}", sample.volume_index, sample.volume_count)
+                } else {
+                    String::new()
+                };
+                format!(
+                    "progress: resources {overall}% · {} / {}{volumes}",
+                    thousands(sample.done),
+                    thousands(sample.total)
+                )
+            }
+            ImportStage::Committing => format!("progress: committing {overall}%"),
+        };
+        Some(line)
+    }
+}
+
+fn percent(done: u64, total: u64) -> u64 {
+    done.saturating_mul(100).checked_div(total).unwrap_or(100)
+}
+
+fn thousands(value: u64) -> String {
+    let digits = value.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(digit);
+    }
+    out
+}
+
 fn import_mdx(
     repo: &mut Repo,
     path: &std::path::Path,
@@ -889,7 +981,7 @@ fn import_mdx(
             .map_or(String::new(), |value| format!(", encrypted={value}")),
     );
 
-    let mut next_mark = 10_000usize;
+    let mut tally = ProgressTally::default();
     let options = MdxImportOptions {
         skip_corrupt_blocks: true,
         prune,
@@ -897,10 +989,9 @@ fn import_mdx(
         import_mdd: true,
         mdd_volumes: None,
         progress: if progress {
-            Some(Box::new(move |written: usize| {
-                if written >= next_mark {
-                    eprintln!("progress: {written} entries");
-                    next_mark = written + 10_000;
+            Some(Box::new(move |sample: odc_core::ImportProgress| {
+                if let Some(line) = tally.observe(sample) {
+                    eprintln!("{line}");
                 }
             }))
         } else {
