@@ -14,7 +14,7 @@
 | 文本编码 | UTF-8、UTF-16LE、GBK/GB2312、GB18030、Big5（由头部 `Encoding` 决定） |
 | 块压缩 | 无压缩、zlib、LZO（启用 mdictlib 的 `lzo` 特性） |
 | 校验和 | 导入时启用（adler32 逐块校验）；MDX 2.0 的坏块可修复跳过（见「损坏块容错」），其余情况报 `ODC-E021` |
-| MDD 资源文件 | 不导入（M1 非目标） |
+| MDD 资源文件 | 导入（主卷 + 数字卷，逐条规范化键写入 `resources` 表） |
 | MDX 写出 | 不支持（M1 非目标） |
 
 ## 第 0 步：候选 crate 评测
@@ -156,4 +156,6 @@ pub fn import_mdx(path: &Path, repo: &mut Repo, options: MdxImportOptions)
 * 需要显式 passcode 才能解密的词典暂不能导入（CLI 尚无 `--passcode`）；
   本机 4 个样本无需 passcode。
 * LZO 压缩路径已编译启用，但没有真实 LZO 词典可验证。
-* MDD（图片、发音、样式表）不导入，`raw_html` 中的相对资源引用需阅读器自行处理。
+* MDD（图片、发音、样式表）随 MDX 一起导入：`<同名>.mdd`、`<同名>.1.mdd` … 按主卷优先、
+  数字升序读取，单卷损坏只记 warning，不中断 MDX 导入。阅读器把 `raw_html` 里的相对
+  `src`/`href`/`url(...)` 改写为 `odc-resource:///<规范化键>`。

@@ -24,6 +24,14 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ### Added
 
+* MDD resources: importing an MDX file now also imports the sibling MDD
+  volumes (`<name>.mdd`, `<name>.1.mdd` … main volume first, then ascending
+  numbers) into a new `resources` table, so images, audio and fonts live inside
+  the `.odc` file. A broken volume is a warning, never a failed import; the
+  import report carries `mdd_files`, `resource_count`, `resource_bytes` and
+  `warnings`. The C ABI gains `odc_repo_resource_count`,
+  `odc_repo_resource_len`, `odc_repo_resource_copy` and
+  `odc_import_mdx_to_odc_with_mdd`.
 * Apple clients: `apps/apple/` ships the **ODict** (iOS) and **ODict Desktop**
   (macOS) SwiftUI targets on a shared `ODictKit` package. v0 opens a
   dictionary, prefix-searches it through `ODCFFI` and renders entries

@@ -219,6 +219,8 @@ CREATE TABLE refs(name TEXT PRIMARY KEY, commit_hash BLOB NOT NULL);
 CREATE TABLE conflicts(id INTEGER PRIMARY KEY, word TEXT NOT NULL, detail TEXT NOT NULL);
 CREATE TABLE staging(word TEXT PRIMARY KEY, display TEXT NOT NULL,
                      payload BLOB, content_hash BLOB NOT NULL);
+CREATE TABLE resources(key TEXT PRIMARY KEY, block_id INTEGER NOT NULL,
+                       size INTEGER NOT NULL);
 ```
 
 * `entries` 是 HEAD 的物化索引；`block_id` 指向 `blocks.id`（块号），`offset`/`length` 指向块内该
@@ -239,6 +241,7 @@ CREATE TABLE staging(word TEXT PRIMARY KEY, display TEXT NOT NULL,
 * codec：`0` = 原始字节，`1` = zstd（参考实现写入用级别 9，实现可调，不影响任何哈希）。
 * `conflicts` 保存未完成的合并中每个冲突词条的决定（见 §10.1 与 `docs/merge.md`）。
 * `meta.shallow = 1`（ASCII `"1"`）标记由 `pack --shallow` 导出的文件：HEAD 的父提交可以缺失，`log` 在边界结束、`verify` 视其为正常终点。缺省 `0`；这是可选元数据，不改变 `format_version`，也不改写提交对象。详见 `docs/shallow.md`。
+* `resources` 保存 MDX 配套 MDD 里的图片、发音等载荷：`key` 是规范化后的资源路径（反斜杠转 `/`、去前导 `/` 与 `./`，大小写保留、查找时大小写不敏感），`block_id` 指向 `blocks.id`（`codec = 0` 原样存储，载荷本身已是压缩媒体）。导入旧库时按需建表，不改变 `schema_version`；`pack` 一并导出该表及其块。
 * `pack` 的产物是一个独立的 SQLite 数据库文件，可以直接作为 `--repo` 打开；它不包含 `staging`、`conflicts` 或 `meta.merge`。
 
 ## 10. 命令语义
