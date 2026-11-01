@@ -236,7 +236,28 @@ CREATE TABLE resources(key TEXT PRIMARY KEY, block_id INTEGER NOT NULL,
 * 提交成功后 `staging` 被整体清空，`meta.workset_clean = "1"` 表示工作区等于 HEAD；
   下一次写入前按需从 `entries` 重建（只复制 word / display / content_hash，payload 由块按需取回）。
   这样工作区不必在任何时候都保留一份索引的副本。
-* `commit_index` 存 zstd 压缩的 CBOR 快照：按 key 升序的 `[[word, content_hash], …]` 数组，用于历史 diff。写入与读取都按条流式进行（数组头给出条目数），实现不得要求整表驻留内存；`raw_size` 记录未压缩字节数，`verify` 会与实际解码字节数比对。
+* `commit_index` 存 zstd 压缩的 CBOR 条目，用于历史 diff。条目是 6 元数组
+  `["odc-idx", version, kind, depth, entry_count, body]`：
+
+  | 字段 | 含义 |
+  | --- | --- |
+  | `"odc-idx"` | 固定文本帧，用来与旧版条目区分 |
+  | `version` | 条目格式版本，当前为 `1` |
+  | `kind` | `0` = full（全量快照），`1` = delta（相对父提交的增量） |
+  | `depth` | 到最近 full 锚点之间的 delta 个数；full 为 `0` |
+  | `entry_count` | 重建后索引的条目数 |
+  | `body` | full：按 key 升序的 `[[word, content_hash], …]` 数组；delta：按 word 严格升序的操作数组 |
+
+  delta 的操作为 `[word, op]`（`op = 2` 删除）或 `[word, op, content_hash]`
+  （`op = 0` 新增、`1` 修改）。读一个 delta 时沿 first parent 回溯到最近的 full，
+  再按顺序回放：两侧都是升序流，合并只保留每条流的一个当前项，不物化整表。
+  每 32 个提交写一次 full 锚点（`snapshot::ANCHOR_INTERVAL`），把回溯深度限制在 31 层；
+  除锚点外，新增提交只在它与父提交的差异不超过索引一半时写 delta，否则退化为 full。
+
+  旧库无需迁移：没有 `"odc-idx"` 帧的条目就是旧版的全量快照（顶层是
+  `[[word, content_hash], …]` 数组），读路径直接按 full 处理。
+  `raw_size` 记录该条目自身的未压缩字节数；`verify` 会把一条链上所有条目的
+  `raw_size` 之和与实际解码字节数比对。
 * `staging` 是工作区（未提交内容）。它不属于互操作格式。已提交词条只保留指针（`word`、`display`、`content_hash`），`payload` 为 NULL；未提交词条必须携带 payload。需要正文时按 `content_hash` 从 `entries` 定位块、解压并校验。提交成功后整张表被清空，见上文 `meta.workset_clean`。
 * codec：`0` = 原始字节，`1` = zstd（参考实现写入用级别 9，实现可调，不影响任何哈希）。
 * `conflicts` 保存未完成的合并中每个冲突词条的决定（见 §10.1 与 `docs/merge.md`）。
@@ -261,7 +282,7 @@ CREATE TABLE resources(key TEXT PRIMARY KEY, block_id INTEGER NOT NULL,
 | `diff A B` | 词条级 added / removed / modified；`--json` 输出结构化结果 |
 | `status` | 工作区相对 HEAD 的 added / modified / removed |
 | `verify` | 校验块哈希、块解码、索引偏移、content_hash、field_hashes、commit 哈希链、HEAD 根一致性；逐块流式校验，内存不随词典规模增长 |
-| `gc --keep-last N [--dry-run] [--vacuum]` | 保留每个 ref 及其 first-parent 链上最近 N 个提交，删除其余 commit、commit_index 与当前索引不再引用的块；`--dry-run` 只报告将释放的条数与字节，`--vacuum` 事后重建数据库文件 |
+| `gc --keep-last N [--dry-run] [--vacuum]` | 保留每个 ref 及其 first-parent 链上最近 N 个提交，删除其余 commit、commit_index 与当前索引不再引用的块（保留链上最老的 delta 会先重写成 full 锚点，避免父索引被删后无法回溯）；`--dry-run` 只报告将释放的条数与字节，`--vacuum` 事后重建数据库文件 |
 | `patch create \| apply \| verify` | 见 §11 与 `docs/patch.md`；`apply` 在精确 base 上应用，HEAD 为 base 后代时转为三方合并 |
 
 `search` 只做前缀匹配；核心另提供 `Repo::search_substring`（`LIKE ... ESCAPE` 包含匹配，短词优先），FFI 与 Apple 端用它作为前缀无结果时的回退，CLI 尚未暴露。

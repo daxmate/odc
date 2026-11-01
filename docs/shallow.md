@@ -18,7 +18,7 @@ odc --repo head.odc log                       # 单文件可直接作为 --repo
 | 对象 | full | shallow |
 | --- | --- | --- |
 | `commits` | HEAD 可达的全部提交（沿 `parent` / `parent2` 追溯） | 只有 HEAD |
-| `commit_index` | 上述每个提交的快照 | 只有 HEAD 的快照 |
+| `commit_index` | 上述每个提交的条目（full 与 delta 原样复制） | 只有 HEAD 的条目；若它是 delta，导出时重建成 full |
 | `entries` | HEAD 的物化索引 | 同 full |
 | `blocks` | 存储中的全部块 | 仅 `entries` 引用的块 |
 | `refs` | `HEAD` | `HEAD` |
@@ -26,7 +26,8 @@ odc --repo head.odc log                       # 单文件可直接作为 --repo
 
 块的取舍：shallow 只保留 HEAD 的 `entries` 引用的块；full 保留存储中的所有块，因为
 这些块都由 HEAD 可达的提交产生（`gc` 负责删除不再被任何保留修订需要的块）。
-`commit_index` 只保存 `word → content_hash`，不保存历史块位置，所以 full 虽然保留了
+`commit_index` 只保存 `word → content_hash`，不保存历史块位置；浅导出没有父提交可回溯，
+所以 HEAD 的条目必须是 full（delta 会在导出时重建成 full）。完整导出虽然保留了
 旧提交的块字节，但无法从快照把某个历史修订的词条重新定位到块内偏移；历史修订仍可用
 `diff` 比较，但正文以 HEAD 的物化索引为准。
 

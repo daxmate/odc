@@ -392,6 +392,11 @@ pub fn write_array_header(len: u64, out: &mut Vec<u8>) {
     push_head(4, len, out);
 }
 
+/// Write one CBOR unsigned integer.
+pub fn write_uint(value: u64, out: &mut Vec<u8>) {
+    push_head(0, value, out);
+}
+
 /// Write one CBOR text string.
 pub fn write_text(text: &str, out: &mut Vec<u8>) {
     push_head(3, text.len() as u64, out);

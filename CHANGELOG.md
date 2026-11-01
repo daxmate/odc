@@ -6,6 +6,17 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ## [Unreleased]
 
+### Changed
+
+* Core: commit indexes are stored as deltas against the first parent, with a
+  full snapshot every 32 commits, so a history no longer costs a full index per
+  commit. Twelve commits of three hundred entries take 11,551 compressed bytes
+  instead of 126,496. Existing repositories keep reading unchanged: entries
+  written before the frame are read as full snapshots, so no migration or
+  re-import is needed. `gc` rewrites the oldest retained entry as a full
+  anchor before dropping its parents, and `pack --shallow` materialises HEAD's
+  index because a single-commit file has no parent to replay.
+
 ## [0.4.0] - 2026-11-01
 
 ### Added

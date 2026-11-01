@@ -7,6 +7,7 @@ use crate::cdc;
 use crate::entry::{normalize_key, Entry};
 use crate::error::{Error, Result};
 use crate::hash::{self, ZERO_HASH};
+use crate::index::{self, IndexChain};
 use crate::pack::{self, PackOptions, PackReport};
 use crate::snapshot;
 use crate::store::{self, codec, DB_FILE};
@@ -118,6 +119,19 @@ pub struct Diff {
     pub modified: Vec<String>,
 }
 
+/// Storage shape of the commit index table.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct IndexStorage {
+    /// Entries stored as full snapshots.
+    pub full: usize,
+    /// Entries stored as deltas.
+    pub delta: usize,
+    /// Uncompressed bytes over every entry.
+    pub raw_bytes: u64,
+    /// Compressed bytes over every entry.
+    pub compressed_bytes: u64,
+}
+
 /// Result of `verify`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VerifyReport {
@@ -146,6 +160,98 @@ fn compress(data: &[u8]) -> Result<Vec<u8>> {
 
 fn decompress(data: &[u8], raw_size: usize) -> Result<Vec<u8>> {
     zstd::bulk::decompress(data, raw_size).map_err(|error| Error::Io(error.to_string()))
+}
+
+/// Word and digest of one commit_digests row.
+fn digest_row(row: &rusqlite::Row<'_>) -> Result<(String, [u8; 32])> {
+    let word: String = row.get(0)?;
+    let digest = hash_from_blob(&row.get::<_, Vec<u8>>(1)?)?;
+    Ok((word, digest))
+}
+
+/// Fill the commit_delta temp table with the operations that turn the parent
+/// index into the index held in commit_digests.
+///
+/// Both sides arrive in word order, so the difference is a single merge over
+/// two streams; neither index is materialised as a map.
+fn build_delta(transaction: &rusqlite::Transaction<'_>, parent: &[u8; 32]) -> Result<u64> {
+    enum Step {
+        AddNew,
+        RemoveParent,
+        Equal,
+    }
+
+    let mut parent_index = index::open_index(transaction, parent, snapshot::MAX_CHAIN_DEPTH)?;
+    let mut next_parent = parent_index.next_pair()?;
+    let mut operations = 0u64;
+    {
+        let mut insert = transaction
+            .prepare("INSERT INTO commit_delta(word, kind, digest) VALUES (?1, ?2, ?3)")?;
+        let mut select =
+            transaction.prepare("SELECT word, digest FROM commit_digests ORDER BY word ASC")?;
+        let mut rows = select.query([])?;
+        let mut next_new = match rows.next()? {
+            Some(row) => Some(digest_row(row)?),
+            None => None,
+        };
+        loop {
+            let step = match (&next_parent, &next_new) {
+                (None, None) => break,
+                (None, Some(_)) => Step::AddNew,
+                (Some(_), None) => Step::RemoveParent,
+                (Some((parent_word, _)), Some((word, _))) => match word.cmp(parent_word) {
+                    std::cmp::Ordering::Less => Step::AddNew,
+                    std::cmp::Ordering::Greater => Step::RemoveParent,
+                    std::cmp::Ordering::Equal => Step::Equal,
+                },
+            };
+            match step {
+                Step::AddNew => {
+                    let (word, digest) = next_new.take().expect("new pair was present");
+                    insert.execute(params![word, 0_i64, digest.as_slice()])?;
+                    operations += 1;
+                    next_new = match rows.next()? {
+                        Some(row) => Some(digest_row(row)?),
+                        None => None,
+                    };
+                }
+                Step::RemoveParent => {
+                    let (word, _) = next_parent.take().expect("parent pair was present");
+                    insert.execute(params![word, 2_i64, Option::<Vec<u8>>::None])?;
+                    operations += 1;
+                    next_parent = parent_index.next_pair()?;
+                }
+                Step::Equal => {
+                    let (word, digest) = next_new.take().expect("new pair was present");
+                    let (_, parent_digest) = next_parent.take().expect("parent pair was present");
+                    next_parent = parent_index.next_pair()?;
+                    next_new = match rows.next()? {
+                        Some(row) => Some(digest_row(row)?),
+                        None => None,
+                    };
+                    if digest != parent_digest {
+                        insert.execute(params![word, 1_i64, digest.as_slice()])?;
+                        operations += 1;
+                    }
+                }
+            }
+        }
+    }
+    Ok(operations)
+}
+
+/// Finish a zstd entry into temp path and report (raw bytes, compressed bytes).
+fn finish_entry<W: Write>(
+    writer: snapshot::SnapshotWriter<zstd::stream::write::Encoder<'static, W>>,
+    path: &Path,
+) -> Result<(u64, u64)> {
+    let (encoder, raw_size) = writer.finish()?;
+    let mut buffered = encoder
+        .finish()
+        .map_err(|error| Error::Io(error.to_string()))?;
+    buffered.flush()?;
+    let compressed_size = std::fs::metadata(path)?.len();
+    Ok((raw_size, compressed_size))
 }
 
 /// True when `staging` was dropped after a commit and therefore mirrors HEAD.
@@ -240,7 +346,21 @@ impl Repo {
         let head = self.head()?.ok_or_else(|| {
             Error::InvalidArgument("pack requires at least one commit".to_string())
         })?;
-        pack::pack(&self.connection, &self.db_path, head, out.as_ref(), options)
+        let head_index = if options.shallow || pack::is_shallow(&self.connection)? {
+            self.materialized_head_index(&head)?
+        } else {
+            None
+        };
+        pack::pack(
+            &self.connection,
+            &self.db_path,
+            head,
+            out.as_ref(),
+            options,
+            head_index
+                .as_ref()
+                .map(|(raw_size, bytes)| (&head, bytes.as_slice(), *raw_size)),
+        )
     }
 
     fn write_genesis(&self) -> Result<()> {
@@ -258,7 +378,7 @@ impl Repo {
         self.insert_commit(&commit)?;
         store::set_meta(&self.connection, store::META_WORKSET_CLEAN, b"1")?;
         let snapshot = {
-            let writer = snapshot::SnapshotWriter::new(Vec::new(), 0)?;
+            let writer = snapshot::SnapshotWriter::full(Vec::new(), 0)?;
             let (buffer, _) = writer.finish()?;
             buffer
         };
@@ -780,7 +900,11 @@ impl Repo {
         // peak memory flat on dictionaries with hundreds of thousands of rows.
         transaction.execute_batch(
             "CREATE TEMP TABLE IF NOT EXISTS commit_digests(word TEXT PRIMARY KEY, digest BLOB NOT NULL);
-             DELETE FROM commit_digests;",
+             DELETE FROM commit_digests;
+             CREATE TEMP TABLE IF NOT EXISTS commit_delta(word TEXT PRIMARY KEY,
+                                                         kind INTEGER NOT NULL,
+                                                         digest BLOB);
+             DELETE FROM commit_delta;",
         )?;
 
         {
@@ -929,6 +1053,33 @@ impl Repo {
         let commit_hash =
             hash::commit_hash(&parent, &ZERO_HASH, &entry_root, &block_root, entry_count);
 
+        // The entry is a full snapshot at the genesis commit, every
+        // ANCHOR_INTERVAL commits, and whenever the parent has no index to
+        // diff against; otherwise it is the difference to the parent.
+        let parent_header = if parent == ZERO_HASH {
+            None
+        } else {
+            index::index_header(&transaction, &parent)?
+        };
+        let parent_depth = parent_header.map_or(0, |header| header.depth);
+        let anchor = parent == ZERO_HASH
+            || parent_header.is_none()
+            || parent_depth + 1 >= snapshot::ANCHOR_INTERVAL;
+        let (kind, depth, operation_count) = if anchor {
+            (snapshot::EntryKind::Full, 0, entry_count)
+        } else {
+            let depth = parent_depth + 1;
+            let operations = build_delta(&transaction, &parent)?;
+            // A delta larger than half the index costs more to read than the
+            // snapshot it replaces (it still has to decode the parent), so a
+            // bulk rewrite resets the chain to a full anchor instead.
+            if operations.saturating_mul(2) > entry_count {
+                (snapshot::EntryKind::Full, 0, entry_count)
+            } else {
+                (snapshot::EntryKind::Delta, depth, operations)
+            }
+        };
+
         let (raw_size, compressed_size) = {
             let file = std::fs::OpenOptions::new()
                 .write(true)
@@ -937,24 +1088,47 @@ impl Repo {
             let encoder =
                 zstd::stream::write::Encoder::new(std::io::BufWriter::new(file), ZSTD_LEVEL)
                     .map_err(|error| Error::Io(error.to_string()))?;
-            let mut writer = snapshot::SnapshotWriter::new(encoder, entry_count)?;
-            {
-                let mut select = transaction
-                    .prepare("SELECT word, digest FROM commit_digests ORDER BY word ASC")?;
-                let mut rows = select.query([])?;
-                while let Some(row) = rows.next()? {
-                    let word: String = row.get(0)?;
-                    let digest = hash_from_blob(&row.get::<_, Vec<u8>>(1)?)?;
-                    writer.push(&word, &digest)?;
+            match kind {
+                snapshot::EntryKind::Full => {
+                    let mut writer = snapshot::SnapshotWriter::full(encoder, entry_count)?;
+                    let mut select = transaction
+                        .prepare("SELECT word, digest FROM commit_digests ORDER BY word ASC")?;
+                    let mut rows = select.query([])?;
+                    while let Some(row) = rows.next()? {
+                        let (word, digest) = digest_row(row)?;
+                        writer.push(&word, &digest)?;
+                    }
+                    finish_entry(writer, temp.path())?
+                }
+                snapshot::EntryKind::Delta => {
+                    let mut writer = snapshot::SnapshotWriter::delta(
+                        encoder,
+                        depth,
+                        entry_count,
+                        operation_count,
+                    )?;
+                    let mut select = transaction
+                        .prepare("SELECT word, kind, digest FROM commit_delta ORDER BY word ASC")?;
+                    let mut rows = select.query([])?;
+                    while let Some(row) = rows.next()? {
+                        let word: String = row.get(0)?;
+                        let code: i64 = row.get(1)?;
+                        let op = match code {
+                            0 => snapshot::Op::Add {
+                                word,
+                                digest: hash_from_blob(&row.get::<_, Vec<u8>>(2)?)?,
+                            },
+                            1 => snapshot::Op::Change {
+                                word,
+                                digest: hash_from_blob(&row.get::<_, Vec<u8>>(2)?)?,
+                            },
+                            _ => snapshot::Op::Remove { word },
+                        };
+                        writer.push_op(&op)?;
+                    }
+                    finish_entry(writer, temp.path())?
                 }
             }
-            let (encoder, raw_size) = writer.finish()?;
-            let mut buffered = encoder
-                .finish()
-                .map_err(|error| Error::Io(error.to_string()))?;
-            buffered.flush()?;
-            let compressed_size = std::fs::metadata(temp.path())?.len();
-            (raw_size, compressed_size)
         };
 
         let commit = CommitRecord {
@@ -1304,41 +1478,84 @@ impl Repo {
         )
     }
 
+    /// Frame of the index entry stored for a commit.
+    ///
+    /// `None` means the commit has no index row. Diagnostics use it to tell a
+    /// full snapshot from a delta without decoding the body.
+    pub fn commit_index_header(&self, hash: &[u8; 32]) -> Result<Option<snapshot::EntryHeader>> {
+        index::index_header(&self.connection, hash)
+    }
+
+    /// Count and size of the stored commit indexes, split by encoding.
+    pub fn index_storage(&self) -> Result<IndexStorage> {
+        let mut entries = Vec::new();
+        {
+            let mut statement = self
+                .connection
+                .prepare("SELECT commit_hash, raw_size, LENGTH(data) FROM commit_index")?;
+            let mut rows = statement.query([])?;
+            while let Some(row) = rows.next()? {
+                entries.push((
+                    hash_from_blob(&row.get::<_, Vec<u8>>(0)?)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ));
+            }
+        }
+        let mut storage = IndexStorage::default();
+        for (hash, raw_size, compressed) in entries {
+            storage.raw_bytes += u64::try_from(raw_size).unwrap_or(0);
+            storage.compressed_bytes += u64::try_from(compressed).unwrap_or(0);
+            match index::index_header(&self.connection, &hash)? {
+                Some(header) if header.kind == snapshot::EntryKind::Delta => storage.delta += 1,
+                _ => storage.full += 1,
+            }
+        }
+        Ok(storage)
+    }
+
     /// Open a streaming reader over the commit index stored for `hash`.
     ///
     /// The compressed blob is decoded on the fly and only one entry is held in
-    /// memory at a time.
-    pub(crate) fn snapshot_reader(
-        &self,
-        hash: &[u8; 32],
-    ) -> Result<snapshot::SnapshotReader<impl Read + '_>> {
-        let rowid: Option<i64> = self
-            .connection
-            .query_row(
-                "SELECT rowid FROM commit_index WHERE commit_hash = ?1",
-                params![hash.as_slice()],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let rowid = rowid.ok_or_else(|| {
-            Error::Inconsistent(format!("missing commit_index for {}", hash::to_hex(hash)))
-        })?;
-        let blob = self
-            .connection
-            .blob_open("main", "commit_index", "data", rowid, true)?;
-        let decoder =
-            zstd::stream::read::Decoder::new(blob).map_err(|error| Error::Io(error.to_string()))?;
-        snapshot::SnapshotReader::new(decoder)
+    /// memory at a time. A delta entry is replayed over its parent chain, which
+    /// holds one pair from the parent and one operation per delta level.
+    pub(crate) fn snapshot_reader(&self, hash: &[u8; 32]) -> Result<IndexChain<'_>> {
+        index::open_index(&self.connection, hash, snapshot::MAX_CHAIN_DEPTH)
+    }
+
+    /// Compressed full snapshot of HEAD's index, for a shallow pack.
+    ///
+    /// A shallow pack keeps one commit, so an index that points at a parent
+    /// would be unreadable in the destination. Returns the rebuilt bytes, or
+    /// `None` when the stored entry is already a full snapshot.
+    fn materialized_head_index(&self, hash: &[u8; 32]) -> Result<Option<(u64, Vec<u8>)>> {
+        if index::index_header(&self.connection, hash)?
+            .is_some_and(|header| header.kind == snapshot::EntryKind::Full)
+        {
+            return Ok(None);
+        }
+        let entry_count: i64 = self.connection.query_row(
+            "SELECT entry_count FROM commits WHERE commit_hash = ?1",
+            params![hash.as_slice()],
+            |row| row.get(0),
+        )?;
+        let mut writer = snapshot::SnapshotWriter::full(
+            Vec::new(),
+            u64::try_from(entry_count).unwrap_or(u64::MAX),
+        )?;
+        {
+            let mut reader = self.snapshot_reader(hash)?;
+            while let Some((word, digest)) = reader.next_pair()? {
+                writer.push(&word, &digest)?;
+            }
+        }
+        let (raw, raw_size) = writer.finish()?;
+        Ok(Some((raw_size, compress(&raw)?)))
     }
 
     /// Merkle root and entry count of the snapshot stored for `hash`, folded
     /// while streaming.
     fn snapshot_summary(&self, hash: &[u8; 32]) -> Result<([u8; 32], u64, u64, u64)> {
-        let raw_size: i64 = self.connection.query_row(
-            "SELECT raw_size FROM commit_index WHERE commit_hash = ?1",
-            params![hash.as_slice()],
-            |row| row.get(0),
-        )?;
         let mut reader = self.snapshot_reader(hash)?;
         let mut accumulator = hash::MerkleAccumulator::new();
         let mut count = 0u64;
@@ -1349,7 +1566,7 @@ impl Repo {
         Ok((
             accumulator.finish(),
             count,
-            u64::try_from(raw_size).unwrap_or(u64::MAX),
+            reader.raw_size(),
             reader.bytes_read(),
         ))
     }
@@ -1765,6 +1982,10 @@ impl Repo {
         }
 
         if !dry_run {
+            // A delta points at its parent, and the parent index is about to
+            // disappear for the oldest retained commit: pin it with a full
+            // snapshot first.
+            self.anchor_boundary_indexes(&retained)?;
             let transaction = self.connection.transaction()?;
             {
                 let mut delete =
@@ -1802,6 +2023,93 @@ impl Repo {
             freed_index_bytes,
             vacuumed: vacuum && !dry_run,
         })
+    }
+
+    /// Rewrite a retained delta entry as a full snapshot when the parent it
+    /// diffs against is about to be deleted.
+    ///
+    /// Without this the oldest retained commit would keep a delta whose parent
+    /// index no longer exists, and reading it would fail as a broken chain.
+    fn anchor_boundary_indexes(&self, retained: &HashSet<[u8; 32]>) -> Result<usize> {
+        let mut rewritten = 0;
+        let hashes: Vec<[u8; 32]> = retained.iter().copied().collect();
+        for hash in hashes {
+            let Some(header) = index::index_header(&self.connection, &hash)? else {
+                continue;
+            };
+            if header.kind != snapshot::EntryKind::Delta {
+                continue;
+            }
+            let parent_kept = index::commit_parent(&self.connection, &hash)?
+                .is_some_and(|parent| retained.contains(&parent));
+            if parent_kept {
+                continue;
+            }
+            self.rewrite_index_as_full(&hash)?;
+            rewritten += 1;
+        }
+        Ok(rewritten)
+    }
+
+    /// Replace the entry stored for a commit with a full snapshot of the index
+    /// it rebuilds today.
+    fn rewrite_index_as_full(&self, hash: &[u8; 32]) -> Result<()> {
+        let entry_count: i64 = self.connection.query_row(
+            "SELECT entry_count FROM commits WHERE commit_hash = ?1",
+            params![hash.as_slice()],
+            |row| row.get(0),
+        )?;
+        let temp = TempPath::new(&self.dir, "commit-index");
+        let (raw_size, compressed_size) = {
+            let file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(temp.path())?;
+            let encoder =
+                zstd::stream::write::Encoder::new(std::io::BufWriter::new(file), ZSTD_LEVEL)
+                    .map_err(|error| Error::Io(error.to_string()))?;
+            let mut writer = snapshot::SnapshotWriter::full(
+                encoder,
+                u64::try_from(entry_count).unwrap_or(u64::MAX),
+            )?;
+            {
+                let mut reader = self.snapshot_reader(hash)?;
+                while let Some((word, digest)) = reader.next_pair()? {
+                    writer.push(&word, &digest)?;
+                }
+            }
+            finish_entry(writer, temp.path())?
+        };
+        self.connection.execute(
+            "UPDATE commit_index SET codec = ?2, raw_size = ?3, data = zeroblob(?4)
+             WHERE commit_hash = ?1",
+            params![
+                hash.as_slice(),
+                codec::ZSTD,
+                raw_size as i64,
+                compressed_size as i64,
+            ],
+        )?;
+        let rowid: i64 = self.connection.query_row(
+            "SELECT rowid FROM commit_index WHERE commit_hash = ?1",
+            params![hash.as_slice()],
+            |row| row.get(0),
+        )?;
+        {
+            let mut blob =
+                self.connection
+                    .blob_open("main", "commit_index", "data", rowid, false)?;
+            let mut file = std::fs::File::open(temp.path())?;
+            let mut buffer = vec![0u8; 64 * 1024];
+            loop {
+                let read = file.read(&mut buffer)?;
+                if read == 0 {
+                    break;
+                }
+                blob.write_all(&buffer[..read])?;
+            }
+        }
+        Ok(())
     }
 }
 pub(crate) fn decode_block_data(codec_id: i64, raw_size: usize, data: &[u8]) -> Result<Vec<u8>> {
@@ -2414,7 +2722,7 @@ impl Repo {
             let encoder =
                 zstd::stream::write::Encoder::new(std::io::BufWriter::new(file), ZSTD_LEVEL)
                     .map_err(|error| Error::Io(error.to_string()))?;
-            let mut writer = snapshot::SnapshotWriter::new(encoder, entry_count)?;
+            let mut writer = snapshot::SnapshotWriter::full(encoder, entry_count)?;
             {
                 // The merged rows carry the full digest; `staging` only keeps
                 // the prefix that the working-set comparison needs.
@@ -2495,5 +2803,161 @@ impl Repo {
         )?;
         transaction.commit()?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod index_entry_tests {
+    use super::*;
+    use crate::entry::Def;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_dir(label: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_nanos());
+        let dir = std::env::temp_dir().join(format!(
+            "odc-index-entry-{label}-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        dir
+    }
+
+    fn entry(index: usize) -> Entry {
+        let mut entry = Entry::new(format!("word-{index:05}"));
+        entry.phonetic = vec![format!("/wɜːd{index}/")];
+        entry.defs = vec![Def {
+            pos: "noun".to_string(),
+            sense: format!("definition number {index}"),
+            examples: vec![format!("an example with word-{index:05}")],
+            labels: Vec::new(),
+        }];
+        entry
+    }
+
+    /// Bytes of the pre-delta encoding: a bare array of pairs.
+    fn legacy_entry(pairs: &[(String, [u8; 32])]) -> (Vec<u8>, u64) {
+        let value = Value::Array(
+            pairs
+                .iter()
+                .map(|(word, digest)| {
+                    Value::Array(vec![
+                        Value::Text(word.clone()),
+                        Value::Bytes(digest.to_vec()),
+                    ])
+                })
+                .collect(),
+        );
+        let raw = cbor::encode(&value);
+        (compress(&raw).expect("compress"), raw.len() as u64)
+    }
+
+    fn pairs_of(repo: &Repo, hash: &[u8; 32]) -> Vec<(String, [u8; 32])> {
+        let mut reader = repo.snapshot_reader(hash).expect("reader");
+        let mut pairs = Vec::new();
+        while let Some(pair) = reader.next_pair().expect("pair") {
+            pairs.push(pair);
+        }
+        pairs
+    }
+
+    fn rewrite_as_legacy(repo: &Repo) {
+        let mut hashes = Vec::new();
+        {
+            let mut statement = repo
+                .connection
+                .prepare("SELECT commit_hash FROM commit_index")
+                .expect("prepare");
+            let mut rows = statement.query([]).expect("query");
+            while let Some(row) = rows.next().expect("row") {
+                hashes
+                    .push(hash_from_blob(&row.get::<_, Vec<u8>>(0).expect("hash")).expect("blob"));
+            }
+        }
+        for hash in hashes {
+            let pairs = pairs_of(repo, &hash);
+            let (data, raw_size) = legacy_entry(&pairs);
+            repo.connection
+                .execute(
+                    "UPDATE commit_index SET raw_size = ?2, data = ?3 WHERE commit_hash = ?1",
+                    params![hash.as_slice(), raw_size as i64, data],
+                )
+                .expect("rewrite");
+        }
+    }
+
+    #[test]
+    fn legacy_full_only_indexes_still_read() {
+        let dir = temp_dir("legacy");
+        let mut repo = Repo::init(&dir).expect("init");
+        let mut entries: Vec<Entry> = (0..30).map(entry).collect();
+        repo.import(&entries, true).expect("import");
+        repo.commit("first", "tester", 1_700_600_000)
+            .expect("commit");
+        for step in 0..3 {
+            entries[step].defs[0].sense = format!("revised {step}");
+            repo.import(&entries, true).expect("import");
+            repo.commit(
+                &format!("step {step}"),
+                "tester",
+                1_700_600_001 + step as i64,
+            )
+            .expect("commit");
+        }
+
+        // Rewrite every entry the way the previous release did.
+        rewrite_as_legacy(&repo);
+        let storage = repo.index_storage().expect("storage");
+        assert_eq!(storage.delta, 0);
+        assert!(storage.full >= 5);
+
+        let diff = repo.diff("HEAD~2", "HEAD").expect("diff");
+        assert_eq!(diff.modified.len(), 2);
+        assert!(repo.show("word-00029").expect("show").is_some());
+        assert!(repo.verify().expect("verify").ok);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn delta_encoding_shrinks_the_history() {
+        let dir = temp_dir("size");
+        let mut repo = Repo::init(&dir).expect("init");
+        let mut entries: Vec<Entry> = (0..300).map(entry).collect();
+        let mut new_bytes = 0u64;
+        let mut old_bytes = 0u64;
+        let mut new_raw = 0u64;
+        let mut old_raw = 0u64;
+        for step in 0..12 {
+            entries[step].defs[0].sense = format!("revised at step {step}");
+            repo.import(&entries, true).expect("import");
+            let outcome = repo
+                .commit(
+                    &format!("step {step}"),
+                    "tester",
+                    1_700_700_000 + step as i64,
+                )
+                .expect("commit");
+            let hash = outcome.commit.hash;
+            let (raw_size, compressed): (i64, i64) = repo
+                .connection
+                .query_row(
+                    "SELECT raw_size, LENGTH(data) FROM commit_index WHERE commit_hash = ?1",
+                    params![hash.as_slice()],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .expect("size");
+            new_raw += u64::try_from(raw_size).unwrap_or(0);
+            new_bytes += u64::try_from(compressed).unwrap_or(0);
+            let (_, legacy_raw) = legacy_entry(&pairs_of(&repo, &hash));
+            old_raw += legacy_raw;
+            old_bytes += legacy_entry(&pairs_of(&repo, &hash)).0.len() as u64;
+        }
+        println!(
+            "commit index bytes: old={old_bytes} new={new_bytes} (raw old={old_raw} new={new_raw})"
+        );
+        assert!(new_bytes * 4 < old_bytes, "deltas must be much smaller");
+        assert!(new_raw < old_raw);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

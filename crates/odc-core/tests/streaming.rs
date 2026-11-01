@@ -8,7 +8,7 @@ use odc_core::cdc::{self, Cut, StreamChunker};
 use odc_core::entry::{Def, Entry};
 use odc_core::hash::{self, MerkleAccumulator};
 use odc_core::repo::Repo;
-use odc_core::snapshot::{SnapshotReader, SnapshotWriter};
+use odc_core::snapshot::{EntryKind, SnapshotReader, SnapshotWriter};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -104,23 +104,30 @@ fn snapshot_stream_matches_canonical_cbor() {
     let pairs: Vec<(String, [u8; 32])> = (0..500u64)
         .map(|index| (format!("w{index:04}"), leaf(index)))
         .collect();
-    let mut writer = SnapshotWriter::new(Vec::new(), pairs.len() as u64).expect("writer");
+    let mut writer = SnapshotWriter::full(Vec::new(), pairs.len() as u64).expect("writer");
     for (word, digest) in &pairs {
         writer.push(word, digest).expect("push");
     }
     let (bytes, raw_size) = writer.finish().expect("finish");
 
-    let expected = cbor::encode(&Value::Array(
-        pairs
-            .iter()
-            .map(|(word, digest)| {
-                Value::Array(vec![
-                    Value::Text(word.clone()),
-                    Value::Bytes(digest.to_vec()),
-                ])
-            })
-            .collect(),
-    ));
+    let expected = cbor::encode(&Value::Array(vec![
+        Value::Text("odc-idx".to_string()),
+        Value::Int(1),
+        Value::Int(0),
+        Value::Int(0),
+        Value::Int(i64::try_from(pairs.len()).expect("count")),
+        Value::Array(
+            pairs
+                .iter()
+                .map(|(word, digest)| {
+                    Value::Array(vec![
+                        Value::Text(word.clone()),
+                        Value::Bytes(digest.to_vec()),
+                    ])
+                })
+                .collect(),
+        ),
+    ]));
     assert_eq!(bytes, expected, "streaming CBOR must equal cbor::encode");
     assert_eq!(raw_size, bytes.len() as u64);
 
@@ -136,10 +143,20 @@ fn snapshot_stream_matches_canonical_cbor() {
 
 #[test]
 fn empty_snapshot_is_a_single_array_header() {
-    let writer = SnapshotWriter::new(Vec::new(), 0).expect("writer");
+    let writer = SnapshotWriter::full(Vec::new(), 0).expect("writer");
     let (bytes, raw_size) = writer.finish().expect("finish");
-    assert_eq!(bytes, vec![0x80]);
-    assert_eq!(raw_size, 1);
+    assert_eq!(
+        bytes,
+        cbor::encode(&Value::Array(vec![
+            Value::Text("odc-idx".to_string()),
+            Value::Int(1),
+            Value::Int(0),
+            Value::Int(0),
+            Value::Int(0),
+            Value::Array(Vec::new()),
+        ]))
+    );
+    assert_eq!(raw_size, bytes.len() as u64);
     let mut reader = SnapshotReader::new(&bytes[..]).expect("reader");
     assert!(reader.next_pair().expect("none").is_none());
 }
@@ -261,4 +278,37 @@ fn commit_index_raw_size_mismatch_is_reported() {
         "unexpected errors: {:?}",
         report.errors
     );
+}
+
+#[test]
+fn legacy_pair_arrays_are_read_as_full_entries() {
+    // Counts around six are the tricky case: a bare legacy array of six pairs
+    // has the same header shape as a framed entry and must not be mistaken for
+    // one.
+    for count in [0usize, 5, 6, 7] {
+        let pairs: Vec<(String, [u8; 32])> = (0..count as u64)
+            .map(|index| (format!("legacy{index:03}"), leaf(index)))
+            .collect();
+        let bytes = cbor::encode(&Value::Array(
+            pairs
+                .iter()
+                .map(|(word, digest)| {
+                    Value::Array(vec![
+                        Value::Text(word.clone()),
+                        Value::Bytes(digest.to_vec()),
+                    ])
+                })
+                .collect(),
+        ));
+        let mut reader = SnapshotReader::new(&bytes[..]).expect("reader");
+        assert_eq!(reader.header().kind, EntryKind::Full);
+        assert_eq!(reader.header().depth, 0);
+        assert_eq!(reader.header().entry_count, count as u64);
+        let mut decoded = Vec::new();
+        while let Some(pair) = reader.next_pair().expect("pair") {
+            decoded.push(pair);
+        }
+        assert_eq!(decoded, pairs);
+        assert_eq!(reader.bytes_read(), bytes.len() as u64);
+    }
 }

@@ -182,3 +182,28 @@ that gap by recomputing the full digest from the block payload it decodes
 anyway, and it folds the entry tree in the same pass, so a full verification
 still proves every leaf of the committed tree.
 
+
+## Commit indexes store deltas
+
+The commit index used to be a full snapshot per commit. That is simple and makes
+any revision a single seek away, but it duplicates the whole index on every
+commit: a 148k-entry dictionary stores ~1.5 MiB compressed per commit, and two
+commits already cost 2.9 MiB of a 5.6 MiB database.
+
+Version 1 entries therefore keep the difference to the first parent and fall
+back to a full snapshot every 32 commits (the anchor). Rebuilding a revision
+walks at most 31 deltas and one anchor, and the merge between two sorted streams
+holds one item per level rather than the index itself. The read cost grows with
+the chain depth, so the depth is bounded in the writer rather than discovered by
+the reader: a delta whose changes exceed half the index is written as a full
+snapshot instead, which also resets the chain after a bulk import or a large
+prune. Measured on twelve commits of three hundred entries, the old layout took
+126,496 compressed bytes (165,636 raw) and the new one 11,551 (14,511 raw).
+
+Two consequences are handled explicitly. `gc` pins the oldest retained commit
+with a full snapshot before it deletes the deltas it depended on, and
+`pack --shallow` rebuilds HEAD's entry because a single-commit file has no
+parent to replay. Entries written before this frame stay valid: the reader
+recognises the bare pair array and treats it as a full snapshot, so no repository
+needs a migration and its stored bytes are untouched until the next commit
+replaces only the newest entry.

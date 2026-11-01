@@ -740,7 +740,7 @@ fn write_target(
         ],
     )?;
     let (raw_snapshot, raw_size) = {
-        let mut writer = snapshot::SnapshotWriter::new(Vec::new(), state.entry_count)?;
+        let mut writer = snapshot::SnapshotWriter::full(Vec::new(), state.entry_count)?;
         for row in &state.rows {
             writer.push(&row.word, &row.content_hash)?;
         }

@@ -51,6 +51,7 @@ pub(crate) fn pack(
     head: [u8; 32],
     out: &Path,
     options: PackOptions,
+    head_index: Option<(&[u8; 32], &[u8], u64)>,
 ) -> Result<PackReport> {
     if out.exists() {
         if same_file(out, db_path) {
@@ -78,7 +79,7 @@ pub(crate) fn pack(
     let shallow = options.shallow || source_shallow;
     let commits = reachable_commits(connection, head, options.shallow)?;
 
-    let result = write_pack(db_path, out, &commits, shallow);
+    let result = write_pack(db_path, out, &commits, shallow, head_index);
     if result.is_err() {
         // Do not leave a half-written export behind.
         let _ = std::fs::remove_file(out);
@@ -125,6 +126,7 @@ fn write_pack(
     out: &Path,
     commits: &[[u8; 32]],
     shallow: bool,
+    head_index: Option<(&[u8; 32], &[u8], u64)>,
 ) -> Result<PackReport> {
     let mut target = store::open(out)?;
     store::create_schema(&target)?;
@@ -162,6 +164,20 @@ fn write_pack(
         for hash in commits {
             insert_commit.execute([hash.as_slice()])?;
             insert_index.execute([hash.as_slice()])?;
+        }
+        if let Some((hash, data, raw_size)) = head_index {
+            // A shallow pack carries a single commit, so its index cannot
+            // point at a parent: store the rebuilt full snapshot instead.
+            transaction.execute(
+                "UPDATE main.commit_index SET codec = ?2, raw_size = ?3, data = ?4
+                 WHERE commit_hash = ?1",
+                params![
+                    hash.as_slice(),
+                    store::codec::ZSTD,
+                    i64::try_from(raw_size).unwrap_or(i64::MAX),
+                    data,
+                ],
+            )?;
         }
     }
     // Block ids are copied verbatim: the source rowid becomes the destination
