@@ -527,7 +527,7 @@ dependencies = [
 
 [[package]]
 name = "odc-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -542,7 +542,7 @@ dependencies = [
 
 [[package]]
 name = "odc-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "blake3",
  "flate2",
@@ -558,7 +558,7 @@ dependencies = [
 
 [[package]]
 name = "odc-ffi"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "odc-core",
  "odc-testkit",
@@ -568,7 +568,7 @@ dependencies = [
 
 [[package]]
 name = "odc-testkit"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "flate2",
  "mdictlib",
