@@ -21,14 +21,14 @@
 
 use std::any::Any;
 use std::ffi::{CStr, CString};
-use std::os::raw::c_char;
+use std::os::raw::{c_char, c_void};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::ptr;
 
 use odc_core::cbor::Value as CborValue;
 use odc_core::pack::PackOptions;
-use odc_core::{import_mdx, Entry, MdxImportOptions, MdxImportReport, Repo};
+use odc_core::{import_mdx, Entry, ImportProgress, MdxImportOptions, MdxImportReport, Repo};
 use serde_json::{json, Map, Value as JsonValue};
 
 /// Largest accepted `limit` for [`odc_repo_search_json`].
@@ -37,6 +37,47 @@ const MAX_SEARCH_LIMIT: i32 = 200;
 /// Opaque repository handle exposed as `OdcRepo` in `odc.h`.
 pub struct OdcRepo {
     repo: Repo,
+}
+
+/// Signature of the progress callback declared in `odc.h`.
+///
+/// `stage` is one of the `ODC_IMPORT_STAGE_*` constants. The callback runs on
+/// the importing thread and always receives the `context` the caller passed.
+pub type OdcImportProgressFn = unsafe extern "C" fn(
+    stage: i32,
+    done: u64,
+    total: u64,
+    volume_index: u32,
+    volume_count: u32,
+    context: *mut c_void,
+);
+
+/// Bridges the core's progress callback to a C function pointer.
+struct FfiProgress {
+    callback: OdcImportProgressFn,
+    context: *mut c_void,
+}
+
+impl FfiProgress {
+    fn send(&mut self, progress: ImportProgress) {
+        let callback = self.callback;
+        let context = self.context;
+        // A panic in the callback must never unwind across the C ABI.
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            // SAFETY: the caller promises `context` stays valid until the
+            // import returns, which is the window this call runs in.
+            unsafe {
+                callback(
+                    progress.stage.code(),
+                    progress.done,
+                    progress.total,
+                    progress.volume_index,
+                    progress.volume_count,
+                    context,
+                );
+            }
+        }));
+    }
 }
 
 /// Release a heap-allocated string previously returned by this library.
@@ -338,7 +379,7 @@ pub unsafe extern "C" fn odc_import_mdx_to_odc(
         // SAFETY: both pointers follow the contract documented above.
         let mdx = unsafe { text_arg(mdx_path, "mdx_path") }?;
         let out = unsafe { text_arg(out_odc_path, "out_odc_path") }?;
-        let converted = import_mdx_to_odc(Path::new(&mdx), Path::new(&out), None)?;
+        let converted = import_mdx_to_odc(Path::new(&mdx), Path::new(&out), None, None)?;
         let payload = import_report_to_json(&converted.report, converted.output_bytes);
         store_json(report_json_out, &payload)?;
         Ok(0)
@@ -365,6 +406,50 @@ pub unsafe extern "C" fn odc_import_mdx_to_odc_with_mdd(
     report_json_out: *mut *mut c_char,
     error_message: *mut *mut c_char,
 ) -> i32 {
+    // Delegates to the progress form with a NULL callback, so the two can
+    // never drift apart.
+    // SAFETY: the pointers follow the contract documented above.
+    unsafe {
+        odc_import_mdx_to_odc_with_mdd_progress(
+            mdx_path,
+            out_odc_path,
+            mdd_paths_json,
+            None,
+            ptr::null_mut(),
+            report_json_out,
+            error_message,
+        )
+    }
+}
+
+/// Import an MDX file plus MDD volumes into one `.odc`, reporting progress.
+///
+/// Same contract as [`odc_import_mdx_to_odc_with_mdd`], plus a `callback` that
+/// receives one sample per stage, roughly ten times per second, and
+/// unconditionally on every stage change and on the final `done == total`
+/// sample. A `NULL` callback disables the reporting and makes this function
+/// behave exactly like the older entry point.
+///
+/// The callback runs on the importing thread. It must not call back into this
+/// library, and it must not unwind: a panic on the Rust side of the boundary
+/// is caught here, but a caller that longjmps or traps still aborts.
+///
+/// # Safety
+///
+/// `mdx_path`, `out_odc_path` and `mdd_paths_json` must be `NULL` or
+/// NUL-terminated UTF-8 strings; `report_json_out` and `error_message` must
+/// be `NULL` or point to writable storage for one `char *`. `context` is
+/// handed to `callback` untouched and must stay valid until this call returns.
+#[no_mangle]
+pub unsafe extern "C" fn odc_import_mdx_to_odc_with_mdd_progress(
+    mdx_path: *const c_char,
+    out_odc_path: *const c_char,
+    mdd_paths_json: *const c_char,
+    callback: Option<OdcImportProgressFn>,
+    context: *mut c_void,
+    report_json_out: *mut *mut c_char,
+    error_message: *mut *mut c_char,
+) -> i32 {
     // A stale report pointer must never survive a failed import.
     clear_error(report_json_out);
     guarded(error_message, -1, || {
@@ -372,7 +457,11 @@ pub unsafe extern "C" fn odc_import_mdx_to_odc_with_mdd(
         let mdx = unsafe { text_arg(mdx_path, "mdx_path") }?;
         let out = unsafe { text_arg(out_odc_path, "out_odc_path") }?;
         let volumes = unsafe { mdd_paths(mdd_paths_json) }?;
-        let converted = import_mdx_to_odc(Path::new(&mdx), Path::new(&out), volumes)?;
+        let progress: Option<Box<dyn FnMut(ImportProgress)>> = callback.map(|callback| {
+            let mut sink = FfiProgress { callback, context };
+            Box::new(move |sample| sink.send(sample)) as Box<dyn FnMut(ImportProgress)>
+        });
+        let converted = import_mdx_to_odc(Path::new(&mdx), Path::new(&out), volumes, progress)?;
         let payload = import_report_to_json(&converted.report, converted.output_bytes);
         store_json(report_json_out, &payload)?;
         Ok(0)
@@ -418,6 +507,7 @@ fn import_mdx_to_odc(
     mdx: &Path,
     out: &Path,
     mdd_volumes: Option<Vec<PathBuf>>,
+    progress: Option<Box<dyn FnMut(ImportProgress)>>,
 ) -> Result<ConvertedMdx, String> {
     if out.exists() {
         return Err(format!("output file already exists: {}", out.display()));
@@ -447,6 +537,7 @@ fn import_mdx_to_odc(
         MdxImportOptions {
             skip_corrupt_blocks: true,
             mdd_volumes,
+            progress,
             ..MdxImportOptions::default()
         },
     )

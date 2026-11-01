@@ -2,17 +2,19 @@
 //! parameters and manual string ownership.
 
 use std::ffi::{CStr, CString};
-use std::os::raw::c_char;
+use std::os::raw::{c_char, c_void};
 use std::path::Path;
 use std::ptr;
+use std::sync::Mutex;
 
 use odc_core::cbor::Value as CborValue;
 use odc_core::mdx_scan::{scan, ScanOutcome};
 use odc_core::{Def, Entry, Repo};
 use odc_ffi::{
-    odc_import_mdx_to_odc, odc_import_mdx_to_odc_with_mdd, odc_repo_close, odc_repo_entry_count,
-    odc_repo_entry_json, odc_repo_open, odc_repo_resource_copy, odc_repo_resource_count,
-    odc_repo_resource_len, odc_repo_search_json, odc_string_free, odc_version,
+    odc_import_mdx_to_odc, odc_import_mdx_to_odc_with_mdd, odc_import_mdx_to_odc_with_mdd_progress,
+    odc_repo_close, odc_repo_entry_count, odc_repo_entry_json, odc_repo_open,
+    odc_repo_resource_copy, odc_repo_resource_count, odc_repo_resource_len, odc_repo_search_json,
+    odc_string_free, odc_version,
 };
 use serde_json::Value;
 use tempfile::TempDir;
@@ -290,6 +292,123 @@ fn import(mdx: &Path, out: &Path) -> (i32, Option<String>, Option<String>) {
         Some(take_string(report))
     };
     (code, report, take_error_if_any(error))
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Sample {
+    stage: i32,
+    done: u64,
+    total: u64,
+    volume_index: u32,
+    volume_count: u32,
+    context: usize,
+}
+
+static SAMPLES: Mutex<Vec<Sample>> = Mutex::new(Vec::new());
+
+unsafe extern "C" fn record_sample(
+    stage: i32,
+    done: u64,
+    total: u64,
+    volume_index: u32,
+    volume_count: u32,
+    context: *mut c_void,
+) {
+    SAMPLES.lock().expect("samples").push(Sample {
+        stage,
+        done,
+        total,
+        volume_index,
+        volume_count,
+        context: context as usize,
+    });
+}
+
+#[test]
+fn import_progress_reports_every_stage() {
+    SAMPLES.lock().expect("samples").clear();
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mdx = dir.path().join("dictionary.mdx");
+    write_mdx_fixture(&mdx, 5);
+    let volume = dir.path().join("dictionary.mdd");
+    odc_testkit::write_mdd(
+        &volume,
+        &[
+            ("\\pic\\apple.png", b"png bytes"),
+            ("\\pic\\pear.png", b"pear"),
+        ],
+    )
+    .expect("mdd");
+    let out = dir.path().join("dictionary.odc");
+
+    let mdx_c = CString::new(mdx.to_str().expect("utf8")).expect("path");
+    let out_c = CString::new(out.to_str().expect("utf8")).expect("path");
+    let volumes = serde_json::json!([volume.to_str().expect("utf8")]).to_string();
+    let volumes_c = CString::new(volumes).expect("volumes json");
+    let mut report: *mut c_char = ptr::null_mut();
+    let mut error: *mut c_char = ptr::null_mut();
+    let marker = 0x5a5a_5a5a_u64;
+    let context = std::ptr::from_ref(&marker).cast_mut().cast::<c_void>();
+    // SAFETY: all pointers are live C strings, the out slots are writable and
+    // the context outlives the call.
+    let code = unsafe {
+        odc_import_mdx_to_odc_with_mdd_progress(
+            mdx_c.as_ptr(),
+            out_c.as_ptr(),
+            volumes_c.as_ptr(),
+            Some(record_sample),
+            context,
+            &mut report,
+            &mut error,
+        )
+    };
+    assert_eq!(code, 0, "import failed: {:?}", take_error_if_any(error));
+    let _ = take_string(report);
+
+    let samples = SAMPLES.lock().expect("samples").clone();
+    assert!(!samples.is_empty(), "the callback fired");
+    assert_eq!(
+        samples.first().map(|sample| sample.stage),
+        Some(0),
+        "preparing first"
+    );
+    assert_eq!(
+        samples.last().map(|sample| sample.stage),
+        Some(3),
+        "committing last"
+    );
+    for sample in &samples {
+        assert_eq!(
+            sample.context, context as usize,
+            "context is passed through"
+        );
+    }
+    let mut last_stage = 0;
+    let mut entries_done = 0;
+    let mut entries_total = 0;
+    let mut resources_done = 0;
+    for sample in &samples {
+        assert!(sample.stage >= last_stage, "stages never go back");
+        last_stage = sample.stage;
+        assert!(sample.done <= sample.total, "done stays within total");
+        if sample.stage == 1 {
+            assert!(sample.done >= entries_done, "entries never rewind");
+            entries_done = sample.done;
+            entries_total = sample.total;
+        }
+        if sample.stage == 2 {
+            assert!(sample.done >= resources_done, "resources never rewind");
+            assert_eq!(sample.volume_index, 1);
+            assert_eq!(sample.volume_count, 1);
+            resources_done = sample.done;
+        }
+    }
+    assert_eq!(entries_total, 5, "entries total is the record count");
+    assert_eq!(entries_done, 5, "every record is accounted for");
+    assert_eq!(resources_done, 2, "every resource is accounted for");
+    let last = samples.last().expect("final sample");
+    assert_eq!(last.done, last.total, "the last sample is complete");
+    assert_eq!(last.total, 7, "the final total is entries plus resources");
 }
 
 fn write_mdx_fixture(mdx: &Path, count: usize) {

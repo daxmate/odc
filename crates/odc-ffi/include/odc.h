@@ -115,6 +115,46 @@ int32_t odc_import_mdx_to_odc_with_mdd(const char *mdx_path,
                                       char **error_message);
 
 /*
+ * Stage of an import, as passed to odc_import_progress_fn.
+ *
+ * ODC_IMPORT_STAGE_PREPARING: the MDD volumes are being opened to learn the
+ *   resource total; done is 0 and total is that resource total.
+ * ODC_IMPORT_STAGE_ENTRIES: dictionary records are being read; total is
+ *   min(limit, records in the file).
+ * ODC_IMPORT_STAGE_RESOURCES: MDD payloads are being copied; volume_index is
+ *   one-based and volume_count is the number of readable volumes.
+ * ODC_IMPORT_STAGE_COMMITTING: every record and resource is written, done and
+ *   total are both the sum of the entry and resource totals.
+ */
+#define ODC_IMPORT_STAGE_PREPARING 0
+#define ODC_IMPORT_STAGE_ENTRIES 1
+#define ODC_IMPORT_STAGE_RESOURCES 2
+#define ODC_IMPORT_STAGE_COMMITTING 3
+
+/*
+ * Progress callback for odc_import_mdx_to_odc_with_mdd_progress.
+ *
+ * Called on the importing thread: it must not block, do UI work or call back
+ * into this library. context is the pointer the caller passed in, unchanged.
+ */
+typedef void (*odc_import_progress_fn)(int32_t stage, uint64_t done,
+                                       uint64_t total, uint32_t volume_index,
+                                       uint32_t volume_count, void *context);
+
+/*
+ * Import an MDX file plus MDD volumes and report progress while doing it.
+ *
+ * Same contract as odc_import_mdx_to_odc_with_mdd. callback may be NULL, in
+ * which case this behaves exactly like the older entry point. The callback is
+ * invoked at most about ten times per second, plus once on every stage change
+ * and once for the final sample where done == total.
+ */
+int32_t odc_import_mdx_to_odc_with_mdd_progress(
+    const char *mdx_path, const char *out_odc_path, const char *mdd_paths_json,
+    odc_import_progress_fn callback, void *context, char **report_json_out,
+    char **error_message);
+
+/*
  * Release a string returned by this library. Passing NULL is a no-op.
  */
 void odc_string_free(char *s);
