@@ -108,8 +108,8 @@ public struct DictionaryRootView: View {
                         EntryDetailView(store: store, key: key)
                     }
             }
-            .onChange(of: store.selectedKey) { _, key in
-                guard let key, phonePath.last != key else { return }
+            .onChange(of: store.selectionRevision) { _, _ in
+                guard let key = store.selectedKey, phonePath.last != key else { return }
                 phonePath = [key]
             }
             .toolbar { openButton }

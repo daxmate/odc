@@ -180,20 +180,36 @@ public struct LibraryListView: View {
     }
 
     private func row(for item: LibraryItem) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: "book.closed")
-                .foregroundStyle(.tint)
+        let isOpen = store.isOpen(item.id)
+        return HStack(spacing: 12) {
+            Image(systemName: isOpen ? "book.fill" : "book.closed")
+                .foregroundStyle(store.isActive(item.id) ? Color.accentColor : Color.secondary)
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.displayName)
                     .lineLimit(1)
+                    .fontWeight(store.isActive(item.id) ? .semibold : .regular)
                 Text(detail(for: item))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Button("打开") {
-                store.open(item: item.id)
+            Button(store.isActive(item.id) ? "当前" : (isOpen ? "切换" : "打开")) {
+                if isOpen {
+                    store.activateDictionary(id: item.id)
+                } else {
+                    store.open(item: item.id)
+                }
                 dismiss()
+            }
+            .disabled(store.isActive(item.id))
+            if isOpen {
+                Button {
+                    store.closeLibraryItem(id: item.id)
+                } label: {
+                    Image(systemName: "xmark.circle")
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("关闭 \(item.displayName)")
             }
             Button(role: .destructive) {
                 pendingRemoval = item
@@ -207,7 +223,10 @@ public struct LibraryListView: View {
     }
 
     private func detail(for item: LibraryItem) -> String {
-        if store.documentURL?.lastPathComponent == item.storedName {
+        if store.isActive(item.id) {
+            return "当前词典"
+        }
+        if store.isOpen(item.id) {
             return "已打开"
         }
         return "导入于 \(item.importedAt.formatted(date: .abbreviated, time: .shortened))"

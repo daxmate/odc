@@ -13,6 +13,14 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   the file cannot be decoded. The library sheet now lists dictionaries, recent
   entries and bookmarks in three sections, and the entry toolbar toggles a
   bookmark for the entry on screen.
+* Library: opening a second dictionary no longer replaces the first. Up to
+  eight stay open at once, the sidebar lists every library entry with its open
+  state and highlights the active one, and closing the active dictionary falls
+  back to another open one instead of the empty state.
+* Search: one query now runs against every open dictionary (at most 20 hits
+  each) and the sidebar groups the results under each dictionary's name.
+  Picking a hit switches dictionaries first, so history and bookmarks are
+  recorded against the dictionary the entry came from.
 
 ## [0.2.0] - 2026-11-01
 
