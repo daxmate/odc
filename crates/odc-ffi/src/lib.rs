@@ -217,7 +217,7 @@ pub unsafe extern "C" fn odc_repo_search_json(
 /// Substring-search normalised keys and display spellings and return a JSON
 /// array of `{"key": "...", "display": "..."}` objects, shortest key first.
 ///
-/// `limit` must be between 1 and [`MAX_SEARCH_LIMIT`] (inclusive). Returns
+/// `limit` must be between 1 and `MAX_SEARCH_LIMIT` (inclusive). Returns
 /// `NULL` on failure.
 ///
 /// # Safety
