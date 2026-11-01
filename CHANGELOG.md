@@ -6,6 +6,22 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ## [Unreleased]
 
+### Added
+
+* Entry reader: the dictionary's external stylesheets are read out of the
+  repository and inlined ahead of the entry, after the reader defaults, so a
+  dictionary's own typography wins at equal specificity. Missing, unreadable or
+  oversized sheets (2 MiB budget per entry) degrade to the defaults instead of
+  a blank panel.
+* Entry reader: MDict "@@@LINK=" redirect entries are followed by the core (up
+  to eight hops, cycles and missing targets reported), and the search field
+  follows with the entry the chain reached.
+* Search field: pressing return opens the first result (onSubmit), on both
+  macOS and iOS; an empty result list is a no-op.
+* MDX import copies stylesheets that entries link to but the MDD volumes do not
+  carry, reading them from beside the .mdx file (LDOCE6++ ships ldoce6ec.css
+  that way). MdxImportReport.stylesheets counts them.
+
 ### Changed
 
 * Storage layout version 2 (`meta.schema_version = 2`): blocks are addressed by
