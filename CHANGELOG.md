@@ -20,6 +20,13 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   eight stay open at once, the sidebar lists every library entry with its open
   state and highlights the active one, and closing the active dictionary falls
   back to another open one instead of the empty state.
+* Library: the set of open dictionaries is remembered in `library.json` and
+  reopened on the next launch, in open order and with the last active one in
+  front. Copies that no longer open are skipped and cleaned up instead of
+  blocking the launch; `library.json` files written before this release still
+  load and fall back to the single last-opened dictionary.
+* Wordbook: the toolbar button shows how many entries are bookmarked (hidden
+  while the wordbook is empty), on both platforms.
 * Search: one query now runs against every open dictionary (at most 20 hits
   each) and the sidebar groups the results under each dictionary's name.
   Picking a hit switches dictionaries first, so history and bookmarks are

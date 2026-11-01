@@ -77,6 +77,9 @@ public final class DictionaryStore {
     /// How long a success note stays on screen.
     @ObservationIgnored private let importSummaryLifetime: Duration
     @ObservationIgnored private var hasRestored = false
+    /// True while `performRestore` opens the saved set: writes are deferred so
+    /// the whole restore lands as a single save.
+    @ObservationIgnored private var isRestoringOpenSet = false
     /// Directory `reader` was loaded from.
     @ObservationIgnored private var readerDirectory: URL?
     private let container: URL?
@@ -140,8 +143,9 @@ public final class DictionaryStore {
         }
         let directory = try? libraryDirectoryURL()
         DocumentLibrary.removeCopy(at: active.url)
-        forget(active.id, in: directory)
+        // Close first so the saved open set no longer lists the deleted copy.
         closeLibraryItem(id: active.id)
+        forget(active.id, in: directory)
         errorMessage = nil
         isLoading = false
         importPhase = nil
@@ -158,13 +162,15 @@ public final class DictionaryStore {
         handles.removeValue(forKey: id)?.close()
         openDictionaries.removeAll { $0.id == id }
         searchGroups.removeAll { $0.dictionaryID == id }
-        guard activeDictionaryID == id else { return }
-        activeDictionaryID = openDictionaries.last?.id
-        resetSelection()
-        if activeDictionaryID == nil {
-            query = ""
-            isLoading = false
+        if activeDictionaryID == id {
+            activeDictionaryID = openDictionaries.last?.id
+            resetSelection()
+            if activeDictionaryID == nil {
+                query = ""
+                isLoading = false
+            }
         }
+        persistOpenState(in: try? libraryDirectoryURL())
     }
 
     /// Make `id` the dictionary the detail column follows.
@@ -175,6 +181,7 @@ public final class DictionaryStore {
         guard handles[id] != nil, activeDictionaryID != id else { return }
         activeDictionaryID = id
         resetSelection()
+        persistOpenState(in: try? libraryDirectoryURL())
     }
 
     /// Open `item` the first time, or bring it forward when it is already open.
@@ -182,7 +189,6 @@ public final class DictionaryStore {
     private func openExisting(_ item: LibraryItem, in directory: URL) async throws -> Bool {
         if handles[item.id] != nil {
             activateDictionary(id: item.id)
-            rememberLastOpened(item, in: directory)
             return true
         }
         guard canOpenAnotherDictionary else {
@@ -196,7 +202,7 @@ public final class DictionaryStore {
             return false
         }
         adopt(opened, as: item, at: copy)
-        rememberLastOpened(item, in: directory)
+        persistOpenState(in: directory)
         return true
     }
 
@@ -224,18 +230,23 @@ public final class DictionaryStore {
         errorMessage = "最多同时打开 \(Self.maximumOpenDictionaries) 本词典，请先关闭一本。"
     }
 
-    /// Record `item` as the dictionary to reopen on the next launch.
-    private func rememberLastOpened(_ item: LibraryItem, in directory: URL) {
+    /// Record the open dictionaries and the active one, then write `library.json`.
+    ///
+    /// Called after every open, close and activation so the next launch can
+    /// bring the same set back. Restore suppresses it and saves once instead.
+    private func persistOpenState(in directory: URL?) {
+        guard !isRestoringOpenSet, let directory else { return }
         var state = library
-        if state.item(id: item.id) == nil {
-            LibraryStore.add(item, to: &state)
+        state.openItemIDs.removeAll()
+        for dictionary in openDictionaries {
+            LibraryStore.markOpen(dictionary.id, in: &state, limit: Self.maximumOpenDictionaries)
         }
-        state.lastOpenedID = item.id
+        state.lastOpenedID = activeDictionaryID
         do {
             try LibraryStore.save(state, to: directory)
         } catch {
             libraryLog.error(
-                "could not record the last opened dictionary: \(error.localizedDescription, privacy: .public)"
+                "could not record the open dictionaries: \(error.localizedDescription, privacy: .public)"
             )
         }
         library = state
@@ -349,6 +360,7 @@ public final class DictionaryStore {
                 throw error
             }
             adopt(opened, as: item, at: copy)
+            persistOpenState(in: directory)
         } catch is CancellationError {
             return
         } catch {
@@ -474,7 +486,11 @@ public final class DictionaryStore {
 
     // MARK: - Library
 
-    /// Reopen the last dictionary on launch. Safe to call more than once.
+    /// Reopen the dictionaries that were open on the last launch, oldest
+    /// first, and put the one that was active back in front.
+    ///
+    /// Safe to call more than once; a copy that no longer opens is skipped and
+    /// dropped instead of blocking the launch.
     public func restore() {
         guard !hasRestored else { return }
         hasRestored = true
@@ -594,36 +610,73 @@ public final class DictionaryStore {
         for item in adopted {
             LibraryStore.add(item, to: &state)
         }
+        // Files written before multi-dictionary support only carry
+        // `lastOpenedID`; `restoreOpenIDs` falls back to it and drops ids whose
+        // entry is gone, so the loop below never chases a stale copy.
+        let storedOpenIDs = state.openItemIDs
+        let openIDs = LibraryStore.restoreOpenIDs(
+            in: &state,
+            limit: Self.maximumOpenDictionaries
+        )
+        let openSetCleaned = state.openItemIDs != storedOpenIDs
         library = state
         loadReader(in: directory)
         if !pruned.isEmpty {
             libraryLog.warning("dropped \(pruned.count) missing librar\(pruned.count == 1 ? "y item" : "y items")")
         }
-        if !pruned.isEmpty || !adopted.isEmpty || !migration.migrated.isEmpty {
-            saveLibrary(in: directory)
-        }
+        var needsSave = !pruned.isEmpty
+            || !adopted.isEmpty
+            || !migration.migrated.isEmpty
+            || openSetCleaned
         if !adopted.isEmpty {
             libraryLog.info("adopted \(adopted.count) librar\(adopted.count == 1 ? "y copy" : "y copies")")
             // Nothing is opened behind the reader's back: the adopted entries
             // may be duplicates, so they pick the one to open.
+            if needsSave {
+                saveLibrary(in: directory)
+            }
             return
         }
         // A file opened while the restore was running wins.
-        guard documentURL == nil,
-              let id = state.lastOpenedID,
-              let item = state.item(id: id) else { return }
-        do {
-            try await openExisting(item, in: directory)
-        } catch is CancellationError {
+        guard documentURL == nil, !openIDs.isEmpty else {
+            if needsSave {
+                saveLibrary(in: directory)
+            }
             return
-        } catch {
-            // A copy that no longer opens is dropped quietly: one log line, no
-            // alert on every launch.
-            libraryLog.warning(
-                "could not reopen \(item.displayName, privacy: .public): \(error.localizedDescription, privacy: .public)"
-            )
-            LibraryStore.remove(id: id, from: &library)
-            saveLibrary(in: directory)
+        }
+        // Reopen the saved set oldest first, writing nothing until the end so
+        // the whole restore lands as one save.
+        var restoredIDs: [UUID] = []
+        isRestoringOpenSet = true
+        for id in openIDs {
+            // A dictionary opened while the restore was running wins over the
+            // saved set; only the ids being restored count as ours.
+            let untouched = openDictionaries.allSatisfy { openIDs.contains($0.id) }
+            guard untouched, let item = library.item(id: id) else { break }
+            do {
+                try await openExisting(item, in: directory)
+                restoredIDs.append(id)
+            } catch is CancellationError {
+                isRestoringOpenSet = false
+                return
+            } catch {
+                // A copy that no longer opens is dropped quietly: one log line,
+                // no alert on every launch.
+                libraryLog.warning(
+                    "could not reopen \(item.displayName, privacy: .public): \(error.localizedDescription, privacy: .public)"
+                )
+                LibraryStore.remove(id: id, from: &library)
+                needsSave = true
+            }
+        }
+        // Prefer the dictionary that was active; otherwise the last one that
+        // opened stays in front.
+        if let wanted = state.lastOpenedID, handles[wanted] != nil {
+            activateDictionary(id: wanted)
+        }
+        isRestoringOpenSet = false
+        if needsSave || restoredIDs.count != openIDs.count {
+            persistOpenState(in: directory)
         }
     }
 

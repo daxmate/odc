@@ -21,6 +21,108 @@ final class LibraryStoreTests: XCTestCase {
         XCTAssertEqual(LibraryStore.load(from: directory).lastOpenedID, item.id)
     }
 
+    func testSaveAndLoadRoundTripKeepsTheOpenSet() throws {
+        let directory = try Fixture.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let first = LibraryItem(displayName: "a", sourceName: "a", sourceBytes: 1)
+        let second = LibraryItem(displayName: "b", sourceName: "b", sourceBytes: 2)
+        let state = LibraryState(
+            items: [first, second],
+            lastOpenedID: second.id,
+            openItemIDs: [first.id, second.id]
+        )
+
+        try LibraryStore.save(state, to: directory)
+
+        let loaded = LibraryStore.load(from: directory)
+        XCTAssertEqual(loaded.openItemIDs, [first.id, second.id])
+        XCTAssertEqual(loaded.lastOpenedID, second.id)
+    }
+
+    func testALibraryFileWithoutAnOpenSetLoadsAnEmptyOne() throws {
+        let directory = try Fixture.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        // Shape written by builds that remembered a single dictionary only.
+        let legacy = """
+        {
+          "items": [],
+          "lastOpenedID": null,
+          "version": 1
+        }
+        """
+        try Data(legacy.utf8).write(to: LibraryStore.fileURL(in: directory))
+
+        let state = LibraryStore.load(from: directory)
+
+        XCTAssertEqual(state.version, LibraryState.currentVersion)
+        XCTAssertEqual(state.openItemIDs, [])
+    }
+
+    func testMarkOpenKeepsOrderAndDropsTheOldest() {
+        var state = LibraryState()
+        let ids = (0..<4).map { _ in UUID() }
+
+        for id in ids {
+            LibraryStore.markOpen(id, in: &state, limit: 3)
+        }
+
+        XCTAssertEqual(state.openItemIDs, [ids[1], ids[2], ids[3]])
+    }
+
+    func testMarkOpenMovesAReopenedItemToTheEnd() {
+        var state = LibraryState()
+        let ids = (0..<3).map { _ in UUID() }
+        for id in ids {
+            LibraryStore.markOpen(id, in: &state, limit: 8)
+        }
+
+        LibraryStore.markOpen(ids[0], in: &state, limit: 8)
+
+        XCTAssertEqual(state.openItemIDs, [ids[1], ids[2], ids[0]])
+    }
+
+    func testRemoveDropsTheIdFromTheOpenSet() {
+        let item = LibraryItem(displayName: "a", sourceName: "a", sourceBytes: 1)
+        var state = LibraryState(items: [item], lastOpenedID: item.id, openItemIDs: [item.id])
+
+        LibraryStore.remove(id: item.id, from: &state)
+
+        XCTAssertEqual(state.openItemIDs, [])
+        XCTAssertNil(state.lastOpenedID)
+    }
+
+    func testRestoreOpenIDsFallsBackToTheLastOpenedDictionary() {
+        let item = LibraryItem(displayName: "a", sourceName: "a", sourceBytes: 1)
+        var state = LibraryState(items: [item], lastOpenedID: item.id)
+
+        let ids = LibraryStore.restoreOpenIDs(in: &state, limit: 8)
+
+        XCTAssertEqual(ids, [item.id])
+        XCTAssertEqual(state.openItemIDs, [item.id])
+    }
+
+    func testRestoreOpenIDsDropsIdsWhoseEntryIsGone() {
+        let left = LibraryItem(displayName: "a", sourceName: "a", sourceBytes: 1)
+        var state = LibraryState(items: [left], openItemIDs: [UUID(), left.id])
+
+        let ids = LibraryStore.restoreOpenIDs(in: &state, limit: 8)
+
+        XCTAssertEqual(ids, [left.id])
+        XCTAssertEqual(state.openItemIDs, [left.id])
+    }
+
+    func testRestoreOpenIDsKeepsTheNewestWhenTheFileIsTooLarge() {
+        let items = (0..<10).map { index in
+            LibraryItem(displayName: "d\(index)", sourceName: "d\(index)", sourceBytes: 1)
+        }
+        var state = LibraryState(items: items, openItemIDs: items.map(\.id))
+
+        let ids = LibraryStore.restoreOpenIDs(in: &state, limit: 8)
+
+        XCTAssertEqual(ids, items.suffix(8).map(\.id))
+    }
+
     func testMissingFileLoadsAnEmptyLibrary() throws {
         let directory = try Fixture.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

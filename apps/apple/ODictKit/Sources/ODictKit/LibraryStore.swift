@@ -96,16 +96,39 @@ public struct LibraryState: Codable, Sendable, Equatable {
 
     public var version: Int
     public var items: [LibraryItem]
+    /// The dictionary the detail column followed; nil when nothing was open.
     public var lastOpenedID: UUID?
+    /// Dictionaries left open at the last save, oldest first.
+    ///
+    /// Files written before multi-dictionary support carry no such key; they
+    /// decode to an empty list and fall back to `lastOpenedID` on restore.
+    public var openItemIDs: [UUID]
 
     public init(
         items: [LibraryItem] = [],
         lastOpenedID: UUID? = nil,
+        openItemIDs: [UUID] = [],
         version: Int = LibraryState.currentVersion
     ) {
         self.version = version
         self.items = items
         self.lastOpenedID = lastOpenedID
+        self.openItemIDs = openItemIDs
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case version
+        case items
+        case lastOpenedID
+        case openItemIDs
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        version = try container.decode(Int.self, forKey: .version)
+        items = try container.decode([LibraryItem].self, forKey: .items)
+        lastOpenedID = try container.decodeIfPresent(UUID.self, forKey: .lastOpenedID)
+        openItemIDs = try container.decodeIfPresent([UUID].self, forKey: .openItemIDs) ?? []
     }
 
     public var isEmpty: Bool { items.isEmpty }
@@ -192,9 +215,45 @@ public enum LibraryStore {
 
     public static func remove(id: UUID, from state: inout LibraryState) {
         state.items.removeAll { $0.id == id }
+        state.openItemIDs.removeAll { $0 == id }
         if state.lastOpenedID == id {
             state.lastOpenedID = nil
         }
+    }
+
+    /// Record `id` as open, keeping the open order.
+    ///
+    /// The oldest entries are dropped once `limit` dictionaries are open, so a
+    /// stale file can never push the sidebar past its cap.
+    public static func markOpen(_ id: UUID, in state: inout LibraryState, limit: Int) {
+        state.openItemIDs.removeAll { $0 == id }
+        state.openItemIDs.append(id)
+        let excess = state.openItemIDs.count - max(limit, 0)
+        if excess > 0 {
+            state.openItemIDs.removeFirst(excess)
+        }
+    }
+
+    /// The ids to reopen on launch, oldest first.
+    ///
+    /// Cleans `state` in place: a file written before multi-dictionary support
+    /// falls back to `lastOpenedID`, ids whose library entry is gone are
+    /// dropped, duplicates collapse, and only the newest `limit` survive.
+    @discardableResult
+    public static func restoreOpenIDs(in state: inout LibraryState, limit: Int) -> [UUID] {
+        var ids = state.openItemIDs
+        if ids.isEmpty,
+           let lastOpenedID = state.lastOpenedID,
+           state.item(id: lastOpenedID) != nil {
+            ids = [lastOpenedID]
+        }
+        var seen: Set<UUID> = []
+        ids = ids.filter { state.item(id: $0) != nil && seen.insert($0).inserted }
+        if ids.count > max(limit, 0) {
+            ids = Array(ids.suffix(max(limit, 0)))
+        }
+        state.openItemIDs = ids
+        return ids
     }
 
     /// The entry for `source`, when the app already copied that exact file.
@@ -681,6 +740,9 @@ public enum LibraryStore {
     private static func replace(_ id: UUID, with copy: LibraryItem, in state: inout LibraryState) {
         guard let index = state.items.firstIndex(where: { $0.id == id }) else { return }
         state.items[index] = copy
+        if let openIndex = state.openItemIDs.firstIndex(of: id) {
+            state.openItemIDs[openIndex] = copy.id
+        }
         if state.lastOpenedID == id {
             state.lastOpenedID = copy.id
         }

@@ -121,13 +121,35 @@ public struct DictionaryRootView: View {
     }
     #endif
 
+    /// Bookmarks kept across every dictionary, shown on the wordbook button.
+    private var bookmarkCount: Int { store.bookmarkedEntries.count }
+
+    @ViewBuilder
+    private var bookmarkBadge: some View {
+        if bookmarkCount > 0 {
+            Text(bookmarkCount > 99 ? "99+" : "\(bookmarkCount)")
+                .font(.caption2.weight(.bold))
+                .monospacedDigit()
+                .foregroundStyle(.white)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 1)
+                .frame(minWidth: 15, minHeight: 15)
+                .background(Capsule().fill(.red))
+                .offset(x: 9, y: -7)
+        }
+    }
+
     private var openButton: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
             Button {
                 isWordbookPresented = true
             } label: {
                 Label("生词本", systemImage: "bookmark")
+                    .overlay(alignment: .topTrailing) { bookmarkBadge }
             }
+            .accessibilityLabel(
+                bookmarkCount == 0 ? "生词本" : "生词本，\(bookmarkCount) 个收藏"
+            )
             #if os(macOS)
             .keyboardShortcut("b", modifiers: .command)
             #endif

@@ -230,4 +230,145 @@ final class MultiDictionaryTests: XCTestCase {
         XCTAssertEqual(store.activeDictionaryID, items[0].id)
         XCTAssertEqual(store.library.items.count, 1)
     }
+
+    // MARK: - Persisted open set
+
+    private func saveOpenSet(
+        _ items: [ODictKit.LibraryItem],
+        open: [UUID],
+        active: UUID?,
+        in container: URL
+    ) throws {
+        try LibraryStore.save(
+            LibraryState(items: items, lastOpenedID: active, openItemIDs: open),
+            to: container
+        )
+    }
+
+    func testOpeningASecondDictionaryRecordsTheOpenSet() async throws {
+        let container = try makeContainer()
+        let items = try makeLibrary(in: container, count: 2)
+        let store = try await makeStore(container: container)
+        defer { store.close() }
+
+        try await open(items[0], in: store)
+        try await open(items[1], in: store)
+
+        let saved = LibraryStore.load(from: container)
+        XCTAssertEqual(saved.openItemIDs, [items[0].id, items[1].id])
+        XCTAssertEqual(saved.lastOpenedID, items[1].id)
+    }
+
+    func testClosingADictionaryDropsItFromTheSavedOpenSet() async throws {
+        let container = try makeContainer()
+        let items = try makeLibrary(in: container, count: 2)
+        let store = try await makeStore(container: container)
+        defer { store.close() }
+
+        try await open(items[0], in: store)
+        try await open(items[1], in: store)
+
+        store.closeLibraryItem(id: items[1].id)
+
+        let saved = LibraryStore.load(from: container)
+        XCTAssertEqual(saved.openItemIDs, [items[0].id])
+        XCTAssertEqual(saved.lastOpenedID, items[0].id)
+        XCTAssertEqual(store.activeDictionaryID, items[0].id)
+    }
+
+    func testSwitchingTheActiveDictionaryIsSaved() async throws {
+        let container = try makeContainer()
+        let items = try makeLibrary(in: container, count: 2)
+        let store = try await makeStore(container: container)
+        defer { store.close() }
+
+        try await open(items[0], in: store)
+        try await open(items[1], in: store)
+
+        store.activateDictionary(id: items[0].id)
+
+        let saved = LibraryStore.load(from: container)
+        XCTAssertEqual(saved.lastOpenedID, items[0].id)
+        XCTAssertEqual(saved.openItemIDs, [items[0].id, items[1].id])
+    }
+
+    func testRestoreReopensEveryDictionaryInOpenOrder() async throws {
+        let container = try makeContainer()
+        let items = try makeLibrary(in: container, count: 3)
+        try saveOpenSet(
+            items,
+            open: items.map(\.id),
+            active: items[1].id,
+            in: container
+        )
+
+        let store = try await makeStore(container: container)
+        defer { store.close() }
+
+        XCTAssertNil(store.errorMessage)
+        XCTAssertEqual(store.openDictionaries.map(\.id), items.map(\.id))
+        XCTAssertEqual(store.activeDictionaryID, items[1].id)
+    }
+
+    func testRestoreSkipsACopyThatIsGoneAndKeepsTheRest() async throws {
+        let container = try makeContainer()
+        let items = try makeLibrary(in: container, count: 3)
+        let missing = LibraryStore.openTarget(for: items[1], in: container)
+        try FileManager.default.removeItem(at: missing.deletingLastPathComponent())
+        try saveOpenSet(
+            items,
+            open: items.map(\.id),
+            active: items[1].id,
+            in: container
+        )
+
+        let store = try await makeStore(container: container)
+        defer { store.close() }
+
+        XCTAssertNil(store.errorMessage)
+        XCTAssertEqual(store.openDictionaries.map(\.id), [items[0].id, items[2].id])
+        XCTAssertEqual(store.activeDictionaryID, items[2].id)
+
+        let saved = LibraryStore.load(from: container)
+        XCTAssertEqual(saved.openItemIDs, [items[0].id, items[2].id])
+        XCTAssertEqual(saved.lastOpenedID, items[2].id)
+        XCTAssertEqual(saved.items.map(\.id), [items[0].id, items[2].id])
+    }
+
+    func testRestoreFallsBackToTheEmptyStateWhenNoCopyOpens() async throws {
+        let container = try makeContainer()
+        let items = (0..<2).map { index in
+            ODictKit.LibraryItem(
+                displayName: "词典\(index + 1)",
+                sourceName: "gone-\(index + 1)",
+                sourceBytes: 1
+            )
+        }
+        try saveOpenSet(items, open: items.map(\.id), active: items[0].id, in: container)
+
+        let store = try await makeStore(container: container)
+        defer { store.close() }
+
+        XCTAssertNil(store.errorMessage)
+        XCTAssertNil(store.documentURL)
+        XCTAssertTrue(store.openDictionaries.isEmpty)
+        XCTAssertNil(store.activeDictionaryID)
+        XCTAssertEqual(LibraryStore.load(from: container).openItemIDs, [])
+    }
+
+    func testRestoreKeepsOnlyTheNewestEightDictionaries() async throws {
+        let container = try makeContainer()
+        let items = try makeLibrary(
+            in: container,
+            count: DictionaryStore.maximumOpenDictionaries + 1
+        )
+        try saveOpenSet(items, open: items.map(\.id), active: items.last?.id, in: container)
+
+        let store = try await makeStore(container: container)
+        defer { store.close() }
+
+        let expected = Array(items.suffix(DictionaryStore.maximumOpenDictionaries)).map(\.id)
+        XCTAssertEqual(store.openDictionaries.map(\.id), expected)
+        XCTAssertEqual(store.activeDictionaryID, items.last?.id)
+    }
 }
