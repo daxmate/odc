@@ -1,0 +1,233 @@
+import XCTest
+@testable import ODictKit
+
+@MainActor
+final class MultiDictionaryTests: XCTestCase {
+    private func makeContainer() throws -> URL {
+        let container = try Fixture.temporaryDirectory()
+        addTeardownBlock { try? FileManager.default.removeItem(at: container) }
+        return container
+    }
+
+    /// Copies the committed fixture once per item, so every dictionary has its
+    /// own repository directory and its own library identifier.
+    @discardableResult
+    private func makeLibrary(in container: URL, count: Int) throws -> [ODictKit.LibraryItem] {
+        var items: [ODictKit.LibraryItem] = []
+        for index in 0..<count {
+            let id = UUID()
+            let copy = container.appending(
+                path: "\(id.uuidString).odc",
+                directoryHint: .isDirectory
+            )
+            try FileManager.default.copyItem(at: Fixture.demoRepository, to: copy)
+            items.append(
+                ODictKit.LibraryItem(
+                    id: id,
+                    displayName: "词典\(index + 1)",
+                    storedName: "\(id.uuidString).odc",
+                    sourceName: "demo-\(index + 1)",
+                    sourceBytes: 4096
+                )
+            )
+        }
+        try LibraryStore.save(LibraryState(items: items), to: container)
+        return items
+    }
+
+    private func makeStore(container: URL) async throws -> DictionaryStore {
+        let store = DictionaryStore(container: container)
+        store.restore()
+        await store.awaitRestore()
+        return store
+    }
+
+    private func waitUntil(
+        timeout: Duration = .seconds(5),
+        _ condition: @MainActor () -> Bool
+    ) async throws {
+        let deadline = ContinuousClock.now + timeout
+        while !condition() {
+            guard ContinuousClock.now < deadline else {
+                XCTFail("condition not met within \(timeout)")
+                return
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+    }
+
+    private func open(_ item: ODictKit.LibraryItem, in store: DictionaryStore) async throws {
+        store.open(item: item.id)
+        try await waitUntil { store.isOpen(item.id) || store.errorMessage != nil }
+    }
+
+    func testOpeningASecondDictionaryKeepsTheFirstOneOpen() async throws {
+        let container = try makeContainer()
+        let items = try makeLibrary(in: container, count: 2)
+        let store = try await makeStore(container: container)
+        defer { store.close() }
+
+        try await open(items[0], in: store)
+        XCTAssertEqual(store.documentName, items[0].displayName)
+
+        try await open(items[1], in: store)
+
+        XCTAssertNil(store.errorMessage)
+        XCTAssertEqual(store.openDictionaries.map(\.id), [items[0].id, items[1].id])
+        XCTAssertEqual(store.activeDictionaryID, items[1].id)
+        XCTAssertEqual(store.documentName, items[1].displayName)
+        XCTAssertEqual(store.documentURL?.lastPathComponent, items[1].storedName)
+    }
+
+    func testOpeningTheSameItemTwiceKeepsOneEntry() async throws {
+        let container = try makeContainer()
+        let items = try makeLibrary(in: container, count: 1)
+        let store = try await makeStore(container: container)
+        defer { store.close() }
+
+        try await open(items[0], in: store)
+        store.open(item: items[0].id)
+        try await Task.sleep(for: .milliseconds(100))
+
+        XCTAssertEqual(store.openDictionaries.count, 1)
+    }
+
+    func testSearchReturnsOneGroupPerOpenDictionary() async throws {
+        let container = try makeContainer()
+        let items = try makeLibrary(in: container, count: 2)
+        let store = try await makeStore(container: container)
+        defer { store.close() }
+
+        try await open(items[0], in: store)
+        try await open(items[1], in: store)
+
+        store.setQuery("app")
+        try await waitUntil { store.searchGroups.count == 2 }
+
+        XCTAssertEqual(store.searchGroups.map(\.dictionaryID), [items[0].id, items[1].id])
+        XCTAssertEqual(store.searchGroups.map(\.name), [items[0].displayName, items[1].displayName])
+        for group in store.searchGroups {
+            XCTAssertEqual(group.hits.map(\.key), ["apple", "application"])
+        }
+        // The sidebar list still follows the active dictionary.
+        XCTAssertEqual(store.hits.map(\.key), ["apple", "application"])
+    }
+
+    func testPickingAHitFromAnotherDictionarySwitchesTheActiveOne() async throws {
+        let container = try makeContainer()
+        let items = try makeLibrary(in: container, count: 2)
+        let store = try await makeStore(container: container)
+        defer { store.close() }
+
+        try await open(items[0], in: store)
+        try await open(items[1], in: store)
+        XCTAssertEqual(store.activeDictionaryID, items[1].id)
+
+        store.setQuery("app")
+        try await waitUntil { store.searchGroups.count == 2 }
+
+        await store.select(key: "application", in: items[0].id)
+
+        XCTAssertEqual(store.activeDictionaryID, items[0].id)
+        XCTAssertEqual(store.entry?.key, "application")
+        XCTAssertEqual(store.documentName, items[0].displayName)
+        XCTAssertEqual(store.recentEntries.first?.dictionaryID, items[0].id.uuidString)
+    }
+
+    func testBookmarksFollowTheTargetDictionary() async throws {
+        let container = try makeContainer()
+        let items = try makeLibrary(in: container, count: 2)
+        let store = try await makeStore(container: container)
+        defer { store.close() }
+
+        try await open(items[0], in: store)
+        try await open(items[1], in: store)
+
+        await store.select(key: "apple", in: items[0].id)
+        store.toggleBookmark()
+
+        XCTAssertEqual(store.bookmarkedEntries.count, 1)
+        XCTAssertEqual(store.bookmarkedEntries.first?.dictionaryID, items[0].id.uuidString)
+        XCTAssertTrue(store.isBookmarked(key: "apple"))
+
+        // The same headword in the other dictionary is a different reference.
+        store.activateDictionary(id: items[1].id)
+        XCTAssertNil(store.entry)
+        await store.select(key: "apple")
+        XCTAssertFalse(store.isBookmarked(key: "apple"))
+
+        store.toggleBookmark()
+        XCTAssertEqual(Set(store.bookmarkedEntries.map(\.dictionaryID)), [
+            items[0].id.uuidString,
+            items[1].id.uuidString,
+        ])
+    }
+
+    func testClosingTheActiveDictionaryFallsBackToAnotherOne() async throws {
+        let container = try makeContainer()
+        let items = try makeLibrary(in: container, count: 2)
+        let store = try await makeStore(container: container)
+        defer { store.close() }
+
+        try await open(items[0], in: store)
+        try await open(items[1], in: store)
+        XCTAssertEqual(store.activeDictionaryID, items[1].id)
+
+        store.closeLibraryItem(id: items[1].id)
+
+        XCTAssertEqual(store.activeDictionaryID, items[0].id)
+        XCTAssertEqual(store.documentName, items[0].displayName)
+        XCTAssertNil(store.errorMessage)
+        // Closing keeps the copy, so the item can be opened again.
+        XCTAssertEqual(store.library.items.count, 2)
+
+        store.closeLibraryItem(id: items[0].id)
+
+        XCTAssertNil(store.activeDictionaryID)
+        XCTAssertNil(store.documentURL)
+        XCTAssertTrue(store.hits.isEmpty)
+    }
+
+    func testTheNinthDictionaryIsRefusedWithAMessage() async throws {
+        let container = try makeContainer()
+        let items = try makeLibrary(
+            in: container,
+            count: DictionaryStore.maximumOpenDictionaries + 1
+        )
+        let store = try await makeStore(container: container)
+        defer { store.close() }
+
+        for item in items.prefix(DictionaryStore.maximumOpenDictionaries) {
+            try await open(item, in: store)
+        }
+        XCTAssertEqual(
+            store.openDictionaries.count,
+            DictionaryStore.maximumOpenDictionaries
+        )
+
+        store.open(item: items[DictionaryStore.maximumOpenDictionaries].id)
+        try await waitUntil { store.errorMessage != nil }
+
+        XCTAssertEqual(
+            store.openDictionaries.count,
+            DictionaryStore.maximumOpenDictionaries
+        )
+        XCTAssertEqual(store.openDictionaries.map(\.id).last, items[7].id)
+    }
+
+    func testRemovingAnOpenDictionaryClosesItAndFallsBack() async throws {
+        let container = try makeContainer()
+        let items = try makeLibrary(in: container, count: 2)
+        let store = try await makeStore(container: container)
+        defer { store.close() }
+
+        try await open(items[0], in: store)
+        try await open(items[1], in: store)
+
+        store.removeItem(id: items[1].id)
+
+        XCTAssertFalse(store.isOpen(items[1].id))
+        XCTAssertEqual(store.activeDictionaryID, items[0].id)
+        XCTAssertEqual(store.library.items.count, 1)
+    }
+}

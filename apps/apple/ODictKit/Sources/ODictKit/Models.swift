@@ -13,6 +13,42 @@ public struct SearchHit: Codable, Equatable, Hashable, Sendable, Identifiable {
     }
 }
 
+/// What one dictionary contributed to the current search.
+///
+/// Groups follow the order the dictionaries were opened in, so the sidebar
+/// does not reshuffle when a slower dictionary answers late.
+public struct DictionarySearchGroup: Identifiable, Hashable, Sendable {
+    /// Library identifier of the dictionary that produced `hits`.
+    public let dictionaryID: UUID
+    /// Display name, copied so the group stays readable after the item is gone.
+    public let name: String
+    public let hits: [SearchHit]
+
+    public var id: UUID { dictionaryID }
+
+    public init(dictionaryID: UUID, name: String, hits: [SearchHit]) {
+        self.dictionaryID = dictionaryID
+        self.name = name
+        self.hits = hits
+    }
+}
+
+/// A dictionary the reader has open.
+///
+/// `url` is the imported copy inside the library folder, the same directory
+/// `documentURL` reports for the active dictionary.
+public struct OpenDictionary: Identifiable, Hashable, Sendable {
+    public let id: UUID
+    public let name: String
+    public let url: URL
+
+    public init(id: UUID, name: String, url: URL) {
+        self.id = id
+        self.name = name
+        self.url = url
+    }
+}
+
 /// A single sense inside an entry. Mirrors `Def` in `odc-core`.
 public struct Definition: Codable, Equatable, Hashable, Sendable {
     /// Part of speech tag, e.g. `noun`.

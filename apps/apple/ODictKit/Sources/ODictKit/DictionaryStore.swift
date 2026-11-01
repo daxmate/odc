@@ -9,14 +9,17 @@ private let libraryLog = Logger(subsystem: "com.daxmate.odict", category: "libra
 @MainActor
 @Observable
 public final class DictionaryStore {
-    /// Where the imported copy lives (inside the app container).
-    public private(set) var documentURL: URL?
+    /// Where the imported copy of the active dictionary lives (inside the app container).
+    public var documentURL: URL? { activeDictionary?.url }
     /// Name of the file the reader picked, used for display.
-    public private(set) var documentName: String?
-    /// Current search text (not trimmed).
+    public var documentName: String? { activeDictionary?.name }
+    /// Search text as typed; the debounced search follows it.
     public private(set) var query: String = ""
-    /// Prefix-search results for the current query.
-    public private(set) var hits: [SearchHit] = []
+    /// Prefix-search results of the active dictionary, newest query only.
+    public var hits: [SearchHit] {
+        guard let activeDictionaryID else { return [] }
+        return searchGroups.first { $0.dictionaryID == activeDictionaryID }?.hits ?? []
+    }
     /// Key of the entry currently shown.
     public private(set) var selectedKey: String?
     /// The entry for the current selection, once loaded.
@@ -31,12 +34,10 @@ public final class DictionaryStore {
     /// They stay usable: opening one reads the copy where it already lives.
     /// The library sheet lists them so a failed migration is never silent.
     public private(set) var migrationIssues: [LibraryStore.MigrationIssue] = []
-
-    /// True while a document is being imported or a search is running.
+    /// True while an import, a restore or a search is in flight.
     public private(set) var isLoading = false
-    /// Stage of a running MDX conversion, `nil` when idle.
+    /// Conversion phase of the running MDX import, if any.
     public private(set) var importPhase: MDXImportPhase?
-    /// Overall progress of the running conversion, `nil` when idle.
     public private(set) var importProgress: MDXImportProgress?
     /// Summary shown once an MDX conversion finished, until dismissed.
     public private(set) var importSummary: String?
@@ -44,44 +45,80 @@ public final class DictionaryStore {
     public private(set) var library = LibraryState()
     /// Bookmarks and recent entries, mirrored from `reader.json`.
     public private(set) var reader = ReaderState()
-    /// True while duplicate copies are being moved out of the library.
     public private(set) var isDeduplicating = false
+    /// Dictionaries that are open right now, in the order they were opened.
+    public private(set) var openDictionaries: [OpenDictionary] = []
+    /// Results of the last search, one group per dictionary that answered.
+    ///
+    /// Groups follow the order in `openDictionaries`, so the sidebar does not
+    /// reshuffle when a slow dictionary answers after a fast one.
+    public private(set) var searchGroups: [DictionarySearchGroup] = []
+    /// The dictionary `hits`, `selectedKey` and `entry` belong to.
+    public private(set) var activeDictionaryID: UUID?
+    /// Bumped whenever a new entry lands on screen. The compact layout watches
+    /// it instead of `selectedKey`, so picking the same key from another
+    /// dictionary still pushes the detail column.
+    public private(set) var selectionRevision = 0
 
-    @ObservationIgnored private var dictionary: OdcDictionary?
+    /// More dictionaries than this and the sidebar stops being a sidebar.
+    public static let maximumOpenDictionaries = 8
+    /// Hits asked from each open dictionary for one query.
+    static let hitsPerDictionary = 20
+
+    /// One handle per open dictionary, keyed by its library identifier.
+    @ObservationIgnored private var handles: [UUID: OdcDictionary] = [:]
     @ObservationIgnored private var searchTask: Task<Void, Never>?
     @ObservationIgnored private var importTask: Task<Void, Never>?
     @ObservationIgnored private var conversionTask: Task<Void, Never>?
     @ObservationIgnored private var restoreTask: Task<Void, Never>?
-    /// Hides the import summary once its lifetime runs out.
     @ObservationIgnored private var summaryTask: Task<Void, Never>?
     /// Stamped on every summary change so a stale timer cannot clear a newer one.
     @ObservationIgnored private var summaryGeneration = 0
     /// How long a success note stays on screen.
     @ObservationIgnored private let importSummaryLifetime: Duration
-    /// Identifier of the library entry backing `documentURL`.
-    @ObservationIgnored private var openItemID: UUID?
     @ObservationIgnored private var hasRestored = false
-    /// Directory `reader` was loaded from; `nil` until the first read.
+    /// Directory `reader` was loaded from.
     @ObservationIgnored private var readerDirectory: URL?
-    /// Library root; `nil` means the app's Application Support folder.
     private let container: URL?
-
-    /// Search debounce, in milliseconds.
+    /// Debounce before a keystroke turns into a search.
     private static let debounceMilliseconds = 200
 
-    /// - Parameters:
-    ///   - container: Override for tests; defaults to Application Support.
-    ///   - importSummaryLifetime: How long a success note stays on screen. The
-    ///     note describes the import that just finished, so it clears itself
-    ///     instead of sitting under the entry until someone dismisses it.
+    /// `container` overrides the library folder; tests point it at a temporary
+    /// directory.
+    ///
+    /// `importSummaryLifetime` describes the import that just finished, so it
+    ///     clears itself instead of sitting under the entry until someone
+    ///     dismisses it.
     public init(container: URL? = nil, importSummaryLifetime: Duration = .seconds(6)) {
         self.container = container
         self.importSummaryLifetime = importSummaryLifetime
     }
 
+    /// The open dictionary the reader is looking at, if any.
+    public var activeDictionary: OpenDictionary? {
+        guard let activeDictionaryID else { return nil }
+        return openDictionaries.first { $0.id == activeDictionaryID }
+    }
+
+    /// The handle behind `activeDictionary`.
+    private var activeHandle: OdcDictionary? {
+        guard let activeDictionaryID else { return nil }
+        return handles[activeDictionaryID]
+    }
+
+    /// True while the library item `id` has an open handle.
+    public func isOpen(_ id: UUID) -> Bool { handles[id] != nil }
+
+    /// True when `id` is the dictionary the detail column follows.
+    public func isActive(_ id: UUID) -> Bool { activeDictionaryID == id }
+
     // MARK: - Opening and closing
 
     /// Import `url` into the sandbox and open the copy.
+    /// Import `url` into the sandbox and open the copy.
+    ///
+    /// The dictionary joins the open ones instead of replacing them, and the
+    /// new one becomes active.
     public func open(url: URL) {
         importTask?.cancel()
         importTask = Task { [weak self] in
@@ -89,29 +126,142 @@ public final class DictionaryStore {
         }
     }
 
-    /// Close the current dictionary and delete its imported copy.
+    /// Close the active dictionary and delete its imported copy.
+    ///
+    /// Another open dictionary takes its place; the store only falls back to
+    /// the empty state when nothing else is open.
     public func close() {
         importTask?.cancel()
         conversionTask?.cancel()
         searchTask?.cancel()
-        closeDictionary()
-        if let documentURL {
-            DocumentLibrary.removeCopy(at: documentURL)
+        guard let active = activeDictionary else {
+            resetEverything()
+            return
         }
-        if let openItemID, let directory = try? libraryDirectoryURL() {
-            LibraryStore.remove(id: openItemID, from: &library)
-            saveLibrary(in: directory)
-            updateReader(in: directory) {
-                ReaderStore.forget(dictionaryID: openItemID.uuidString, in: &$0)
-            }
+        let directory = try? libraryDirectoryURL()
+        DocumentLibrary.removeCopy(at: active.url)
+        forget(active.id, in: directory)
+        closeLibraryItem(id: active.id)
+        errorMessage = nil
+        isLoading = false
+        importPhase = nil
+        clearImportSummary()
+    }
+
+    /// Close `id` and leave its copy in the library, ready to open again.
+    public func closeLibraryItem(id: UUID) {
+        guard handles[id] != nil else { return }
+        if activeDictionaryID == id {
+            importTask?.cancel()
+            searchTask?.cancel()
         }
-        openItemID = nil
-        documentURL = nil
-        documentName = nil
+        handles.removeValue(forKey: id)?.close()
+        openDictionaries.removeAll { $0.id == id }
+        searchGroups.removeAll { $0.dictionaryID == id }
+        guard activeDictionaryID == id else { return }
+        activeDictionaryID = openDictionaries.last?.id
+        resetSelection()
+        if activeDictionaryID == nil {
+            query = ""
+            isLoading = false
+        }
+    }
+
+    /// Make `id` the dictionary the detail column follows.
+    ///
+    /// The query and every open dictionary's hits stay put; only the selection
+    /// moves, because the entry belonged to the previous dictionary.
+    public func activateDictionary(id: UUID) {
+        guard handles[id] != nil, activeDictionaryID != id else { return }
+        activeDictionaryID = id
+        resetSelection()
+    }
+
+    /// Open `item` the first time, or bring it forward when it is already open.
+    @discardableResult
+    private func openExisting(_ item: LibraryItem, in directory: URL) async throws -> Bool {
+        if handles[item.id] != nil {
+            activateDictionary(id: item.id)
+            rememberLastOpened(item, in: directory)
+            return true
+        }
+        guard canOpenAnotherDictionary else {
+            presentDictionaryLimit()
+            return false
+        }
+        let copy = LibraryStore.copyDirectory(for: item, in: directory)
+        let opened = try OdcDictionary(url: copy)
+        if Task.isCancelled {
+            opened.close()
+            return false
+        }
+        adopt(opened, as: item, at: copy)
+        rememberLastOpened(item, in: directory)
+        return true
+    }
+
+    /// Put a freshly opened handle on the list and make it active.
+    private func adopt(_ opened: OdcDictionary, as item: LibraryItem, at url: URL) {
+        handles[item.id] = opened
+        let entry = OpenDictionary(id: item.id, name: item.displayName, url: url)
+        if let index = openDictionaries.firstIndex(where: { $0.id == item.id }) {
+            openDictionaries[index] = entry
+        } else {
+            openDictionaries.append(entry)
+        }
+        activeDictionaryID = item.id
         query = ""
-        hits = []
+        searchGroups = []
+        resetSelection()
+    }
+
+    /// True while one more dictionary fits under `maximumOpenDictionaries`.
+    private var canOpenAnotherDictionary: Bool {
+        openDictionaries.count < Self.maximumOpenDictionaries
+    }
+
+    private func presentDictionaryLimit() {
+        errorMessage = "最多同时打开 \(Self.maximumOpenDictionaries) 本词典，请先关闭一本。"
+    }
+
+    /// Record `item` as the dictionary to reopen on the next launch.
+    private func rememberLastOpened(_ item: LibraryItem, in directory: URL) {
+        var state = library
+        if state.item(id: item.id) == nil {
+            LibraryStore.add(item, to: &state)
+        }
+        state.lastOpenedID = item.id
+        do {
+            try LibraryStore.save(state, to: directory)
+        } catch {
+            libraryLog.error(
+                "could not record the last opened dictionary: \(error.localizedDescription, privacy: .public)"
+            )
+        }
+        library = state
+    }
+
+    /// Drop a dictionary from the library and from the reader's memory.
+    private func forget(_ id: UUID, in directory: URL?) {
+        guard let directory else { return }
+        LibraryStore.remove(id: id, from: &library)
+        saveLibrary(in: directory)
+        updateReader(in: directory) {
+            ReaderStore.forget(dictionaryID: id.uuidString, in: &$0)
+        }
+    }
+
+    /// Nothing is on screen: the state a fresh launch starts from.
+    private func resetSelection() {
         selectedKey = nil
         entry = nil
+        noticeMessage = nil
+    }
+
+    private func resetEverything() {
+        query = ""
+        searchGroups = []
+        resetSelection()
         errorMessage = nil
         isLoading = false
         importPhase = nil
@@ -136,8 +286,9 @@ public final class DictionaryStore {
                 if FileManager.default.fileExists(
                     atPath: LibraryStore.openTarget(for: existing, in: directory).path
                 ) {
-                    try await openExisting(existing, in: directory)
-                    presentImportSummary("这本词典已在库中，已直接打开。")
+                    if try await openExisting(existing, in: directory) {
+                        presentImportSummary("这本词典已在库中，已直接打开。")
+                    }
                     return
                 }
                 forgetStaleEntry(existing, in: directory)
@@ -151,11 +302,16 @@ public final class DictionaryStore {
                 state: library
             ) {
                 try register(orphan, in: directory)
-                try await openExisting(orphan, in: directory)
-                presentImportSummary("这本词典已在库中，已直接打开。")
+                if try await openExisting(orphan, in: directory) {
+                    presentImportSummary("这本词典已在库中，已直接打开。")
+                }
                 return
             }
 
+            guard canOpenAnotherDictionary else {
+                presentDictionaryLimit()
+                return
+            }
             let copy = try await Task.detached(priority: .userInitiated) {
                 try DocumentLibrary.copyDocument(at: url, into: directory)
             }.value
@@ -183,27 +339,16 @@ public final class DictionaryStore {
                 sourceBytes: descriptor.bytes,
                 sourceHash: descriptor.contentHash
             )
-            closeDictionary()
-            dictionary = opened
-            documentURL = copy
-            documentName = item.displayName
-            openItemID = item.id
-            query = ""
-            hits = []
-            selectedKey = nil
-            entry = nil
             do {
                 // Register only once the copy opens, and drop the copy again if
                 // the registration cannot be saved: no half-recorded imports.
                 try register(item, in: directory)
             } catch {
-                closeDictionary()
-                documentURL = nil
-                documentName = nil
-                openItemID = nil
+                opened.close()
                 DocumentLibrary.removeCopy(at: copy)
                 throw error
             }
+            adopt(opened, as: item, at: copy)
         } catch is CancellationError {
             return
         } catch {
@@ -291,8 +436,9 @@ public final class DictionaryStore {
                ) {
                 importPhase = nil
                 importProgress = nil
-                presentImportSummary("这本词典已在库中，已直接打开。")
-                try await openExisting(existing, in: directory)
+                if try await openExisting(existing, in: directory) {
+                    presentImportSummary("这本词典已在库中，已直接打开。")
+                }
                 return
             }
             // The conversion is a staging artefact: it lands in the library's
@@ -362,22 +508,15 @@ public final class DictionaryStore {
     }
 
     /// Remove a dictionary from the library and delete its local copy.
+    /// Remove a library item and delete its copy.
     public func removeItem(id: UUID) {
         guard let item = library.item(id: id), let directory = try? libraryDirectoryURL() else {
             return
         }
         DocumentLibrary.removeCopy(at: LibraryStore.copyDirectory(for: item, in: directory))
-        if openItemID == id {
+        if handles[id] != nil {
             importTask?.cancel()
-            searchTask?.cancel()
-            closeDictionary()
-            openItemID = nil
-            documentURL = nil
-            documentName = nil
-            query = ""
-            hits = []
-            selectedKey = nil
-            entry = nil
+            closeLibraryItem(id: id)
         }
         LibraryStore.remove(id: id, from: &library)
         saveLibrary(in: directory)
@@ -407,15 +546,8 @@ public final class DictionaryStore {
             let (report, state) = outcome
             guard !report.isEmpty else { return report }
             library = state
-            if let openItemID, state.item(id: openItemID) == nil {
-                closeDictionary()
-                self.openItemID = nil
-                documentURL = nil
-                documentName = nil
-                query = ""
-                hits = []
-                selectedKey = nil
-                entry = nil
+            for entry in openDictionaries where state.item(id: entry.id) == nil {
+                closeLibraryItem(id: entry.id)
             }
             saveLibrary(in: directory)
             return report
@@ -496,37 +628,6 @@ public final class DictionaryStore {
     }
 
     /// Open `item` and mark it as the last opened dictionary.
-    private func openExisting(_ item: LibraryItem, in directory: URL) async throws {
-        let copy = LibraryStore.copyDirectory(for: item, in: directory)
-        let opened = try OdcDictionary(url: copy)
-        if Task.isCancelled {
-            opened.close()
-            return
-        }
-        closeDictionary()
-        dictionary = opened
-        documentURL = copy
-        documentName = item.displayName
-        openItemID = item.id
-        query = ""
-        hits = []
-        selectedKey = nil
-        entry = nil
-        var state = library
-        if state.item(id: item.id) == nil {
-            LibraryStore.add(item, to: &state)
-        }
-        state.lastOpenedID = item.id
-        do {
-            try LibraryStore.save(state, to: directory)
-            library = state
-        } catch {
-            libraryLog.error(
-                "could not record the last opened dictionary: \(error.localizedDescription, privacy: .public)"
-            )
-            library = state
-        }
-    }
 
     private func register(_ item: LibraryItem, in directory: URL) throws {
         var state = library
@@ -563,7 +664,7 @@ public final class DictionaryStore {
 
     /// Whether `key` is bookmarked in the dictionary that is open right now.
     public func isBookmarked(key: String) -> Bool {
-        guard let dictionaryID = openItemID?.uuidString else { return false }
+        guard let dictionaryID = activeDictionaryID?.uuidString else { return false }
         return reader.bookmarks.contains {
             $0.dictionaryID == dictionaryID && $0.key == key
         }
@@ -572,7 +673,7 @@ public final class DictionaryStore {
     /// Adds the entry on screen to the bookmarks, or removes it again.
     public func toggleBookmark() {
         guard let entry,
-              let dictionaryID = openItemID?.uuidString,
+              let dictionaryID = activeDictionaryID?.uuidString,
               let directory = try? libraryDirectoryURL()
         else { return }
         let ref = EntryRef(dictionaryID: dictionaryID, key: entry.key, headword: entry.display)
@@ -581,7 +682,7 @@ public final class DictionaryStore {
 
     /// Opens a remembered entry, switching dictionaries first when needed.
     public func openEntry(_ ref: EntryRef) async {
-        if let id = UUID(uuidString: ref.dictionaryID), id != openItemID {
+        if let id = UUID(uuidString: ref.dictionaryID), id != activeDictionaryID {
             guard let item = library.item(id: id), let directory = try? libraryDirectoryURL() else {
                 noticeMessage = "这本词典已不在词典库中。"
                 return
@@ -594,6 +695,9 @@ public final class DictionaryStore {
                 errorMessage = error.localizedDescription
                 return
             }
+            // The open can be refused (the limit is reached, the copy is gone);
+            // selecting now would land in whichever dictionary is still active.
+            guard activeDictionaryID == id else { return }
         }
         await select(key: ref.key)
     }
@@ -622,7 +726,7 @@ public final class DictionaryStore {
 
     /// Remembers an entry that resolved and is now on screen.
     private func recordHistory(for entry: DictionaryEntry) {
-        guard let dictionaryID = openItemID?.uuidString,
+        guard let dictionaryID = activeDictionaryID?.uuidString,
               let directory = try? libraryDirectoryURL()
         else { return }
         let ref = EntryRef(dictionaryID: dictionaryID, key: entry.key, headword: entry.display)
@@ -666,19 +770,20 @@ public final class DictionaryStore {
 
     // MARK: - Searching
 
-    /// Update the search text and schedule a debounced prefix search.
+    /// Update the search text and schedule a debounced search in every open
+    /// dictionary.
     public func setQuery(_ text: String) {
         query = text
         searchTask?.cancel()
 
-        guard dictionary != nil else {
-            hits = []
+        guard activeDictionaryID != nil else {
+            searchGroups = []
             return
         }
 
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            hits = []
+            searchGroups = []
             selectedKey = nil
             entry = nil
             return
@@ -695,42 +800,51 @@ public final class DictionaryStore {
         }
     }
 
+    /// Ask every open dictionary, in opening order, for at most
+    /// `hitsPerDictionary` hits.
+    ///
+    /// A dictionary that fails (a stale handle, a copy removed behind our back)
+    /// is skipped and logged; the other groups still publish.
     private func runSearch(_ text: String) async {
-        guard let dictionary else { return }
+        let open = openDictionaries
+        guard !open.isEmpty else { return }
         isLoading = true
         defer { isLoading = false }
-        do {
-            let results = try dictionary.search(text)
-            hits = results
-            if let selectedKey, !results.contains(where: { $0.key == selectedKey }) {
-                self.selectedKey = nil
-                entry = nil
+
+        var groups: [DictionarySearchGroup] = []
+        for entry in open {
+            guard !Task.isCancelled else { return }
+            guard let handle = handles[entry.id] else { continue }
+            do {
+                let results = try handle.search(text, limit: Self.hitsPerDictionary)
+                groups.append(
+                    DictionarySearchGroup(dictionaryID: entry.id, name: entry.name, hits: results)
+                )
+            } catch {
+                libraryLog.warning(
+                    "search failed in \(entry.name, privacy: .public): \(error.localizedDescription, privacy: .public)"
+                )
             }
-        } catch {
-            hits = []
-            errorMessage = error.localizedDescription
+        }
+        guard !Task.isCancelled else { return }
+
+        // A dictionary closed while the query ran must not come back as a group.
+        searchGroups = groups.filter { handles[$0.dictionaryID] != nil }
+        if let selectedKey, !hits.contains(where: { $0.key == selectedKey }) {
+            self.selectedKey = nil
+            entry = nil
         }
     }
 
-    /// Payload for an MDD resource key, `nil` when the dictionary has none.
-    ///
-    /// The entry reader calls this from the web view's scheme handler, so it
-    /// must stay synchronous and cheap: the core reads one indexed block.
+    /// Read a resource (stylesheet, image…) from the active dictionary.
     public func resource(for key: String) -> Data? {
-        guard let dictionary else { return nil }
-        return try? dictionary.resource(for: key)
+        guard let activeHandle else { return nil }
+        return try? activeHandle.resource(for: key)
     }
 
-    // MARK: - Selection
-
-    /// Load the entry for `key`, replacing any current selection.
-    ///
-    /// `@@@LINK` redirects are followed by the core. When the chain lands on
-    /// a different word the search field follows it, so the list and the entry
-    /// never disagree; when the chain does not settle the previous entry stays
-    /// on screen behind a note instead of a blank panel.
+    /// Load `key` from the active dictionary and show it.
     public func select(key: String) async {
-        guard let dictionary else { return }
+        guard let dictionary = activeHandle else { return }
         let previous = entry
         selectedKey = key
         entry = nil
@@ -745,6 +859,7 @@ public final class DictionaryStore {
                     await followRedirect(to: loaded)
                 }
                 recordHistory(for: loaded)
+                selectionRevision += 1
             case let .missingTarget(target, _):
                 entry = previous
                 noticeMessage = "重定向目标不存在：\(target)"
@@ -763,41 +878,72 @@ public final class DictionaryStore {
         }
     }
 
-    /// Points the search field at the entry a redirect chain reached.
+    /// Show an entry a grouped result names, switching dictionaries first.
+    ///
+    /// History and bookmarks follow the target dictionary, not whichever one
+    /// happened to be active before the tap.
+    public func select(key: String, in dictionaryID: UUID) async {
+        guard handles[dictionaryID] != nil else {
+            noticeMessage = "这本词典已关闭。"
+            return
+        }
+        if activeDictionaryID != dictionaryID {
+            activateDictionary(id: dictionaryID)
+        }
+        await select(key: key)
+    }
+
+    /// A redirect resolves to a different key: show it and its neighbourhood.
     private func followRedirect(to loaded: DictionaryEntry) async {
         selectedKey = loaded.key
         query = loaded.display
-        guard let dictionary else { return }
+        guard let dictionary = activeHandle, let dictionaryID = activeDictionaryID else { return }
         let results = (try? dictionary.search(loaded.key)) ?? []
-        hits = results.contains(where: { $0.key == loaded.key })
+        let hits = results.contains(where: { $0.key == loaded.key })
             ? results
             : [SearchHit(key: loaded.key, display: loaded.display)] + results
+        updateHits(hits, in: dictionaryID)
     }
 
-    /// Opens the first result for the current query.
-    ///
-    /// Bound to the search field's submit action. An empty result list is a
-    /// no-op, so pressing return never raises an error or disturbs the field.
+    /// Replace one dictionary's hits without disturbing the other groups.
+    private func updateHits(_ hits: [SearchHit], in dictionaryID: UUID) {
+        if let index = searchGroups.firstIndex(where: { $0.dictionaryID == dictionaryID }) {
+            searchGroups[index] = DictionarySearchGroup(
+                dictionaryID: dictionaryID,
+                name: searchGroups[index].name,
+                hits: hits
+            )
+            return
+        }
+        guard let order = openDictionaries.firstIndex(where: { $0.id == dictionaryID })
+        else { return }
+        let group = DictionarySearchGroup(
+            dictionaryID: dictionaryID,
+            name: openDictionaries[order].name,
+            hits: hits
+        )
+        let insertAt = searchGroups.firstIndex { existing in
+            guard let index = openDictionaries.firstIndex(where: { $0.id == existing.dictionaryID }) else {
+                return false
+            }
+            return index > order
+        } ?? searchGroups.count
+        searchGroups.insert(group, at: insertAt)
+    }
+
+    /// Open the first hit of the active dictionary — what Return does.
     public func submitQuery() {
         guard let first = hits.first else { return }
         Task { await select(key: first.key) }
     }
 
-
     // MARK: - Errors
 
-    /// Surface an error raised outside the store (for example by a picker).
     public func present(error: any Error) {
         errorMessage = error.localizedDescription
     }
 
     public func dismissError() {
         errorMessage = nil
-    }
-
-    private func closeDictionary() {
-        dictionary?.close()
-        dictionary = nil
-        noticeMessage = nil
     }
 }
