@@ -10,8 +10,9 @@ use odc_core::cbor::Value as CborValue;
 use odc_core::mdx_scan::{scan, ScanOutcome};
 use odc_core::{Def, Entry, Repo};
 use odc_ffi::{
-    odc_import_mdx_to_odc, odc_repo_close, odc_repo_entry_count, odc_repo_entry_json,
-    odc_repo_open, odc_repo_search_json, odc_string_free, odc_version,
+    odc_import_mdx_to_odc, odc_import_mdx_to_odc_with_mdd, odc_repo_close, odc_repo_entry_count,
+    odc_repo_entry_json, odc_repo_open, odc_repo_resource_copy, odc_repo_resource_count,
+    odc_repo_resource_len, odc_repo_search_json, odc_string_free, odc_version,
 };
 use serde_json::Value;
 use tempfile::TempDir;
@@ -483,4 +484,130 @@ fn imports_a_real_mdx_file() {
         i64::try_from(report["imported_entries"].as_u64().unwrap()).unwrap(),
         total
     );
+}
+
+#[test]
+fn resource_accessors_read_through_the_abi() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mut repo = Repo::init(dir.path()).expect("init");
+    repo.put_resource("pic/apple.png", b"png bytes")
+        .expect("put");
+    repo.put_resource("sound/apple.mp3", b"mp3 bytes")
+        .expect("put");
+    let handle = open(&dir);
+
+    let mut error: *mut c_char = ptr::null_mut();
+    // SAFETY: live handle plus a writable error slot.
+    let count = unsafe { odc_repo_resource_count(handle, &mut error) };
+    assert!(take_error_if_any(error).is_none());
+    assert_eq!(count, 2);
+
+    let key = CString::new("pic/apple.png").expect("key");
+    let mut length: u64 = 0;
+    // SAFETY: live handle, valid key and writable length slot.
+    let found = unsafe { odc_repo_resource_len(handle, key.as_ptr(), &mut length, &mut error) };
+    assert!(take_error_if_any(error).is_none());
+    assert_eq!(found, 1);
+    assert_eq!(length, 9);
+
+    let mut buffer = vec![0_u8; length as usize];
+    let mut copied: usize = 0;
+    // SAFETY: the buffer is exactly `length` bytes.
+    let code = unsafe {
+        odc_repo_resource_copy(
+            handle,
+            key.as_ptr(),
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            &mut copied,
+            &mut error,
+        )
+    };
+    assert!(take_error_if_any(error).is_none());
+    assert_eq!(code, 1);
+    assert_eq!(copied, 9);
+    assert_eq!(buffer, b"png bytes".to_vec());
+
+    // A case-insensitive lookup reaches the same payload.
+    let shout = CString::new("PIC/APPLE.PNG").expect("key");
+    let mut other: u64 = 0;
+    // SAFETY: same contract as above.
+    let found = unsafe { odc_repo_resource_len(handle, shout.as_ptr(), &mut other, &mut error) };
+    assert!(take_error_if_any(error).is_none());
+    assert_eq!(found, 1);
+    assert_eq!(other, 9);
+
+    // A missing key reports 0 instead of an error.
+    let missing = CString::new("pic/missing.png").expect("key");
+    let mut unused: u64 = 0;
+    // SAFETY: same contract as above.
+    let found = unsafe { odc_repo_resource_len(handle, missing.as_ptr(), &mut unused, &mut error) };
+    assert_eq!(found, 0);
+    assert!(take_error_if_any(error).is_none());
+
+    // Too small a buffer is an error, not a silent truncation.
+    let mut tiny = [0_u8; 3];
+    let mut copied: usize = 0;
+    // SAFETY: the buffer is smaller than the payload on purpose.
+    let code = unsafe {
+        odc_repo_resource_copy(
+            handle,
+            key.as_ptr(),
+            tiny.as_mut_ptr(),
+            tiny.len(),
+            &mut copied,
+            &mut error,
+        )
+    };
+    assert_eq!(code, -1);
+    assert!(take_error_if_any(error).is_some());
+
+    // SAFETY: the handle is closed exactly once.
+    unsafe { odc_repo_close(handle) };
+}
+
+#[test]
+fn import_with_explicit_mdd_volumes_stores_resources() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mdx = dir.path().join("dictionary.mdx");
+    write_mdx_fixture(&mdx, 2);
+    let volume = dir.path().join("dictionary.1.mdd");
+    odc_testkit::write_mdd(&volume, &[("\\pic\\apple.png", b"png bytes")]).expect("mdd");
+    let out = dir.path().join("dictionary.odc");
+
+    let mdx_c = CString::new(mdx.to_str().expect("utf8")).expect("path");
+    let out_c = CString::new(out.to_str().expect("utf8")).expect("path");
+    let volumes = serde_json::json!([volume.to_str().expect("utf8")]).to_string();
+    let volumes_c = CString::new(volumes).expect("json");
+    let mut report: *mut c_char = ptr::null_mut();
+    let mut error: *mut c_char = ptr::null_mut();
+    // SAFETY: every pointer is valid for the call.
+    let code = unsafe {
+        odc_import_mdx_to_odc_with_mdd(
+            mdx_c.as_ptr(),
+            out_c.as_ptr(),
+            volumes_c.as_ptr(),
+            &mut report,
+            &mut error,
+        )
+    };
+    assert_eq!(code, 0, "import failed: {:?}", take_error_if_any(error));
+    let parsed: Value = serde_json::from_str(&take_string(report)).expect("report json");
+    assert_eq!(parsed["resource_count"], 1);
+    assert_eq!(parsed["mdd_files"][0]["entries"], 1);
+    assert_eq!(parsed["warnings"].as_array().expect("warnings").len(), 0);
+
+    let path = CString::new(out.to_str().expect("utf8")).expect("path");
+    let mut error: *mut c_char = ptr::null_mut();
+    // SAFETY: path is a live C string, error is a writable slot.
+    let handle = unsafe { odc_repo_open(path.as_ptr(), &mut error) };
+    assert!(take_error_if_any(error).is_none());
+    let key = CString::new("pic/apple.png").expect("key");
+    let mut length: u64 = 0;
+    // SAFETY: live handle, valid key, writable length.
+    let found = unsafe { odc_repo_resource_len(handle, key.as_ptr(), &mut length, &mut error) };
+    assert_eq!(found, 1);
+    assert_eq!(length, 9);
+    // SAFETY: the handle is closed exactly once.
+    unsafe { odc_repo_close(handle) };
 }

@@ -202,6 +202,113 @@ pub unsafe extern "C" fn odc_repo_entry_json(
     })
 }
 
+/// Number of resources (MDD payloads) in the repository.
+///
+/// # Safety
+///
+/// `repo` must be `NULL` or a live handle; `error_message` must be
+/// `NULL` or point to writable storage for one `char *`.
+#[no_mangle]
+pub unsafe extern "C" fn odc_repo_resource_count(
+    repo: *const OdcRepo,
+    error_message: *mut *mut c_char,
+) -> i64 {
+    guarded(error_message, 0, || {
+        let repo = repo_ref(repo)?;
+        let count = repo
+            .repo
+            .resource_count()
+            .map_err(|error| error.to_string())?;
+        i64::try_from(count).map_err(|_| "resource count exceeds i64".to_string())
+    })
+}
+
+/// Length in bytes of the resource stored under `key_utf8`.
+///
+/// Returns 1 and writes the length through `out_len` when the resource
+/// exists, 0 when it does not, and -1 on failure.
+///
+/// # Safety
+///
+/// `repo` must be `NULL` or a live handle; `key_utf8` must be `NULL` or a
+/// NUL-terminated UTF-8 string; `out_len` must be `NULL` or point to
+/// writable storage for one `uint64_t`; `error_message` must be `NULL` or
+/// point to writable storage for one `char *`.
+#[no_mangle]
+pub unsafe extern "C" fn odc_repo_resource_len(
+    repo: *const OdcRepo,
+    key_utf8: *const c_char,
+    out_len: *mut u64,
+    error_message: *mut *mut c_char,
+) -> i32 {
+    guarded(error_message, -1, || {
+        let repo = repo_ref(repo)?;
+        let key = text_arg(key_utf8, "key")?;
+        let Some(bytes) = repo
+            .repo
+            .resource(&key)
+            .map_err(|error| error.to_string())?
+        else {
+            return Ok(0);
+        };
+        if !out_len.is_null() {
+            // SAFETY: the contract requires writable storage for one u64.
+            unsafe { *out_len = bytes.len() as u64 };
+        }
+        Ok(1)
+    })
+}
+
+/// Copy the resource stored under `key_utf8` into `buffer`.
+///
+/// Returns 1 when the resource was copied, 0 when it does not exist and -1
+/// on failure. `capacity` must be at least the length reported by
+/// [`odc_repo_resource_len`]; the copied length is written through
+/// `out_len` when that pointer is not `NULL`.
+///
+/// # Safety
+///
+/// `repo` must be `NULL` or a live handle; `key_utf8` must be `NULL` or a
+/// NUL-terminated UTF-8 string; `buffer` must be `NULL` or writable for
+/// `capacity` bytes; `out_len` must be `NULL` or point to writable storage
+/// for one `size_t`; `error_message` must be `NULL` or point to writable
+/// storage for one `char *`.
+#[no_mangle]
+pub unsafe extern "C" fn odc_repo_resource_copy(
+    repo: *const OdcRepo,
+    key_utf8: *const c_char,
+    buffer: *mut u8,
+    capacity: usize,
+    out_len: *mut usize,
+    error_message: *mut *mut c_char,
+) -> i32 {
+    guarded(error_message, -1, || {
+        let repo = repo_ref(repo)?;
+        let key = text_arg(key_utf8, "key")?;
+        let Some(bytes) = repo
+            .repo
+            .resource(&key)
+            .map_err(|error| error.to_string())?
+        else {
+            return Ok(0);
+        };
+        if bytes.len() > capacity {
+            return Err(format!(
+                "buffer holds {capacity} bytes but the resource needs {}",
+                bytes.len()
+            ));
+        }
+        if !buffer.is_null() && !bytes.is_empty() {
+            // SAFETY: the contract requires `capacity` writable bytes.
+            unsafe { ptr::copy_nonoverlapping(bytes.as_ptr(), buffer, bytes.len()) };
+        }
+        if !out_len.is_null() {
+            // SAFETY: the contract requires writable storage for one usize.
+            unsafe { *out_len = bytes.len() };
+        }
+        Ok(1)
+    })
+}
 /// Import an MDX file into a standalone `.odc` file.
 ///
 /// Returns `0` on success and `-1` on failure. On success `report_json_out`
@@ -231,20 +338,87 @@ pub unsafe extern "C" fn odc_import_mdx_to_odc(
         // SAFETY: both pointers follow the contract documented above.
         let mdx = unsafe { text_arg(mdx_path, "mdx_path") }?;
         let out = unsafe { text_arg(out_odc_path, "out_odc_path") }?;
-        let converted = import_mdx_to_odc(Path::new(&mdx), Path::new(&out))?;
+        let converted = import_mdx_to_odc(Path::new(&mdx), Path::new(&out), None)?;
         let payload = import_report_to_json(&converted.report, converted.output_bytes);
         store_json(report_json_out, &payload)?;
         Ok(0)
     })
 }
 
+/// Import an MDX file and an explicit list of MDD volumes into one `.odc`.
+///
+/// `mdd_paths_json` is `NULL` to let the core discover the volumes next to
+/// the MDX file, or a JSON array of absolute paths (in import order). The
+/// array form exists for sandboxed callers that already listed the files and
+/// hold the security scopes for them.
+///
+/// # Safety
+///
+/// `mdx_path`, `out_odc_path` and `mdd_paths_json` must be `NULL` or
+/// NUL-terminated UTF-8 strings; `report_json_out` and `error_message` must
+/// be `NULL` or point to writable storage for one `char *`.
+#[no_mangle]
+pub unsafe extern "C" fn odc_import_mdx_to_odc_with_mdd(
+    mdx_path: *const c_char,
+    out_odc_path: *const c_char,
+    mdd_paths_json: *const c_char,
+    report_json_out: *mut *mut c_char,
+    error_message: *mut *mut c_char,
+) -> i32 {
+    // A stale report pointer must never survive a failed import.
+    clear_error(report_json_out);
+    guarded(error_message, -1, || {
+        // SAFETY: every pointer follows the contract documented above.
+        let mdx = unsafe { text_arg(mdx_path, "mdx_path") }?;
+        let out = unsafe { text_arg(out_odc_path, "out_odc_path") }?;
+        let volumes = unsafe { mdd_paths(mdd_paths_json) }?;
+        let converted = import_mdx_to_odc(Path::new(&mdx), Path::new(&out), volumes)?;
+        let payload = import_report_to_json(&converted.report, converted.output_bytes);
+        store_json(report_json_out, &payload)?;
+        Ok(0)
+    })
+}
+
+/// MDD volumes named by the caller, or `None` when the core should discover
+/// them itself.
+///
+/// # Safety
+///
+/// `value` must be `NULL` or a NUL-terminated UTF-8 string holding a JSON
+/// array of paths.
+unsafe fn mdd_paths(value: *const c_char) -> Result<Option<Vec<PathBuf>>, String> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    let text = unsafe { text_arg(value, "mdd_paths_json") }?;
+    if text.trim().is_empty() {
+        return Ok(None);
+    }
+    let parsed: JsonValue = serde_json::from_str(&text)
+        .map_err(|error| format!("mdd_paths_json is not JSON: {error}"))?;
+    let array = parsed
+        .as_array()
+        .ok_or_else(|| "mdd_paths_json must be a JSON array of paths".to_string())?;
+    let mut volumes = Vec::with_capacity(array.len());
+    for item in array {
+        let path = item
+            .as_str()
+            .ok_or_else(|| "mdd_paths_json entries must be strings".to_string())?;
+        volumes.push(PathBuf::from(path));
+    }
+    Ok(Some(volumes))
+}
 /// Outcome of one `odc_import_mdx_to_odc` run.
 struct ConvertedMdx {
     report: MdxImportReport,
     output_bytes: u64,
 }
 
-fn import_mdx_to_odc(mdx: &Path, out: &Path) -> Result<ConvertedMdx, String> {
+fn import_mdx_to_odc(
+    mdx: &Path,
+    out: &Path,
+    mdd_volumes: Option<Vec<PathBuf>>,
+) -> Result<ConvertedMdx, String> {
     if out.exists() {
         return Err(format!("output file already exists: {}", out.display()));
     }
@@ -272,6 +446,7 @@ fn import_mdx_to_odc(mdx: &Path, out: &Path) -> Result<ConvertedMdx, String> {
         &mut repo,
         MdxImportOptions {
             skip_corrupt_blocks: true,
+            mdd_volumes,
             ..MdxImportOptions::default()
         },
     )
@@ -397,8 +572,20 @@ fn import_report_to_json(report: &MdxImportReport, output_bytes: u64) -> JsonVal
             })
         })
         .collect();
+    let volumes: Vec<JsonValue> = report
+        .mdd_files
+        .iter()
+        .map(|volume| {
+            json!({
+                "path": volume.path.to_string_lossy(),
+                "entries": volume.entries,
+                "bytes": volume.bytes,
+            })
+        })
+        .collect();
     json!({
         "imported_entries": report.imported_entries,
+
         "written": report.written,
         "removed": report.removed,
         "skipped_blocks": report.skipped_blocks,
@@ -409,6 +596,10 @@ fn import_report_to_json(report: &MdxImportReport, output_bytes: u64) -> JsonVal
         "skipped_oversized": report.skipped_oversized,
         "working_set": report.working_set,
         "scan_warning": report.scan_warning.as_deref(),
+        "mdd_files": volumes,
+        "resource_count": report.resource_count,
+        "resource_bytes": report.resource_bytes,
+        "warnings": report.warnings,
         "header": {
             "engine_version": report.header.engine_version.as_str(),
             "required_engine_version": report.header.required_engine_version.as_str(),

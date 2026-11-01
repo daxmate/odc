@@ -2,6 +2,7 @@
 #ifndef ODC_H
 #define ODC_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -70,6 +71,48 @@ char *odc_repo_entry_json(const OdcRepo *repo, const char *key_utf8,
  */
 int32_t odc_import_mdx_to_odc(const char *mdx_path, const char *out_odc_path,
                               char **report_json_out, char **error_message);
+
+/*
+ * Number of MDD resources stored in the repository. Returns 0 on failure.
+ */
+int64_t odc_repo_resource_count(const OdcRepo *repo, char **error_message);
+
+/*
+ * Length in bytes of the resource stored under key_utf8.
+ *
+ * Returns 1 and writes the length through out_len when the resource exists,
+ * 0 when it does not, and -1 on failure. The lookup is case-insensitive so
+ * \pic\Apple.png and /pic/apple.png reach the same payload.
+ */
+int32_t odc_repo_resource_len(const OdcRepo *repo, const char *key_utf8,
+                              uint64_t *out_len, char **error_message);
+
+/*
+ * Copy the resource stored under key_utf8 into buffer.
+ *
+ * Returns 1 when the payload was copied, 0 when it does not exist and -1 on
+ * failure. capacity must be at least the length reported by
+ * odc_repo_resource_len(); the copied length is written through out_len when
+ * that pointer is not NULL.
+ */
+int32_t odc_repo_resource_copy(const OdcRepo *repo, const char *key_utf8,
+                               uint8_t *buffer, size_t capacity,
+                               size_t *out_len, char **error_message);
+
+/*
+ * Import an MDX file plus an explicit list of MDD volumes.
+ *
+ * mdd_paths_json is NULL to let the core discover the volumes next to the MDX
+ * file, or a JSON array of absolute paths in import order. Returns 0 on
+ * success (report_json_out holds the same report as odc_import_mdx_to_odc,
+ * with mdd_files, resource_count, resource_bytes and warnings) and -1 on
+ * failure.
+ */
+int32_t odc_import_mdx_to_odc_with_mdd(const char *mdx_path,
+                                      const char *out_odc_path,
+                                      const char *mdd_paths_json,
+                                      char **report_json_out,
+                                      char **error_message);
 
 /*
  * Release a string returned by this library. Passing NULL is a no-op.
