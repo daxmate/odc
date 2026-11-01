@@ -98,13 +98,20 @@ pub struct MdxImportOptions {
     pub skip_corrupt_blocks: bool, // 默认 true
     pub prune: bool,
     pub limit: Option<usize>,
-    pub progress: Option<Box<dyn FnMut(usize)>>,
+    pub progress: Option<Box<dyn FnMut(ImportProgress)>>,
 }
 pub fn import_mdx(path: &Path, repo: &mut Repo, options: MdxImportOptions)
     -> Result<MdxImportReport>; // imported_entries / written / removed /
                                 // skipped_blocks / skipped_entries / corrupt_blocks
                                 // （另有 dedup / empty / oversized 计数）
 ```
+
+进度样本是 `ImportProgress { stage, done, total, volume_index, volume_count }`，
+`done` / `total` 都是**阶段内**的条数：`Preparing` 报 MDD 预扫描到的资源总数，
+`Entries` 报 `min(limit, 文件条目数)`，`Resources` 报资源条数并带卷号
+（`volume_index` 从 1 起，`volume_count` 为可读卷数），`Committing` 时两者相等、
+等于词条数加资源数。回调限速约 10 次/秒，阶段切换与终态样本必发；需要一条总
+进度条时按 `(词条 done + 资源 done) / (词条 total + 资源 total)` 自行合成。
 
 ### 实测（release 构建，Apple Silicon，本机样本）
 

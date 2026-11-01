@@ -47,6 +47,14 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   skipped and summarised in the completion alert. iOS keeps rejecting
   `.mdx`.
 
+* Import progress for MDX and MDD: `MdxImportOptions::progress` now yields
+  `ImportProgress { stage, done, total, volume_index, volume_count }` — the MDD
+  volumes are pre-scanned before the first record, so a caller knows the whole
+  job up front. Samples are capped at roughly ten per second, with every stage
+  change and the final `done == total` always delivered. The C ABI gains
+  `odc_import_mdx_to_odc_with_mdd_progress` (NULL callback = the old entry
+  point), `odc import --progress` prints stage and percentage per line, and the
+  Apple banner shows one determinate bar with the entry and resource counts.
 * MDX (MDict 1.2 / 2.0) import through `odc import --format mdx`, wrapping
   the `mdictlib` reader (MIT). Duplicate normalised keys receive a
   `U+001F<n>` suffix; empty keys and records over 1 MiB are skipped and
