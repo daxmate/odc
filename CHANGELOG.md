@@ -13,8 +13,8 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   (⌘B on macOS), so kept words are one click away from the main screen.
 * Reader memory: bookmarks and a 200-entry query history live in `reader.json`
   next to `library.json`, written atomically and reset to an empty state when
-  the file cannot be decoded. The library sheet now lists dictionaries, recent
-  entries and bookmarks in three sections, and the entry toolbar toggles a
+  the file cannot be decoded. The library sheet lists dictionaries, the wordbook
+  sheet lists recent entries and bookmarks, and the entry toolbar toggles a
   bookmark for the entry on screen.
 * Library: opening a second dictionary no longer replaces the first. Up to
   eight stay open at once, the sidebar lists every library entry with its open
