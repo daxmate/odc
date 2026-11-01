@@ -12,6 +12,15 @@ use std::path::Path;
 /// Format version string written into `meta`.
 pub const FORMAT_VERSION: &str = "0.1";
 
+/// Meta key that marks `staging` as a clean mirror of HEAD.
+///
+/// After a successful commit the working set is byte-for-byte identical to the
+/// committed index, so the whole table is dropped and this flag records that.
+/// The rows are rebuilt from `entries` the first time a writer needs them (see
+/// `Repo::ensure_workset`). Values: `"1"` when staging is empty and equals
+/// HEAD, absent otherwise.
+pub const META_WORKSET_CLEAN: &str = "workset_clean";
+
 /// Default database file name inside a repository directory.
 pub const DB_FILE: &str = "odc.db";
 

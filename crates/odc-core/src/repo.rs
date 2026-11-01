@@ -133,12 +133,34 @@ pub struct VerifyReport {
     pub errors: Vec<String>,
 }
 
+/// zstd level used for every block written by the reference implementation.
+///
+/// Level 3 was the original default; level 9 buys roughly 8% smaller blocks
+/// on dictionary-sized payloads for a few seconds of extra import time, and
+/// costs nothing on the read path (the frame header carries the level).
+pub(crate) const ZSTD_LEVEL: i32 = 9;
+
 fn compress(data: &[u8]) -> Result<Vec<u8>> {
-    zstd::bulk::compress(data, 3).map_err(|error| Error::Io(error.to_string()))
+    zstd::bulk::compress(data, ZSTD_LEVEL).map_err(|error| Error::Io(error.to_string()))
 }
 
 fn decompress(data: &[u8], raw_size: usize) -> Result<Vec<u8>> {
     zstd::bulk::decompress(data, raw_size).map_err(|error| Error::Io(error.to_string()))
+}
+
+/// True when `staging` was dropped after a commit and therefore mirrors HEAD.
+fn workset_is_clean(connection: &Connection) -> Result<bool> {
+    let value = store::get_meta(connection, store::META_WORKSET_CLEAN)?;
+    Ok(matches!(value.as_deref(), Some(b"1")))
+}
+
+/// Drop the "working set equals HEAD" marker after anything wrote to staging.
+pub(crate) fn mark_workset_dirty(connection: &Connection) -> Result<()> {
+    connection.execute(
+        "DELETE FROM meta WHERE key = ?1",
+        [store::META_WORKSET_CLEAN],
+    )?;
+    Ok(())
 }
 
 pub(crate) fn hash_from_blob(bytes: &[u8]) -> Result<[u8; 32]> {
@@ -230,6 +252,7 @@ impl Repo {
             message: "genesis".to_string(),
         };
         self.insert_commit(&commit)?;
+        store::set_meta(&self.connection, store::META_WORKSET_CLEAN, b"1")?;
         let snapshot = {
             let writer = snapshot::SnapshotWriter::new(Vec::new(), 0)?;
             let (buffer, _) = writer.finish()?;
@@ -285,8 +308,28 @@ impl Repo {
         value.map(|bytes| hash_from_blob(&bytes)).transpose()
     }
 
+    /// Rebuild the working set from HEAD when the previous commit dropped it.
+    ///
+    /// Only committed rows are copied back, and only their index metadata: the
+    /// payload of a committed entry is read from its block on demand.
+    fn ensure_workset(&mut self) -> Result<()> {
+        if !workset_is_clean(&self.connection)? {
+            return Ok(());
+        }
+        let transaction = self.connection.transaction()?;
+        transaction.execute(
+            "INSERT OR REPLACE INTO staging(word, display, content_hash)
+             SELECT word, display, content_hash FROM entries",
+            [],
+        )?;
+        mark_workset_dirty(&transaction)?;
+        transaction.commit()?;
+        Ok(())
+    }
+
     /// Insert or replace entries in the working set.
     pub fn import(&mut self, entries: &[Entry], prune: bool) -> Result<ImportReport> {
+        self.ensure_workset()?;
         let transaction = self.connection.transaction()?;
         {
             let mut insert = transaction.prepare(
@@ -385,6 +428,7 @@ impl Repo {
         F: FnMut() -> Result<Option<Entry>>,
         P: FnMut(usize),
     {
+        self.ensure_workset()?;
         if prune {
             self.connection.execute_batch(
                 "CREATE TEMP TABLE IF NOT EXISTS imported(word TEXT PRIMARY KEY);
@@ -516,6 +560,16 @@ impl Repo {
 
     /// Compare the working set with HEAD.
     pub fn status(&self) -> Result<Status> {
+        if workset_is_clean(&self.connection)? {
+            let entries = self.entry_count()?;
+            return Ok(Status {
+                total: entries,
+                entries,
+                blocks: self.block_count()?,
+                head: self.head()?.map(|hash| hash::to_hex(&hash)),
+                ..Status::default()
+            });
+        }
         let added: i64 = self.connection.query_row(
             "SELECT COUNT(*) FROM staging s
              LEFT JOIN entries e ON e.word = s.word
@@ -699,27 +753,17 @@ impl Repo {
             }
         }
 
-        // Every working-set row now points into the new index, so the cached
-        // payloads are redundant. Keep word/display/content_hash for `status`
-        // and rebuild the table so the freed payload pages leave its b-tree.
+        // The working set now equals HEAD exactly. Dropping it outright is
+        // cheaper than keeping a word/display/content_hash mirror of the index
+        // (10+ MiB on a mid-size dictionary) and it is rebuilt from `entries`
+        // on the next write; `status` reads the flag instead of the table.
         let cached_payloads: i64 = transaction.query_row(
             "SELECT COALESCE(SUM(length(payload)), 0) FROM staging",
             [],
             |row| row.get(0),
         )?;
-        transaction.execute_batch(
-            "DROP TABLE IF EXISTS staging_compact;
-             CREATE TABLE staging_compact(
-                 word TEXT PRIMARY KEY,
-                 display TEXT NOT NULL,
-                 payload BLOB,
-                 content_hash BLOB NOT NULL
-             );
-             INSERT INTO staging_compact(word, display, content_hash)
-                 SELECT word, display, content_hash FROM staging;
-             DROP TABLE staging;
-             ALTER TABLE staging_compact RENAME TO staging;",
-        )?;
+        transaction.execute("DELETE FROM staging", [])?;
+        store::set_meta(&transaction, store::META_WORKSET_CLEAN, b"1")?;
 
         let block_root = {
             let mut accumulator = hash::MerkleAccumulator::new();
@@ -741,8 +785,9 @@ impl Repo {
                 .write(true)
                 .create_new(true)
                 .open(temp.path())?;
-            let encoder = zstd::stream::write::Encoder::new(std::io::BufWriter::new(file), 3)
-                .map_err(|error| Error::Io(error.to_string()))?;
+            let encoder =
+                zstd::stream::write::Encoder::new(std::io::BufWriter::new(file), ZSTD_LEVEL)
+                    .map_err(|error| Error::Io(error.to_string()))?;
             let mut writer = snapshot::SnapshotWriter::new(encoder, entry_count)?;
             {
                 let mut select = transaction
@@ -1035,7 +1080,24 @@ impl Repo {
             )
             .optional()?;
         let Some((payload, content_hash)) = row else {
-            return Ok(None);
+            if !workset_is_clean(&self.connection)? {
+                return Ok(None);
+            }
+            // The working set was dropped after the last commit: a lookup for a
+            // committed word is served straight from its block.
+            let digest = self
+                .connection
+                .query_row(
+                    "SELECT content_hash FROM entries WHERE word = ?1",
+                    params![key],
+                    |row| row.get::<_, Vec<u8>>(0),
+                )
+                .optional()?;
+            let Some(digest) = digest else {
+                return Ok(None);
+            };
+            let content_hash = hash_from_blob(&digest)?;
+            return Ok(Some(self.payload_from_index(&key, &content_hash)?));
         };
         let content_hash = hash_from_blob(&content_hash)?;
         match payload {
@@ -1973,6 +2035,7 @@ fn stage_merge_rows(connection: &Connection, rows: &mut [MergeRow]) -> Result<(u
 
     connection.execute("DELETE FROM entries", [])?;
     connection.execute("DELETE FROM staging", [])?;
+    mark_workset_dirty(connection)?;
     {
         let mut insert_entry = connection.prepare(
             "INSERT INTO entries(word, display, block_hash, offset, length, content_hash, field_hashes)
@@ -2106,8 +2169,9 @@ impl Repo {
                 .write(true)
                 .create_new(true)
                 .open(temp.path())?;
-            let encoder = zstd::stream::write::Encoder::new(std::io::BufWriter::new(file), 3)
-                .map_err(|error| Error::Io(error.to_string()))?;
+            let encoder =
+                zstd::stream::write::Encoder::new(std::io::BufWriter::new(file), ZSTD_LEVEL)
+                    .map_err(|error| Error::Io(error.to_string()))?;
             let mut writer = snapshot::SnapshotWriter::new(encoder, entry_count)?;
             {
                 let mut select = transaction

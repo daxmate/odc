@@ -64,7 +64,9 @@ fn merkle_accumulator_matches_for_random_sized_leaves() {
 
 #[test]
 fn stream_chunker_matches_boundaries() {
-    let records: Vec<Record> = (0..600)
+    // ~9 MiB of records: enough for several 1 MiB blocks even though content
+    // boundaries are rare on this generated stream.
+    let records: Vec<Record> = (0..3000)
         .map(|index| {
             let payload_len = 1024 + (index * 37) % 4096;
             Record::new(

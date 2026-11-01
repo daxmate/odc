@@ -137,13 +137,16 @@ h = (h << 1) + gear[byte]        // u64 环绕
 
 按 key 升序处理 record，维护当前块字节数 `size`（只计 record 字节，不含块头与偏移索引）：
 
-1. 若加入下一条 record 会超过 `max = 256 KiB` 且当前块非空 → **先断块**，再开始新块；
+1. 若加入下一条 record 会超过 `max = 1 MiB` 且当前块非空 → **先断块**，再开始新块；
 2. 加入该 record，对该 record 的 `key || 0x00 || content_hash` 逐字节更新 `h`；
 3. 若 `size ≥ min = 16 KiB` 且该 record 内**任一字节**使 `(h & 0xFFFF) == 0` → 在该 record 末尾断块（record 是原子单位，断点不落在 record 中间）；
 4. 否则若 `size ≥ max` → 断块；
 5. 单条 record 本身超过 max 时独占一块（规则 1 保证它单独成块）。
 
-min = 16 384 字节，max = 262 144 字节，掩码 `0xFFFF`。
+min = 16 384 字节，max = 1 048 576 字节（1 MiB），掩码 `0xFFFF`。
+
+> `max` 在 0.1 格式里是 256 KiB；提高到 1 MiB 让一次断块覆盖更长的压缩窗口（每块是独立的 zstd
+> 帧），代价是 dedupe 粒度变粗：一个 1 MiB 块内改动任一字节，整个块都要重写。
 
 > 由于块头与偏移索引不计入 `size`，raw_block 长度可比 max 多出块头与每条记录约 1–3 字节的偏移条目（约 \`2 × 记录数 + 16\` 字节）。
 
@@ -216,9 +219,13 @@ CREATE TABLE staging(word TEXT PRIMARY KEY, display TEXT NOT NULL,
 ```
 
 * `entries` 是 HEAD 的物化索引；`offset`/`length` 指向块内该 record 的字节区间。
+* 块用 zstd 存储，参考实现的写入档位是 **level 9**（读路径与档位无关：帧头自带参数）。
+* 提交成功后 `staging` 被整体清空，`meta.workset_clean = "1"` 表示工作区等于 HEAD；
+  下一次写入前按需从 `entries` 重建（只复制 word / display / content_hash，payload 由块按需取回）。
+  这样工作区不必在任何时候都保留一份索引的副本。
 * `commit_index` 存 zstd 压缩的 CBOR 快照：按 key 升序的 `[[word, content_hash], …]` 数组，用于历史 diff。写入与读取都按条流式进行（数组头给出条目数），实现不得要求整表驻留内存；`raw_size` 记录未压缩字节数，`verify` 会与实际解码字节数比对。
-* `staging` 是工作区（未提交内容）。它不属于互操作格式。已提交词条只保留指针（`word`、`display`、`content_hash`），`payload` 为 NULL；未提交词条必须携带 payload。需要正文时按 `content_hash` 从 `entries` 定位块、解压并校验。
-* codec：`0` = 原始字节，`1` = zstd（压缩级别 3，实现可调，不影响任何哈希）。
+* `staging` 是工作区（未提交内容）。它不属于互操作格式。已提交词条只保留指针（`word`、`display`、`content_hash`），`payload` 为 NULL；未提交词条必须携带 payload。需要正文时按 `content_hash` 从 `entries` 定位块、解压并校验。提交成功后整张表被清空，见上文 `meta.workset_clean`。
+* codec：`0` = 原始字节，`1` = zstd（参考实现写入用级别 9，实现可调，不影响任何哈希）。
 * `conflicts` 保存未完成的合并中每个冲突词条的决定（见 §10.1 与 `docs/merge.md`）。
 * `meta.shallow = 1`（ASCII `"1"`）标记由 `pack --shallow` 导出的文件：HEAD 的父提交可以缺失，`log` 在边界结束、`verify` 视其为正常终点。缺省 `0`；这是可选元数据，不改变 `format_version`，也不改写提交对象。详见 `docs/shallow.md`。
 * `pack` 的产物是一个独立的 SQLite 数据库文件，可以直接作为 `--repo` 打开；它不包含 `staging`、`conflicts` 或 `meta.merge`。

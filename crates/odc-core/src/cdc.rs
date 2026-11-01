@@ -16,7 +16,12 @@ use std::sync::OnceLock;
 /// Minimum block size in bytes.
 pub const MIN_CHUNK: usize = 16 * 1024;
 /// Maximum block size in bytes.
-pub const MAX_CHUNK: usize = 256 * 1024;
+///
+/// 1 MiB (was 256 KiB). Larger blocks trade dedupe granularity for fewer,
+/// longer compression windows: every cut restarts the zstd frame, so a
+/// quarter of the cuts gives roughly a quarter of the frame overhead on a
+/// dictionary import whose content boundary hits are rare.
+pub const MAX_CHUNK: usize = 1024 * 1024;
 /// Boundary mask applied to the rolling hash.
 pub const MASK: u64 = 0xffff;
 /// Domain separation string for the gear table.

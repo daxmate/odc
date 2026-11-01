@@ -37,6 +37,13 @@ fn entry_for(index: usize) -> Entry {
     entry
 }
 
+fn staging_rows(dir: &Path) -> i64 {
+    let connection = Connection::open(dir.join(DB_FILE)).expect("open sqlite");
+    connection
+        .query_row("SELECT COUNT(*) FROM staging", [], |row| row.get(0))
+        .expect("count staging")
+}
+
 fn staging_payload_bytes(dir: &Path) -> i64 {
     let connection = Connection::open(dir.join(DB_FILE)).expect("open sqlite");
     connection
@@ -112,6 +119,58 @@ fn dirty_entries_keep_payload_until_commit() {
     assert_eq!(staging_payload_bytes(&dir), 0);
     let shown = repo.show("word-00003").expect("show").expect("entry");
     assert_eq!(shown.defs[0].sense, "edited sense");
+    drop(repo);
+    cleanup(&dir);
+}
+
+#[test]
+fn commit_drops_the_working_set() {
+    let dir = temp_dir("drop");
+    let mut repo = Repo::init(&dir).expect("init");
+    assert!(repo.status().expect("status").is_clean());
+    assert_eq!(staging_rows(&dir), 0);
+
+    let entries: Vec<Entry> = (0..20).map(entry_for).collect();
+    repo.import(&entries, false).expect("import");
+    repo.commit("first", "tester", 1_700_000_000)
+        .expect("commit");
+    assert_eq!(staging_rows(&dir), 0, "commit must drop the working set");
+
+    let status = repo.status().expect("status");
+    assert!(status.is_clean(), "{status:?}");
+    assert_eq!(status.total, 20, "{status:?}");
+
+    // The next write rebuilds the working set from the committed index, so an
+    // edit is still reported relative to HEAD.
+    let mut changed = entries[7].clone();
+    changed.defs[0].sense = "edited sense".to_string();
+    repo.import(&[changed], false).expect("import");
+    assert_eq!(staging_rows(&dir), 20);
+    let status = repo.status().expect("status");
+    assert_eq!(
+        (status.added, status.modified, status.removed),
+        (0, 1, 0),
+        "{status:?}"
+    );
+
+    repo.commit("second", "tester", 1_700_000_100)
+        .expect("commit");
+    assert_eq!(staging_rows(&dir), 0);
+    let shown = repo.show("word-00007").expect("show").expect("entry");
+    assert_eq!(shown.defs[0].sense, "edited sense");
+    drop(repo);
+    cleanup(&dir);
+}
+
+#[test]
+fn prune_after_commit_rebuilds_the_working_set() {
+    let (dir, entries) = seeded("prune-rebuild", 10);
+    let mut repo = Repo::open(&dir).expect("open");
+    let kept: Vec<Entry> = entries[..4].to_vec();
+    let report = repo.import(&kept, true).expect("import prune");
+    assert_eq!(report.removed, 6, "{report:?}");
+    let status = repo.status().expect("status");
+    assert_eq!((status.added, status.modified, status.removed), (0, 0, 6));
     drop(repo);
     cleanup(&dir);
 }

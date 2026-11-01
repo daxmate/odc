@@ -130,7 +130,7 @@ apps/apple/               iOS / macOS SwiftUI 客户端（ODict / ODict Desktop�
 
 * **payload = canonical CBOR**：结构化字段 + `raw_html` 兜底 + 未知字段保留；
 * **block = 不可变字节串**：`ODB1` 魔数，记录按 key 排序，尾部偏移索引；
-* **CDC**：gear 表由 BLAKE3 导出，min 16 KiB / max 256 KiB，哈希命中断块；
+* **CDC**：gear 表由 BLAKE3 导出，min 16 KiB / max 1 MiB，哈希命中断块；
 * **哈希**：`block_hash` 基于未压缩字节，换压缩算法不影响互认；
 * **commit**：`ts/author/message` 不进入哈希，同一内容树永远同一 commit `hash`。
 

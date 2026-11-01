@@ -177,7 +177,8 @@ fn encode_body(plan: &PatchPlan) -> Result<Vec<u8>> {
     }
     varint::encode(plan.new_blocks.len() as u64, &mut out);
     for raw in &plan.new_blocks {
-        let data = zstd::bulk::compress(raw, 3).map_err(|error| Error::Io(error.to_string()))?;
+        let data = zstd::bulk::compress(raw, repo::ZSTD_LEVEL)
+            .map_err(|error| Error::Io(error.to_string()))?;
         varint::encode(raw.len() as u64, &mut out);
         varint::encode(codec::ZSTD as u64, &mut out);
         varint::encode(data.len() as u64, &mut out);
@@ -668,8 +669,8 @@ fn write_target(
              VALUES (?1, ?2, ?3, ?4)",
         )?;
         for raw in &plan.new_blocks {
-            let data =
-                zstd::bulk::compress(raw, 3).map_err(|error| Error::Io(error.to_string()))?;
+            let data = zstd::bulk::compress(raw, repo::ZSTD_LEVEL)
+                .map_err(|error| Error::Io(error.to_string()))?;
             insert_block.execute(params![
                 hash::blake3(raw).as_slice(),
                 codec::ZSTD,
@@ -700,6 +701,7 @@ fn write_target(
         }
         // Keep the working set identical to the freshly written index.
         transaction.execute("DELETE FROM staging", [])?;
+        repo::mark_workset_dirty(&transaction)?;
         {
             let mut insert_staging = transaction
                 .prepare("INSERT INTO staging(word, display, content_hash) VALUES (?1, ?2, ?3)")?;
@@ -740,8 +742,8 @@ fn write_target(
         }
         writer.finish()?
     };
-    let data =
-        zstd::bulk::compress(&raw_snapshot, 3).map_err(|error| Error::Io(error.to_string()))?;
+    let data = zstd::bulk::compress(&raw_snapshot, repo::ZSTD_LEVEL)
+        .map_err(|error| Error::Io(error.to_string()))?;
     transaction.execute(
         "INSERT INTO commit_index(commit_hash, codec, raw_size, data)
          VALUES (?1, ?2, ?3, ?4)",

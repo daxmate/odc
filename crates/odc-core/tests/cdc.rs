@@ -83,6 +83,21 @@ fn oversized_record_gets_its_own_block() {
 }
 
 #[test]
+fn dictionary_stream_uses_the_one_mebibyte_target() {
+    assert_eq!(MAX_CHUNK, 1024 * 1024);
+    let records = make_records(2000, 900);
+    let sizes = cdc::block_sizes(&records);
+    assert!(
+        sizes.iter().all(|size| *size <= MAX_CHUNK + 64),
+        "{sizes:?}"
+    );
+    assert!(
+        sizes.iter().any(|size| *size > 256 * 1024),
+        "no block grew past the old 256 KiB cap: {sizes:?}"
+    );
+}
+
+#[test]
 fn chunking_roundtrips_through_blocks() {
     let records = make_records(1500, 200);
     let ranges = cdc::boundaries(&records);
