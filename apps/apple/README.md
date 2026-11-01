@@ -4,7 +4,8 @@ SwiftUI front ends for ODC: **ODict** (iOS) and **ODict Desktop** (macOS), both
 built on the shared `ODictKit` Swift package, which wraps the `ODCFFI`
 XCFramework produced from `crates/odc-ffi`.
 
-This is the v0 slice: open a dictionary, prefix-search it, render entries.
+This is the v0 slice: open a dictionary, search it (prefix, then substring),
+render entries.
 It is read-only — no editing, importing, word books or sync.
 
 ## Prerequisites
@@ -89,8 +90,11 @@ deleted.
 ## Known limitations (v0)
 
 * **Read-only.** Editing, importing, word books and sync are out of scope.
-* **Prefix search only.** The core exposes `search_prefix`; there is no fuzzy
-  or full-text matching yet.
+* **Prefix and substring search, no fuzzy matching.** The core exposes
+  `search_prefix` and `search_substring`; a query with no prefix hits falls
+  back to case-insensitive substring matches over normalised keys and display
+  forms (ASCII folding for display). There is no fuzzy or edit-distance
+  matching yet.
 * **Copies are sandbox-local.** Closing a dictionary deletes its copy; reopen
   from the picker to use it again. The copy is not indexed for re-opening from
   Recents yet.

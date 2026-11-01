@@ -901,9 +901,21 @@ public final class DictionaryStore {
             guard !Task.isCancelled else { return }
             guard let handle = handles[entry.id] else { continue }
             do {
-                let results = try handle.search(text, limit: Self.hitsPerDictionary)
+                // Prefix hits win; substring search only fills the empty case,
+                // so a dictionary never mixes the two orderings.
+                var results = try handle.search(text, limit: Self.hitsPerDictionary)
+                var matchKind = SearchMatchKind.prefix
+                if results.isEmpty {
+                    results = try handle.searchSubstring(text, limit: Self.hitsPerDictionary)
+                    matchKind = .substring
+                }
                 groups.append(
-                    DictionarySearchGroup(dictionaryID: entry.id, name: entry.name, hits: results)
+                    DictionarySearchGroup(
+                        dictionaryID: entry.id,
+                        name: entry.name,
+                        hits: results,
+                        matchKind: matchKind
+                    )
                 )
             } catch {
                 libraryLog.warning(

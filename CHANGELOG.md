@@ -6,6 +6,11 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ## [Unreleased]
 
+### Added
+
+* Core, FFI (`odc_repo_search_substring_json`) and Apple: substring search over
+  normalised keys and display spellings, used when a query has no prefix hits.
+
 ## [0.3.0] - 2026-11-01
 
 ### Added

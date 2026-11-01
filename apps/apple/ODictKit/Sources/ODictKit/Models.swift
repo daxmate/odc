@@ -13,6 +13,14 @@ public struct SearchHit: Codable, Equatable, Hashable, Sendable, Identifiable {
     }
 }
 
+/// How the hits in a group matched the query.
+public enum SearchMatchKind: Hashable, Sendable {
+    /// Keys start with the query.
+    case prefix
+    /// Keys or display forms contain the query anywhere, including the start.
+    case substring
+}
+
 /// What one dictionary contributed to the current search.
 ///
 /// Groups follow the order the dictionaries were opened in, so the sidebar
@@ -23,13 +31,21 @@ public struct DictionarySearchGroup: Identifiable, Hashable, Sendable {
     /// Display name, copied so the group stays readable after the item is gone.
     public let name: String
     public let hits: [SearchHit]
+    /// Whether these hits are prefix matches or the fallback substring search.
+    public let matchKind: SearchMatchKind
 
     public var id: UUID { dictionaryID }
 
-    public init(dictionaryID: UUID, name: String, hits: [SearchHit]) {
+    public init(
+        dictionaryID: UUID,
+        name: String,
+        hits: [SearchHit],
+        matchKind: SearchMatchKind = .prefix
+    ) {
         self.dictionaryID = dictionaryID
         self.name = name
         self.hits = hits
+        self.matchKind = matchKind
     }
 }
 

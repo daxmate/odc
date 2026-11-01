@@ -70,10 +70,28 @@ public struct SearchResultsView: View {
         .navigationTitle(store.documentName ?? "ODict")
     }
 
+    /// Section title plus one line of context when a dictionary only found
+    /// substring matches, so the rows do not look like broken prefix results.
+    @ViewBuilder
+    private func sectionHeader(for group: DictionarySearchGroup) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(group.name)
+            if group.matchKind == .substring {
+                Text("没有以「\(trimmedQuery)」开头的词条，以下是包含它的词条")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var trimmedQuery: String {
+        store.query.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private var splitResults: some View {
         ForEach(store.searchGroups) { group in
             if !group.hits.isEmpty {
-                Section(group.name) {
+                Section {
                     ForEach(group.hits) { hit in
                         SearchResultRow(hit: hit)
                             .tag(
@@ -83,6 +101,8 @@ public struct SearchResultsView: View {
                                 )
                             )
                     }
+                } header: {
+                    sectionHeader(for: group)
                 }
             }
         }
@@ -91,7 +111,7 @@ public struct SearchResultsView: View {
     private var stackResults: some View {
         ForEach(store.searchGroups) { group in
             if !group.hits.isEmpty {
-                Section(group.name) {
+                Section {
                     ForEach(group.hits) { hit in
                         Button {
                             Task { await store.select(key: hit.key, in: group.dictionaryID) }
@@ -101,6 +121,8 @@ public struct SearchResultsView: View {
                         .buttonStyle(.plain)
                         .foregroundStyle(.primary)
                     }
+                } header: {
+                    sectionHeader(for: group)
                 }
             }
         }
@@ -113,7 +135,7 @@ public struct SearchResultsView: View {
             Section {
                 Text(
                     store.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        ? "输入以搜索（v0 只支持前缀搜索）"
+                        ? "输入以搜索"
                         : "没有匹配的词条"
                 )
                 .font(.callout)

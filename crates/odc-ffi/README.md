@@ -21,6 +21,8 @@ void odc_repo_close(OdcRepo *repo);
 int64_t odc_repo_entry_count(const OdcRepo *repo, char **error_message);
 char *odc_repo_search_json(const OdcRepo *repo, const char *query_utf8,
                            int32_t limit, char **error_message);
+char *odc_repo_search_substring_json(const OdcRepo *repo, const char *query_utf8,
+                                     int32_t limit, char **error_message);
 char *odc_repo_entry_json(const OdcRepo *repo, const char *key_utf8,
                           char **error_message);
 void odc_string_free(char *s);
@@ -37,7 +39,8 @@ panic ever unwinds into C.
 
 ### Memory ownership
 
-Strings returned by `odc_repo_search_json`, `odc_repo_entry_json` and
+Strings returned by `odc_repo_search_json`,
+`odc_repo_search_substring_json`, `odc_repo_entry_json` and
 `error_message` are owned by the caller. `odc_version` returns static
 storage and must not be freed. `odc_string_free(NULL)` and
 `odc_repo_close(NULL)` are no-ops.
@@ -55,6 +58,13 @@ case folding) and reuses `odc_core::Repo::search_prefix`, which queries the
 `entries` index in key order. It is **not** a linear scan, but it is still a
 prefix index: there is no full-text or fuzzy matching. `limit` must be
 between 1 and 200 inclusive.
+
+`odc_repo_search_substring_json` is the contains fallback: it reuses
+`Repo::search_substring`, matching normalised keys and display spellings with
+`LIKE ... ESCAPE` and ordering shortest keys first. Wildcards (`%`, `_` and
+`\`) are escaped, so they match themselves. Because `LIKE '%needle%'` cannot
+use the key index, it scans `entries`; callers should only use it when the
+prefix search returned nothing. `limit` rules match the prefix call.
 
 Result shape:
 

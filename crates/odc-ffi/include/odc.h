@@ -48,6 +48,17 @@ char *odc_repo_search_json(const OdcRepo *repo, const char *query_utf8,
                            int32_t limit, char **error_message);
 
 /*
+ * Substring-search normalised keys and display spellings.
+ *
+ * limit must be between 1 and 200 inclusive. Returns a NUL-terminated JSON
+ * array of {"key": "...", "display": "..."} objects, shortest key first, or
+ * NULL on failure. The returned string must be released with
+ * odc_string_free().
+ */
+char *odc_repo_search_substring_json(const OdcRepo *repo, const char *query_utf8,
+                                     int32_t limit, char **error_message);
+
+/*
  * Look up one entry by exact normalised key and return a NUL-terminated JSON
  * object {"key", "display", "phonetic", "defs", "raw_html", "extra"}.
  *

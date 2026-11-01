@@ -14,7 +14,7 @@ use odc_ffi::{
     odc_import_mdx_to_odc, odc_import_mdx_to_odc_with_mdd, odc_import_mdx_to_odc_with_mdd_progress,
     odc_repo_close, odc_repo_entry_count, odc_repo_entry_json, odc_repo_open,
     odc_repo_resource_copy, odc_repo_resource_count, odc_repo_resource_len, odc_repo_search_json,
-    odc_string_free, odc_version,
+    odc_repo_search_substring_json, odc_string_free, odc_version,
 };
 use serde_json::Value;
 use tempfile::TempDir;
@@ -113,6 +113,19 @@ fn search(repo: *const odc_ffi::OdcRepo, query: &str, limit: i32) -> Value {
     serde_json::from_str(&take_string(payload)).expect("json array")
 }
 
+fn search_substring(repo: *const odc_ffi::OdcRepo, query: &str, limit: i32) -> Value {
+    let query = CString::new(query).expect("query");
+    let mut error: *mut c_char = ptr::null_mut();
+    // SAFETY: all pointers are valid for the call.
+    let payload =
+        unsafe { odc_repo_search_substring_json(repo, query.as_ptr(), limit, &mut error) };
+    assert!(
+        take_error_if_any(error).is_none(),
+        "substring search failed"
+    );
+    serde_json::from_str(&take_string(payload)).expect("json array")
+}
+
 #[test]
 fn open_count_search_entry_and_close() {
     let dir = seeded_repo();
@@ -158,6 +171,44 @@ fn search_limit_is_bounded() {
         let mut error: *mut c_char = ptr::null_mut();
         // SAFETY: all pointers are valid for the call.
         let payload = unsafe { odc_repo_search_json(repo, query.as_ptr(), limit, &mut error) };
+        assert!(payload.is_null(), "limit {limit} should fail");
+        let message = take_error_if_any(error).expect("error message");
+        assert!(message.contains("limit"), "unexpected message: {message}");
+    }
+
+    // SAFETY: single close.
+    unsafe { odc_repo_close(repo) };
+}
+
+#[test]
+fn substring_search_returns_matches_and_rejects_bad_limits() {
+    let dir = seeded_repo();
+    let repo = open(&dir);
+
+    let results = search_substring(repo, "ppl", 10);
+    let keys: Vec<&str> = results
+        .as_array()
+        .expect("array")
+        .iter()
+        .map(|item| item["key"].as_str().expect("key"))
+        .collect();
+    assert_eq!(keys, vec!["apple", "application"]);
+
+    let results = search_substring(repo, "AFé", 10);
+    assert_eq!(results[0]["key"], "café");
+
+    // `%` is a literal wildcard: no seeded word contains one.
+    assert!(search_substring(repo, "%", 10)
+        .as_array()
+        .expect("array")
+        .is_empty());
+
+    let query = CString::new("ppl").expect("query");
+    for limit in [0, -1, 201] {
+        let mut error: *mut c_char = ptr::null_mut();
+        // SAFETY: all pointers are valid for the call.
+        let payload =
+            unsafe { odc_repo_search_substring_json(repo, query.as_ptr(), limit, &mut error) };
         assert!(payload.is_null(), "limit {limit} should fail");
         let message = take_error_if_any(error).expect("error message");
         assert!(message.contains("limit"), "unexpected message: {message}");

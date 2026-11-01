@@ -115,6 +115,30 @@ public final class OdcDictionary {
         }
     }
 
+    /// Substring search over normalised keys and display spellings.
+    ///
+    /// Hits are ordered shortest key first; `limit` must be within 1…200.
+    public func searchSubstring(_ query: String, limit: Int = 50) throws -> [SearchHit] {
+        guard (1...200).contains(limit) else {
+            throw OdcError.invalidLimit(limit)
+        }
+        let handle = try requireHandle()
+        var error: UnsafeMutablePointer<CChar>?
+        let result = query.withCString { query in
+            odc_repo_search_substring_json(handle, query, Int32(limit), &error)
+        }
+        guard let result else {
+            throw OdcError.searchFailed(Self.take(error) ?? "搜索失败")
+        }
+        defer { odc_string_free(result) }
+        let data = Data(bytes: result, count: strlen(result))
+        do {
+            return try decoder.decode([SearchHit].self, from: data)
+        } catch {
+            throw OdcError.invalidResponse(String(describing: error))
+        }
+    }
+
     /// Exact lookup by normalised key.
     public func entry(for key: String) throws -> DictionaryEntry {
         let handle = try requireHandle()

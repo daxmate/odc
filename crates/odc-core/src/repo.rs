@@ -644,6 +644,47 @@ impl Repo {
         Ok(out)
     }
 
+    /// Entries whose normalised key or displayed spelling contains `needle`,
+    /// shortest key first, then in key order.
+    ///
+    /// `word` holds normalised keys, so the needle is normalised the same way;
+    /// `display` keeps the source spelling and SQLite's `LIKE` folds ASCII
+    /// case. Both sides escape `%`, `_` and the escape character itself, so a
+    /// query of `100%` only matches entries containing those four characters.
+    pub fn search_substring(&self, needle: &str, limit: usize) -> Result<Vec<(String, String)>> {
+        if needle.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+        let escape = |raw: &str| {
+            let mut out = String::with_capacity(raw.len());
+            for character in raw.chars() {
+                if matches!(character, '\\' | '%' | '_') {
+                    out.push('\\');
+                }
+                out.push(character);
+            }
+            out
+        };
+        let key_pattern = format!("%{}%", escape(&normalize_key(needle)));
+        let display_pattern = format!("%{}%", escape(needle));
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let mut statement = self.connection.prepare(
+            "SELECT word, display FROM entries
+             WHERE word LIKE ?1 ESCAPE '\\'
+                OR display LIKE ?2 ESCAPE '\\'
+             ORDER BY length(word) ASC, word ASC
+             LIMIT ?3",
+        )?;
+        let rows = statement.query_map(params![key_pattern, display_pattern, limit], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
     /// Compare the working set with HEAD.
     pub fn status(&self) -> Result<Status> {
         if workset_is_clean(&self.connection)? {

@@ -264,6 +264,8 @@ CREATE TABLE resources(key TEXT PRIMARY KEY, block_id INTEGER NOT NULL,
 | `gc --keep-last N [--dry-run] [--vacuum]` | 保留每个 ref 及其 first-parent 链上最近 N 个提交，删除其余 commit、commit_index 与当前索引不再引用的块；`--dry-run` 只报告将释放的条数与字节，`--vacuum` 事后重建数据库文件 |
 | `patch create \| apply \| verify` | 见 §11 与 `docs/patch.md`；`apply` 在精确 base 上应用，HEAD 为 base 后代时转为三方合并 |
 
+`search` 只做前缀匹配；核心另提供 `Repo::search_substring`（`LIKE ... ESCAPE` 包含匹配，短词优先），FFI 与 Apple 端用它作为前缀无结果时的回退，CLI 尚未暴露。
+
 revision 语法：`HEAD`、`HEAD~N`、commit 哈希前缀（≥ 4 个十六进制字符，需唯一）。
 
 ## 10.1 合并语义

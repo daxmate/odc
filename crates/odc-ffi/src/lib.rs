@@ -214,6 +214,47 @@ pub unsafe extern "C" fn odc_repo_search_json(
     })
 }
 
+/// Substring-search normalised keys and display spellings and return a JSON
+/// array of `{"key": "...", "display": "..."}` objects, shortest key first.
+///
+/// `limit` must be between 1 and [`MAX_SEARCH_LIMIT`] (inclusive). Returns
+/// `NULL` on failure.
+///
+/// # Safety
+///
+/// `repo` must be `NULL` or a live handle; `query_utf8` must be `NULL`
+/// or a NUL-terminated UTF-8 string; `error_message` must be `NULL` or
+/// point to writable storage for one `char *`. The returned string must be
+/// released with [`odc_string_free`].
+#[no_mangle]
+pub unsafe extern "C" fn odc_repo_search_substring_json(
+    repo: *const OdcRepo,
+    query_utf8: *const c_char,
+    limit: i32,
+    error_message: *mut *mut c_char,
+) -> *mut c_char {
+    guarded(error_message, ptr::null_mut(), || {
+        let repo = repo_ref(repo)?;
+        let query = text_arg(query_utf8, "query")?;
+        if query.trim().is_empty() {
+            return Err("query must not be empty".to_string());
+        }
+        if !(1..=MAX_SEARCH_LIMIT).contains(&limit) {
+            return Err(format!("limit must be between 1 and {MAX_SEARCH_LIMIT}"));
+        }
+        let limit = usize::try_from(limit).map_err(|_| "limit out of range".to_string())?;
+        let hits = repo
+            .repo
+            .search_substring(&query, limit)
+            .map_err(|error| error.to_string())?;
+        let items: Vec<JsonValue> = hits
+            .into_iter()
+            .map(|(key, display)| json!({ "key": key, "display": display }))
+            .collect();
+        to_c_string(&JsonValue::Array(items))
+    })
+}
+
 /// Look up one entry by exact (normalised) key and return its JSON
 /// representation, or `NULL` when the key is absent or an error occurs.
 ///

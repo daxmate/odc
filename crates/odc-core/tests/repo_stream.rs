@@ -121,3 +121,84 @@ fn entry_iteration_is_ordered_and_prefix_search_uses_the_index() {
 
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn substring_search_matches_inside_words_and_escapes_like_wildcards() {
+    let dir = temp_dir("substring");
+    let mut repo = Repo::init(&dir).expect("init");
+    let mut labelled = Entry::new("colour");
+    labelled.display = "Colour Guide".to_string();
+    let entries = vec![
+        Entry::new("apple"),
+        Entry::new("application"),
+        Entry::new("banana"),
+        Entry::new("where's the beef"),
+        Entry::new("Beef up"),
+        Entry::new("日本語"),
+        Entry::new("100% pure"),
+        Entry::new("snake_case"),
+        labelled,
+    ];
+    repo.import(&entries, false).expect("import");
+    repo.commit("words", "test", 1_700_000_002).expect("commit");
+
+    // Matches inside the key, shortest key first.
+    let hits = repo.search_substring("ppl", 10).expect("substring");
+    assert_eq!(
+        hits,
+        vec![
+            ("apple".to_string(), "apple".to_string()),
+            ("application".to_string(), "application".to_string()),
+        ]
+    );
+
+    // ASCII case folding applies to the normalised key and the display form.
+    let hits = repo.search_substring("BEEF", 10).expect("substring");
+    assert_eq!(
+        hits.iter().map(|(key, _)| key.as_str()).collect::<Vec<_>>(),
+        vec!["beef up", "where's the beef"]
+    );
+    let hits = repo.search_substring("GUIDE", 10).expect("display match");
+    assert_eq!(
+        hits,
+        vec![("colour".to_string(), "Colour Guide".to_string())]
+    );
+
+    // CJK words match without any case folding.
+    let hits = repo.search_substring("本", 10).expect("cjk");
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].0, "日本語");
+
+    // `%` and `_` are literal characters, not LIKE wildcards.
+    let hits = repo.search_substring("100%", 10).expect("percent");
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].0, "100% pure");
+    assert_eq!(
+        repo.search_substring("%", 10)
+            .expect("literal percent")
+            .len(),
+        1
+    );
+    let hits = repo.search_substring("e_c", 10).expect("underscore");
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].0, "snake_case");
+    assert_eq!(
+        repo.search_substring("_", 10)
+            .expect("literal underscore")
+            .len(),
+        1
+    );
+
+    // limit, empty needle and misses.
+    let hits = repo.search_substring("a", 1).expect("limit");
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].0, "apple");
+    assert!(repo.search_substring("", 10).expect("empty").is_empty());
+    assert!(repo
+        .search_substring("a", 0)
+        .expect("zero limit")
+        .is_empty());
+    assert!(repo.search_substring("zzz", 10).expect("miss").is_empty());
+
+    std::fs::remove_dir_all(&dir).ok();
+}

@@ -454,4 +454,25 @@ final class MultiDictionaryTests: XCTestCase {
 
         XCTAssertEqual(store.entrySections.map(\.dictionaryID), [items[0].id])
     }
+
+    func testSubstringSearchOnlyRunsWhenPrefixHasNoHits() async throws {
+        let container = try makeContainer()
+        let items = try makeLibrary(in: container, count: 1)
+        let store = try await makeStore(container: container)
+        defer { store.close() }
+        try await open(items[0], in: store)
+
+        store.setQuery("ppl")
+        try await waitUntil {
+            store.searchGroups.first?.matchKind == .substring && !store.hits.isEmpty
+        }
+        XCTAssertEqual(store.hits.map(\.key), ["apple", "application"])
+
+        // A query with prefix hits must not fall back to substring matches.
+        store.setQuery("app")
+        try await waitUntil {
+            store.searchGroups.first?.matchKind == .prefix && store.hits.count == 2
+        }
+        XCTAssertEqual(store.hits.map(\.key), ["apple", "application"])
+    }
 }
