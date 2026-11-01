@@ -6,6 +6,17 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-02
+
+### Fixed
+
+* Entry detail renders as a single HTML document in a single web view, so the
+  page scrolls natively again instead of a pinned inner element. Dictionaries
+  that share the page are separated with Shadow DOM, which keeps each
+  dictionary's stylesheet from leaking into its neighbours. Regression tests
+  now guard the single-document shape, per-section style isolation, body/html
+  mapping and scrolling.
+
 ## [0.5.0] - 2026-11-01
 
 ### Changed
