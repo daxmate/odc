@@ -9,7 +9,18 @@ public enum EntryHTML {
     /// default styles. A `<style>` block inside the entry is kept as-is: that is
     /// the dictionary's own typography.
     public static func document(html: String) -> String {
+        document(html: html, stylesheets: [])
+    }
+
+    /// Wraps an entry in a document carrying the reader defaults followed by
+    /// the dictionary's own sheets.
+    ///
+    /// The defaults come first and the dictionary's sheets after them, so a
+    /// dictionary rule wins at equal specificity without having to out-specify
+    /// the reader.
+    public static func document(html: String, stylesheets: [LinkedStylesheet]) -> String {
         let body = sanitized(html)
+        let entryStyles = stylesheets.map(styleElement(for:)).joined(separator: "\n")
         return """
         <!DOCTYPE html>
         <html>
@@ -19,6 +30,7 @@ public enum EntryHTML {
         <style>
         \(defaultStylesheet)
         </style>
+        \(entryStyles)
         </head>
         <body>
         \(body)
@@ -183,6 +195,173 @@ public enum EntryHTML {
         let value = "(?:\"[^\"]*\"|'[^']*'|[^\\s>]+)"
         return "\\s+on(?:\(alternatives))\\s*=\\s*\(value)"
     }()
+
+    // MARK: - External stylesheets
+
+    /// Most CSS the reader will inline for one entry, so a pathological
+    /// dictionary cannot stall the web view on a multi-megabyte sheet.
+    public static let stylesheetByteLimit = 2 * 1024 * 1024
+
+    /// One stylesheet the entry links to, already read out of the repository.
+    public struct LinkedStylesheet: Equatable, Sendable {
+        /// Resource key the sheet was stored under.
+        public let key: String
+        /// CSS text, with its relative references already rewritten.
+        public let css: String
+
+        public init(key: String, css: String) {
+            self.key = key
+            self.css = css
+        }
+    }
+
+    /// Result of inlining an entry's external stylesheets.
+    public struct InlinedStylesheets: Equatable, Sendable {
+        /// Entry markup with the `<link>` elements it consumed removed.
+        public let html: String
+        /// Sheets to place after the reader defaults, in document order.
+        public let stylesheets: [LinkedStylesheet]
+        /// Keys that were missing, unreadable or over the size budget.
+        public let skipped: [String]
+        /// Bytes of CSS actually inlined.
+        public let inlinedBytes: Int
+    }
+
+    /// Keys of the external stylesheets `html` links to, in document order.
+    public static func stylesheetKeys(in html: String) -> [String] {
+        var keys: [String] = []
+        forEachMatch(in: html, pattern: "<link\\b[^>]*>") { tag in
+            guard isStylesheetLink(tag), let href = attribute("href", in: tag) else { return }
+            let key = ODCResource.normalizedKey(href)
+            if !key.isEmpty, !keys.contains(key) {
+                keys.append(key)
+            }
+        }
+        return keys
+    }
+
+    /// Replaces every external stylesheet with the CSS stored for it.
+    ///
+    /// A sheet that is absent, unreadable or over `limit` is dropped and
+    /// recorded in `skipped`; the entry still renders with the reader's
+    /// defaults, so a broken dictionary degrades instead of failing.
+    public static func inlineStylesheets(
+        in html: String,
+        limit: Int = EntryHTML.stylesheetByteLimit,
+        resource: (String) -> Data?
+    ) -> InlinedStylesheets {
+        var sheets: [LinkedStylesheet] = []
+        var skipped: [String] = []
+        var inlinedBytes = 0
+        var remaining = limit
+
+        let body = replacingMatches(
+            in: html,
+            pattern: "<link\\b[^>]*>",
+            options: [.caseInsensitive]
+        ) { tag in
+            guard isStylesheetLink(tag), let href = attribute("href", in: tag) else {
+                return tag
+            }
+            let key = ODCResource.normalizedKey(href)
+            guard !key.isEmpty else { return "" }
+            guard let data = resource(key), let css = String(data: data, encoding: .utf8) else {
+                skipped.append(key)
+                return ""
+            }
+            let rewritten = rewriteStyleSheet(css)
+            let cost = rewritten.utf8.count
+            guard cost <= remaining else {
+                skipped.append(key)
+                return ""
+            }
+            remaining -= cost
+            inlinedBytes += cost
+            sheets.append(LinkedStylesheet(key: key, css: rewritten))
+            return ""
+        }
+
+        return InlinedStylesheets(
+            html: body,
+            stylesheets: sheets,
+            skipped: skipped,
+            inlinedBytes: inlinedBytes
+        )
+    }
+
+    /// Rewrites `url(...)` and quoted `@import` references in one sheet.
+    public static func rewriteStyleSheet(_ css: String) -> String {
+        let withImports = replacingMatches(
+            in: css,
+            pattern: "(?i)@import\\s+(\"[^\"]*\"|'[^']*')"
+        ) { match in
+            let raw = unquoted(String(match.dropFirst(7)))
+            guard let url = ODCResource.url(for: raw) else { return match }
+            return "@import url(\(url.absoluteString))"
+        }
+        return replacingMatches(in: withImports, pattern: "(?i)url\\(\\s*(?:\"[^\"]*\"|'[^']*'|[^)]*?)\\s*\\)") { match in
+            rewriteCSSURL(match)
+        }
+    }
+
+    /// True when a `<link>` tag carries the reader a stylesheet.
+    private static func isStylesheetLink(_ tag: String) -> Bool {
+        guard let rel = attribute("rel", in: tag) else { return false }
+        return rel.lowercased().split(whereSeparator: { $0 == " " || $0 == "\t" }).contains("stylesheet")
+    }
+
+    /// Value of one attribute in `tag`, without its quotes.
+    private static func attribute(_ name: String, in tag: String) -> String? {
+        let pattern = "(?i)\\b" + name + "\\s*=\\s*(\"[^\"]*\"|'[^']*'|[^\\s>]+)"
+        guard let match = firstMatch(in: tag, pattern: pattern),
+              let separator = match.firstIndex(of: "=")
+        else { return nil }
+        let value = match[match.index(after: separator)...]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return unquoted(String(value))
+    }
+
+    /// Calls `body` for every match of `pattern` in `text`.
+    private static func forEachMatch(
+        in text: String,
+        pattern: String,
+        options: NSRegularExpression.Options = [.caseInsensitive],
+        _ body: (String) -> Void
+    ) {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else { return }
+        let range = NSRange(text.startIndex..., in: text)
+        for match in regex.matches(in: text, range: range) {
+            guard let span = Range(match.range, in: text) else { continue }
+            body(String(text[span]))
+        }
+    }
+
+    /// First match of `pattern` in `text`, as a `String`.
+    private static func firstMatch(in text: String, pattern: String, options: NSRegularExpression.Options = [.caseInsensitive]) -> Substring? {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else { return nil }
+        let range = NSRange(text.startIndex..., in: text)
+        guard let match = regex.firstMatch(in: text, range: range),
+              let span = Range(match.range, in: text)
+        else { return nil }
+        return text[span]
+    }
+
+    /// Escapes text placed inside a `<style>` element.
+    private static func embeddableStyle(_ css: String) -> String {
+        css.replacingOccurrences(
+            of: "</style",
+            with: "<\\/style",
+            options: [.caseInsensitive]
+        )
+    }
+
+    /// Wraps one sheet in its own `<style>` element.
+    private static func styleElement(for sheet: LinkedStylesheet) -> String {
+        let key = sheet.key
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+        return "<style data-odc-sheet=\"\(key)\">\n\(embeddableStyle(sheet.css))\n</style>"
+    }
 
     private static func placeholder(forComment index: Int) -> String {
         "\u{0}\(index)\u{0}"

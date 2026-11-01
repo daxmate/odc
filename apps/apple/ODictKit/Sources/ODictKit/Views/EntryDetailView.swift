@@ -58,6 +58,14 @@ public struct EntryDetailView: View {
     /// The dictionary's own HTML leads; the parsed fields stay one disclosure away.
     private func renderedEntry(_ entry: DictionaryEntry, html: String) -> some View {
         VStack(spacing: 0) {
+            if let notice = store.noticeMessage {
+                Label(notice, systemImage: "arrow.triangle.branch")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+            }
             if let renderFailure {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {

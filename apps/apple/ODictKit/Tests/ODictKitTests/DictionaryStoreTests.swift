@@ -103,6 +103,39 @@ final class DictionaryStoreTests: XCTestCase {
         XCTAssertNil(store.errorMessage)
     }
 
+
+    func testSubmitQueryOpensTheFirstHit() async throws {
+        let store = DictionaryStore(container: try makeContainer())
+        store.open(url: Fixture.demoRepository)
+        try await waitUntil { store.documentURL != nil }
+        defer { store.close() }
+
+        store.setQuery("app")
+        try await waitUntil { !store.hits.isEmpty }
+        XCTAssertNil(store.entry)
+
+        store.submitQuery()
+        try await waitUntil { store.entry?.key == "apple" }
+        XCTAssertEqual(store.selectedKey, "apple")
+        XCTAssertEqual(store.query, "app")
+    }
+
+    func testSubmitQueryWithoutHitsIsANoOp() async throws {
+        let store = DictionaryStore(container: try makeContainer())
+        store.open(url: Fixture.demoRepository)
+        try await waitUntil { store.documentURL != nil }
+        defer { store.close() }
+
+        store.setQuery("zzzzzz")
+        try await Task.sleep(for: .milliseconds(400))
+        XCTAssertTrue(store.hits.isEmpty)
+
+        store.submitQuery()
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertNil(store.selectedKey)
+        XCTAssertEqual(store.query, "zzzzzz")
+    }
+
     func testCloseResetsState() {
         let store = DictionaryStore()
         store.close()

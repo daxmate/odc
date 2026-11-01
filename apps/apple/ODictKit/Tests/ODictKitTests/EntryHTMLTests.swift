@@ -41,6 +41,98 @@ final class EntryHTMLTests: XCTestCase {
         XCTAssertTrue(document.contains("<p>apple</p>"))
     }
 
+    // MARK: - External stylesheets
+
+    func testStylesheetKeysReadsOnlyStylesheetLinks() {
+        let html = "<link rel=\"icon\" href=\"favicon.ico\"><link rel=\"stylesheet\" href=\"./style.css\"><LINK REL=\"StyleSheet\" HREF=\"print.css\">"
+        XCTAssertEqual(EntryHTML.stylesheetKeys(in: html), ["style.css", "print.css"])
+    }
+
+    func testInlineStylesheetsReadsTheLinkedSheet() {
+        let css = "body { color: red }"
+        let result = EntryHTML.inlineStylesheets(in: "<link rel=\"stylesheet\" href=\"style.css\"><p>a</p>") { key in
+            key == "style.css" ? Data(css.utf8) : nil
+        }
+
+        XCTAssertEqual(result.stylesheets.map(\.key), ["style.css"])
+        XCTAssertEqual(result.stylesheets.first?.css, css)
+        XCTAssertEqual(result.inlinedBytes, css.utf8.count)
+        XCTAssertTrue(result.skipped.isEmpty)
+        XCTAssertFalse(result.html.contains("<link"))
+        XCTAssertTrue(result.html.contains("<p>a</p>"))
+    }
+
+    func testInlineStylesheetsKeepsDocumentOrder() {
+        let html = "<link rel=\"stylesheet\" href=\"one.css\"><link rel=\"stylesheet\" href=\"two.css\">"
+        let result = EntryHTML.inlineStylesheets(in: html) { key in
+            Data("/* \(key) */".utf8)
+        }
+
+        XCTAssertEqual(result.stylesheets.map(\.key), ["one.css", "two.css"])
+    }
+
+    func testInlineStylesheetsSkipsMissingSheets() {
+        let result = EntryHTML.inlineStylesheets(in: "<link rel=\"stylesheet\" href=\"missing.css\"><p>a</p>") { _ in nil }
+
+        XCTAssertTrue(result.stylesheets.isEmpty)
+        XCTAssertEqual(result.skipped, ["missing.css"])
+        XCTAssertEqual(result.inlinedBytes, 0)
+        XCTAssertFalse(result.html.contains("<link"))
+        XCTAssertTrue(result.html.contains("<p>a</p>"))
+    }
+
+    func testInlineStylesheetsRewritesURLsAndImports() {
+        let css = "@import \"base.css\";\n"
+            + ".a { background: url(img/bg.png) }\n"
+            + ".b { background: url(\"img/bg.png\") }"
+        let result = EntryHTML.inlineStylesheets(in: "<link rel=\"stylesheet\" href=\"style.css\">") { _ in
+            Data(css.utf8)
+        }
+
+        let inlined = result.stylesheets.first?.css ?? ""
+        XCTAssertTrue(inlined.contains("@import url(odc-resource:///base.css)"), inlined)
+        XCTAssertTrue(inlined.contains("url(odc-resource:///img/bg.png)"), inlined)
+        XCTAssertFalse(inlined.contains("url(\"img/bg.png\")"), inlined)
+    }
+
+    func testInlineStylesheetsHonoursTheBudget() {
+        let html = "<link rel=\"stylesheet\" href=\"big.css\"><link rel=\"stylesheet\" href=\"small.css\">"
+        let result = EntryHTML.inlineStylesheets(in: html, limit: 20) { key in
+            key == "big.css" ? Data(repeating: 0x61, count: 64) : Data("p{a}".utf8)
+        }
+
+        XCTAssertEqual(result.stylesheets.map(\.key), ["small.css"])
+        XCTAssertEqual(result.skipped, ["big.css"])
+        XCTAssertEqual(result.inlinedBytes, 4)
+    }
+
+    func testInlineStylesheetsNeutralisesClosingStyleTags() {
+        let css = "p { content: \"</style><script>alert(1)</script>\" }"
+        let result = EntryHTML.inlineStylesheets(in: "<link rel=\"stylesheet\" href=\"style.css\">") { _ in
+            Data(css.utf8)
+        }
+        let document = EntryHTML.document(html: result.html, stylesheets: result.stylesheets)
+
+        XCTAssertFalse(document.contains("</style><script>"))
+        XCTAssertTrue(document.contains("<\\/style>"))
+    }
+
+    func testDocumentPlacesDictionarySheetsAfterTheDefaults() {
+        let document = EntryHTML.document(
+            html: "<p>a</p>",
+            stylesheets: [EntryHTML.LinkedStylesheet(key: "style.css", css: ".entry { color: red }")]
+        )
+
+        let defaults = try? XCTUnwrap(document.range(of: "font-family: -apple-system"))
+        let dictionary = try? XCTUnwrap(document.range(of: ".entry { color: red }"))
+        XCTAssertNotNil(defaults)
+        XCTAssertNotNil(dictionary)
+        if let defaults, let dictionary {
+            XCTAssertLessThan(defaults.lowerBound, dictionary.lowerBound)
+        }
+        XCTAssertTrue(document.contains("data-odc-sheet=\"style.css\""))
+    }
+
     // MARK: - sanitized(_:)
 
     func testSanitizedRemovesScriptElements() {

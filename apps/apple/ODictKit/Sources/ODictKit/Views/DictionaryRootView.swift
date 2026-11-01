@@ -5,6 +5,9 @@ public struct DictionaryRootView: View {
     private let store: DictionaryStore
     @Binding private var isImporterPresented: Bool
     @State private var isLibraryPresented = false
+    /// Compact-width navigation path; the search field's submit action pushes
+    /// the first hit by selecting it.
+    @State private var phonePath: [String] = []
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     public init(store: DictionaryStore, isImporterPresented: Binding<Bool>) {
@@ -99,11 +102,15 @@ public struct DictionaryRootView: View {
             }
             .toolbar { openButton }
         } else {
-            NavigationStack {
+            NavigationStack(path: $phonePath) {
                 SearchResultsView(store: store)
                     .navigationDestination(for: String.self) { key in
                         EntryDetailView(store: store, key: key)
                     }
+            }
+            .onChange(of: store.selectedKey) { _, key in
+                guard let key, phonePath.last != key else { return }
+                phonePath = [key]
             }
             .toolbar { openButton }
         }

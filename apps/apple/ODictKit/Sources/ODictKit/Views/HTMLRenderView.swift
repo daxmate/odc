@@ -111,8 +111,15 @@ final class HTMLRenderer: NSObject, WKNavigationDelegate {
     func load(html: String) {
         guard html != loadedHTML else { return }
         loadedHTML = html
+        // Inline first: rewriteResources() would turn each <link href> into an
+        // odc-resource URL, which no longer names a repository key.
+        let inlined = EntryHTML.inlineStylesheets(in: html, resource: resources)
+        let body = EntryHTML.rewriteResources(inlined.html)
+        if !inlined.skipped.isEmpty {
+            renderLog.debug("entry stylesheets skipped: \(inlined.skipped.joined(separator: ", "), privacy: .public)")
+        }
         webView.loadHTMLString(
-            EntryHTML.document(html: EntryHTML.rewriteResources(html)),
+            EntryHTML.document(html: body, stylesheets: inlined.stylesheets),
             baseURL: ODCResource.baseURL
         )
     }

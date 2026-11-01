@@ -23,6 +23,10 @@ public final class DictionaryStore {
     public private(set) var entry: DictionaryEntry?
     /// User-facing error text, cleared by `dismissError()`.
     public private(set) var errorMessage: String?
+    /// Non-fatal note about the current entry (for example a redirect target
+    /// the dictionary does not carry). The entry itself stays on screen.
+    public private(set) var noticeMessage: String?
+
     /// True while a document is being imported or a search is running.
     public private(set) var isLoading = false
     /// Stage of a running MDX conversion, `nil` when idle.
@@ -546,19 +550,64 @@ public final class DictionaryStore {
     // MARK: - Selection
 
     /// Load the entry for `key`, replacing any current selection.
+    ///
+    /// `@@@LINK` redirects are followed by the core. When the chain lands on
+    /// a different word the search field follows it, so the list and the entry
+    /// never disagree; when the chain does not settle the previous entry stays
+    /// on screen behind a note instead of a blank panel.
     public func select(key: String) async {
         guard let dictionary else { return }
+        let previous = entry
         selectedKey = key
         entry = nil
         errorMessage = nil
+        noticeMessage = nil
         do {
-            let loaded = try dictionary.entry(for: key)
-            guard selectedKey == key else { return }
-            entry = loaded
+            switch try dictionary.resolve(key) {
+            case let .entry(loaded, requestedKey, _):
+                guard selectedKey == key else { return }
+                entry = loaded
+                if loaded.key != requestedKey {
+                    await followRedirect(to: loaded)
+                }
+            case let .missingTarget(target, _):
+                entry = previous
+                noticeMessage = "重定向目标不存在：\(target)"
+            case let .cycle(chain):
+                entry = previous
+                noticeMessage = "重定向循环：\(chain.joined(separator: " → "))"
+            case let .tooLong(chain):
+                entry = previous
+                noticeMessage = "重定向层数过多：\(chain.joined(separator: " → "))"
+            case let .notFound(requested):
+                entry = previous
+                noticeMessage = "词典中没有这个词：\(requested)"
+            }
         } catch {
             errorMessage = error.localizedDescription
         }
     }
+
+    /// Points the search field at the entry a redirect chain reached.
+    private func followRedirect(to loaded: DictionaryEntry) async {
+        selectedKey = loaded.key
+        query = loaded.display
+        guard let dictionary else { return }
+        let results = (try? dictionary.search(loaded.key)) ?? []
+        hits = results.contains(where: { $0.key == loaded.key })
+            ? results
+            : [SearchHit(key: loaded.key, display: loaded.display)] + results
+    }
+
+    /// Opens the first result for the current query.
+    ///
+    /// Bound to the search field's submit action. An empty result list is a
+    /// no-op, so pressing return never raises an error or disturbs the field.
+    public func submitQuery() {
+        guard let first = hits.first else { return }
+        Task { await select(key: first.key) }
+    }
+
 
     // MARK: - Errors
 
@@ -574,5 +623,6 @@ public final class DictionaryStore {
     private func closeDictionary() {
         dictionary?.close()
         dictionary = nil
+        noticeMessage = nil
     }
 }

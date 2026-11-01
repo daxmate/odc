@@ -51,6 +51,30 @@ final class HTMLRenderTests: XCTestCase {
         XCTAssertTrue(text.contains("hello world"), "body text was: \(text)")
     }
 
+
+    // MARK: - Dictionary stylesheets
+
+    /// A dictionary that keeps its CSS in the repository: the reader inlines
+    /// it, so the entry is styled even though nothing is fetched over the wire.
+    func testInlinesTheDictionaryStylesheet() async throws {
+        let renderer = HTMLRenderer(resources: { key in
+            key == "style.css" ? Data("p.dict { color: rgb(255, 0, 0); }".utf8) : nil
+        })
+        renderer.load(html: "<link rel=\"stylesheet\" href=\"style.css\"><p class=\"dict\">styled</p>")
+
+        var colour: String?
+        let deadline = Date().addingTimeInterval(10)
+        while Date() < deadline {
+            colour = await Self.evaluate(
+                "getComputedStyle(document.querySelector('p.dict')).color",
+                in: renderer.webView
+            )
+            if colour == "rgb(255, 0, 0)" { break }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        XCTAssertEqual(colour, "rgb(255, 0, 0)")
+    }
+
     // MARK: - Outcome reporting (drives the structured fallback)
 
     func testReportsVisibleCharactersOnceLoaded() async throws {

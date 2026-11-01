@@ -55,6 +55,7 @@ public struct SearchResultsView: View {
             }
         }
         .searchable(text: queryBinding, placement: .sidebar, prompt: "搜索词条")
+        .onSubmit(of: .search) { store.submitQuery() }
         .navigationTitle("ODict")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
@@ -76,6 +77,7 @@ public struct SearchResultsView: View {
             }
         }
         .searchable(text: queryBinding, prompt: "搜索词条")
+        .onSubmit(of: .search) { store.submitQuery() }
         .navigationTitle(store.documentName ?? "ODict")
     }
 

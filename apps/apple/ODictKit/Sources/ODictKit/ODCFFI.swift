@@ -54,6 +54,21 @@ private final class RepoHandle: @unchecked Sendable {
     }
 }
 
+/// Outcome of a lookup that follows `@@@LINK=` redirects.
+public enum EntryLinkResult: Equatable, Sendable {
+    /// An entry was found; `requestedKey` is the key the reader asked for and
+    /// `hops` the number of redirects followed to reach it.
+    case entry(DictionaryEntry, requestedKey: String, hops: Int)
+    /// A redirect pointed at a word the dictionary does not carry.
+    case missingTarget(String, requestedKey: String)
+    /// The redirect chain came back to a word it had already visited.
+    case cycle([String])
+    /// The redirect chain was longer than the core allows.
+    case tooLong([String])
+    /// The word itself is absent.
+    case notFound(String)
+}
+
 /// Thin, main-actor-confined wrapper around the ODCFFI C ABI.
 ///
 /// An `OdcRepo` handle is **not** thread safe: the C header states it may be
@@ -117,6 +132,65 @@ public final class OdcDictionary {
         } catch {
             throw OdcError.invalidResponse(String(describing: error))
         }
+    }
+
+    /// Exact lookup that follows redirects.
+    ///
+    /// MDict writes a cross-reference as a body of `@@@LINK=<target>`; this
+    /// returns the entry the chain ends at, the number of hops it took, or the
+    /// reason the chain did not settle.
+    public func resolve(_ key: String) throws -> EntryLinkResult {
+        let handle = try requireHandle()
+        var error: UnsafeMutablePointer<CChar>?
+        let result = key.withCString { key in
+            odc_repo_entry_link_json(handle, key, &error)
+        }
+        guard let result else {
+            throw OdcError.entryFailed(Self.take(error) ?? "未找到词条：\(key)")
+        }
+        defer { odc_string_free(result) }
+        let data = Data(bytes: result, count: strlen(result))
+        let payload: LinkPayload
+        do {
+            payload = try decoder.decode(LinkPayload.self, from: data)
+        } catch {
+            throw OdcError.invalidResponse(String(describing: error))
+        }
+        switch payload.status {
+        case "found":
+            guard let entry = payload.entry else {
+                throw OdcError.invalidResponse("found without an entry")
+            }
+            return .entry(
+                entry,
+                requestedKey: payload.requested,
+                hops: payload.hops ?? 0
+            )
+        case "missing":
+            return .missingTarget(
+                payload.target ?? "",
+                requestedKey: payload.requested
+            )
+        case "cycle":
+            return .cycle(payload.chain ?? [])
+        case "too_long":
+            return .tooLong(payload.chain ?? [])
+        case "not_found":
+            return .notFound(payload.requested)
+        default:
+            throw OdcError.invalidResponse("unknown status: \(payload.status)")
+        }
+    }
+
+    /// JSON shape of `odc_repo_entry_link_json`.
+    private struct LinkPayload: Decodable {
+        let status: String
+        let requested: String
+        let key: String?
+        let hops: Int?
+        let target: String?
+        let chain: [String]?
+        let entry: DictionaryEntry?
     }
 
     /// Release the underlying handle. Safe to call more than once.
