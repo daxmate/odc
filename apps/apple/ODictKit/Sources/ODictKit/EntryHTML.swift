@@ -389,4 +389,311 @@ public enum EntryHTML {
         result += text[cursor...]
         return result
     }
+
+    // MARK: - Single-page composition
+
+    /// One dictionary's slice of the entry page.
+    public struct PageSection: Equatable, Sendable {
+        public let dictionaryID: String
+        public let name: String
+        public let html: String
+        public let stylesheets: [LinkedStylesheet]
+
+        public init(
+            dictionaryID: String,
+            name: String,
+            html: String,
+            stylesheets: [LinkedStylesheet] = []
+        ) {
+            self.dictionaryID = dictionaryID
+            self.name = name
+            self.html = html
+            self.stylesheets = stylesheets
+        }
+    }
+
+    /// Page chrome: the margins, the rule between dictionaries and the
+    /// typography the shadow roots inherit from the page.
+    static let pageStylesheet = """
+    :root {
+      color-scheme: light dark;
+      -webkit-text-size-adjust: 100%;
+    }
+    html, body {
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "Hiragino Sans", sans-serif;
+      font-size: 16px;
+      line-height: 1.5;
+      color: #1c1c1e;
+      background: #ffffff;
+      overflow-wrap: break-word;
+    }
+    .odc-section {
+      padding: 16px;
+    }
+    .odc-section + .odc-section {
+      border-top: 1px solid rgba(60, 60, 67, 0.29);
+    }
+    .odc-dictionary {
+      margin: 0 0 12px;
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 1.2;
+      letter-spacing: 0.02em;
+      color: rgba(60, 60, 67, 0.6);
+    }
+    @media (prefers-color-scheme: dark) {
+      body { color: #f2f2f7; background: #000000; }
+      .odc-section + .odc-section { border-top-color: rgba(84, 84, 88, 0.65); }
+      .odc-dictionary { color: rgba(235, 235, 245, 0.6); }
+    }
+    """
+
+    /// Reader defaults written for a shadow root: the host stands in for
+    /// the page's html element, and .odc-body for its body.
+    static let shadowDefaultStylesheet = """
+    :host {
+      display: block;
+      color-scheme: light dark;
+      -webkit-text-size-adjust: 100%;
+      font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "Hiragino Sans", sans-serif;
+      font-size: 16px;
+      line-height: 1.5;
+      color: #1c1c1e;
+      overflow-wrap: break-word;
+    }
+    .odc-body {
+      margin: 0;
+    }
+    a { color: #0a66c2; }
+    img { max-width: 100%; height: auto; }
+    table { max-width: 100%; border-collapse: collapse; word-break: break-word; }
+    td, th { word-break: break-word; vertical-align: top; }
+    pre, code { white-space: pre-wrap; word-break: break-word; }
+    @media (prefers-color-scheme: dark) {
+      :host { color: #f2f2f7; }
+      a { color: #6cb4ff; }
+    }
+    """
+
+    /// Builds one document for every dictionary that has an entry, so the web
+    /// view scrolls the whole page itself.
+    ///
+    /// Each section carries its own declarative shadow root: a dictionary's
+    /// CSS cannot reach its neighbours, and the page only holds the reader's
+    /// chrome. The document holds no script.
+    public static func page(_ sections: [PageSection]) -> String {
+        let showsTitles = sections.count > 1
+        let body = sections.enumerated()
+            .map { sectionMarkup($1, index: $0, showsTitle: showsTitles) }
+            .joined(separator: "\n")
+        return """
+        <!DOCTYPE html>
+        <html>
+        <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+        \(pageStylesheet)
+        </style>
+        </head>
+        <body>
+        \(body)
+        </body>
+        </html>
+        """
+    }
+
+
+    /// Whether a section carries markup worth drawing. An entry with an empty
+    /// or whitespace-only body falls back to its parsed fields instead.
+    public static func hasMarkup(_ html: String?) -> Bool {
+        guard let html else { return false }
+        return !sanitized(html).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Rewrites one section's style blocks for its shadow root.
+    private static func scopedStyleBlocks(in html: String) -> String {
+        let pattern = "(?is)(<style\\b[^>]*>)([\\s\\S]*?)(</style\\s*>)"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return html }
+        let range = NSRange(html.startIndex..., in: html)
+        var result = ""
+        var cursor = html.startIndex
+        for match in regex.matches(in: html, range: range) {
+            guard let whole = Range(match.range, in: html),
+                  let open = Range(match.range(at: 1), in: html),
+                  let css = Range(match.range(at: 2), in: html),
+                  let close = Range(match.range(at: 3), in: html)
+            else { continue }
+            result += html[cursor..<whole.lowerBound]
+            result += html[open]
+            result += shadowCSS(String(html[css]))
+            result += html[close]
+            cursor = whole.upperBound
+        }
+        result += html[cursor...]
+        return result
+    }
+
+    /// Rewrites a dictionary stylesheet for a shadow root: html and :root
+    /// become :host, body becomes .odc-body.
+    ///
+    /// Rules that start with an at-rule (@media, @font-face, ...) keep their
+    /// prelude; their contents are selectors again and are rewritten as usual.
+    public static func shadowCSS(_ css: String) -> String {
+        var result = ""
+        var prelude = ""
+        var index = css.startIndex
+        while index < css.endIndex {
+            let character = css[index]
+            switch character {
+            case "{":
+                result += transformedPrelude(prelude) + "{"
+                prelude = ""
+            case "}":
+                result += prelude + "}"
+                prelude = ""
+            default:
+                prelude.append(character)
+            }
+            index = css.index(after: index)
+        }
+        result += prelude
+        return result
+    }
+
+    private static func transformedPrelude(_ prelude: String) -> String {
+        let trimmed = prelude.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.hasPrefix("@") else { return prelude }
+        return scopedSelector(prelude)
+    }
+
+    /// Maps the element names of one selector list onto the shadow root.
+    private static func scopedSelector(_ selector: String) -> String {
+        var result = ""
+        var index = selector.startIndex
+        var previous: Character = " "
+        while index < selector.endIndex {
+            let character = selector[index]
+            guard character.isLetter || character == "-" || character == "_" else {
+                result.append(character)
+                if !character.isWhitespace { previous = character }
+                index = selector.index(after: index)
+                continue
+            }
+            var token = ""
+            var cursor = index
+            while cursor < selector.endIndex {
+                let next = selector[cursor]
+                guard next.isLetter || next.isNumber || next == "-" || next == "_" else { break }
+                token.append(next)
+                cursor = selector.index(after: cursor)
+            }
+            result += scopedToken(token, after: previous)
+            previous = token.last ?? previous
+            index = cursor
+        }
+        return result
+    }
+
+    /// .html, #body and [data-body] are names, not elements.
+    private static func scopedToken(_ token: String, after previous: Character) -> String {
+        if previous == ":", token.lowercased() == "root" { return "host" }
+        guard !".[#-".contains(previous) else { return token }
+        switch token.lowercased() {
+        case "html": return ":host"
+        case "body": return ".odc-body"
+        default: return token
+        }
+    }
+
+    /// Routes one section's resource references through that section, so the
+    /// scheme handler can name the dictionary that asked for the payload.
+    public static func rewriteResources(_ html: String, section: Int) -> String {
+        let scheme = ODCResource.scheme + ":///"
+        return rewriteResources(html)
+            .replacingOccurrences(of: scheme, with: scheme + "s\(section)/")
+    }
+
+    /// Points entry:// links at the section they came from.
+    public static func rewriteEntryLinks(in html: String, section: Int) -> String {
+        let pattern = "(?i)href\\s*=\\s*(['\"])entry://([^'\"]*)\\1"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return html }
+        let range = NSRange(html.startIndex..., in: html)
+        var result = ""
+        var cursor = html.startIndex
+        for match in regex.matches(in: html, range: range) {
+            guard let whole = Range(match.range, in: html),
+                  let target = Range(match.range(at: 2), in: html)
+            else { continue }
+            result += html[cursor..<whole.lowerBound]
+            result += "href=\"entry://s\(section)/\(html[target])\""
+            cursor = whole.upperBound
+        }
+        result += html[cursor...]
+        return result
+    }
+
+    /// Splits entry://s2/target into the section and the target.
+    ///
+    /// A link without a section (entry://target) keeps the older
+    /// single-dictionary reading: (nil, "target").
+    public static func addressedEntryTarget(from url: URL) -> (section: Int?, target: String)? {
+        guard let raw = entryTarget(from: url) else { return nil }
+        let parts = raw.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count == 2, let section = sectionIndex(from: String(parts[0])) else {
+            return (nil, raw)
+        }
+        let target = String(parts[1])
+        return target.isEmpty ? nil : (section, target)
+    }
+
+    /// Parses the s<digits> prefix a section URL carries.
+    static func sectionIndex(from component: String) -> Int? {
+        guard component.count > 1, component.first?.lowercased() == "s" else { return nil }
+        let digits = component.dropFirst()
+        guard digits.allSatisfy({ $0.isNumber }) else { return nil }
+        return Int(digits)
+    }
+
+    private static func escapeText(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+    }
+
+    private static func sectionMarkup(
+        _ section: PageSection,
+        index: Int,
+        showsTitle: Bool
+    ) -> String {
+        var body = sanitized(section.html)
+        body = scopedStyleBlocks(in: body)
+        body = rewriteResources(body, section: index)
+        body = rewriteEntryLinks(in: body, section: index)
+        let title = showsTitle
+            ? "<h2 class=\"odc-dictionary\">\(escapeText(section.name))</h2>\n"
+            : ""
+        let dictionaryStyles = section.stylesheets
+            .map { shadowCSS(embeddableStyle($0.css)) }
+            .joined(separator: "\n")
+        return """
+        <section class="odc-section">
+        \(title)<template shadowrootmode="open">
+        <style>
+        \(shadowDefaultStylesheet)
+        \(dictionaryStyles)
+        </style>
+        <div class="odc-body">
+        \(body)
+        </div>
+        </template>
+        </section>
+        """
+    }
 }

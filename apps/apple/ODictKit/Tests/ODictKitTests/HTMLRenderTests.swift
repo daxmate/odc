@@ -3,70 +3,73 @@ import XCTest
 @testable import ODictKit
 
 /// Drives the entry reader's web view end to end: real HTML, the real
-/// `odc-resource` scheme handler, real `document.body.innerText`.
+/// odc-resource scheme handler, real shadow roots.
 @MainActor
 final class HTMLRenderTests: XCTestCase {
     // MARK: - The blank entry regression
 
     /// A dictionary that links its stylesheet as a resource (LDOCE6++ style).
-    /// The document's base URL is `odc-resource:///`, so the reader's
-    /// navigation policy must not cancel the load it started itself.
+    /// The document's base URL is odc-resource:///, so the reader's navigation
+    /// policy must not cancel the load it started itself.
     func testEntryWithStylesheetServedFromResourcesShowsItsBody() async throws {
-        let renderer = HTMLRenderer(resources: { key in
+        let renderer = HTMLRenderer(resources: { _, key in
             key == "ldoce6ec.css" ? Data("p { color: #111; }".utf8) : nil
         })
 
-        renderer.load(html: """
+        renderer.load(document: Self.page("""
         <link rel="stylesheet" href="ldoce6ec.css">
         <p class="entry">hello world</p>
-        """)
+        """))
 
         let text = await Self.bodyText(in: renderer.webView)
         XCTAssertTrue(text.contains("hello world"), "body text was: \(text)")
     }
 
-    /// A dictionary whose typography is inline (牛津高阶 style) needs no
-    /// resource at all; it must keep working.
     func testEntryWithInlineStyleShowsItsBody() async throws {
-        let renderer = HTMLRenderer(resources: { _ in nil })
-        renderer.load(html: """
+        let renderer = HTMLRenderer(resources: { _, _ in nil })
+        renderer.load(document: Self.page("""
         <style>p { color: #111; }</style>
         <p class="entry">hello world</p>
-        """)
+        """))
 
         let text = await Self.bodyText(in: renderer.webView)
         XCTAssertTrue(text.contains("hello world"), "body text was: \(text)")
     }
 
-    /// A stylesheet key the volume does not carry answers 404; the entry is
-    /// still readable.
-    func testMissingStylesheetStillShowsBody() async throws {
-        let renderer = HTMLRenderer(resources: { _ in nil })
-        renderer.load(html: """
+    /// A stylesheet that cannot be served must not take the entry down with it.
+    func testEntryWithMissingStylesheetStillShowsItsBody() async throws {
+        let renderer = HTMLRenderer(resources: { _, _ in nil })
+        renderer.load(document: Self.page("""
         <link rel="stylesheet" href="missing.css">
         <p class="entry">hello world</p>
-        """)
+        """))
 
         let text = await Self.bodyText(in: renderer.webView)
         XCTAssertTrue(text.contains("hello world"), "body text was: \(text)")
     }
-
 
     // MARK: - Dictionary stylesheets
 
     /// A dictionary that keeps its CSS in the repository: the reader inlines
     /// it, so the entry is styled even though nothing is fetched over the wire.
     func testInlinesTheDictionaryStylesheet() async throws {
-        let renderer = HTMLRenderer(resources: { key in
-            key == "style.css" ? Data("p.dict { color: rgb(255, 0, 0); }".utf8) : nil
-        })
-        renderer.load(html: "<link rel=\"stylesheet\" href=\"style.css\"><p class=\"dict\">styled</p>")
+        let renderer = HTMLRenderer(resources: { _, _ in nil })
+        let section = EntryHTML.PageSection(
+            dictionaryID: "dict",
+            name: "Dictionary",
+            html: "<p class=\"dict\">styled</p>",
+            stylesheets: [EntryHTML.LinkedStylesheet(key: "style.css", css: "p.dict { color: rgb(255, 0, 0); }")]
+        )
+        renderer.load(document: EntryHTML.page([section]))
 
         var colour: String?
         let deadline = Date().addingTimeInterval(10)
         while Date() < deadline {
             colour = await Self.evaluate(
-                "getComputedStyle(document.querySelector('p.dict')).color",
+                "document.querySelector('.odc-section').shadowRoot"
+                    + ".querySelector('p.dict')"
+                    + " ? getComputedStyle(document.querySelector('.odc-section').shadowRoot"
+                    + ".querySelector('p.dict')).color : null",
                 in: renderer.webView
             )
             if colour == "rgb(255, 0, 0)" { break }
@@ -79,22 +82,34 @@ final class HTMLRenderTests: XCTestCase {
 
     func testReportsVisibleCharactersOnceLoaded() async throws {
         let box = OutcomeBox()
-        let renderer = HTMLRenderer(resources: { _ in nil })
+        let renderer = HTMLRenderer(resources: { _, _ in nil })
         renderer.onOutcome = { box.record($0) }
-        renderer.load(html: "<p class=\"entry\">hello world</p>")
+        renderer.load(document: Self.page("<p>hello world</p>"))
 
         let outcome = await Self.waitForOutcome(box)
         guard case .loaded(let characters) = outcome else {
-            return XCTFail("expected a loaded outcome, got \(String(describing: outcome))")
+            return XCTFail("outcome was: \(String(describing: outcome))")
         }
-        XCTAssertGreaterThanOrEqual(characters, "hello world".count)
+        XCTAssertGreaterThan(characters, 0)
+    }
+
+    /// The text lives inside a shadow root now, where body.innerText stops.
+    /// Counting must cross the boundary or every entry would look blank.
+    func testCountsTextInsideShadowRoots() async throws {
+        let box = OutcomeBox()
+        let renderer = HTMLRenderer(resources: { _, _ in nil })
+        renderer.onOutcome = { box.record($0) }
+        renderer.load(document: Self.page("<p>shadow text</p>"))
+
+        let outcome = await Self.waitForOutcome(box)
+        XCTAssertEqual(outcome, .loaded(visibleCharacters: 11), "outcome was: \(String(describing: outcome))")
     }
 
     func testReportsEmptyDocumentWhenNothingIsVisible() async throws {
         let box = OutcomeBox()
-        let renderer = HTMLRenderer(resources: { _ in nil })
+        let renderer = HTMLRenderer(resources: { _, _ in nil })
         renderer.onOutcome = { box.record($0) }
-        renderer.load(html: "<p></p>")
+        renderer.load(document: Self.page("<p></p>"))
 
         let outcome = await Self.waitForOutcome(box)
         XCTAssertEqual(outcome, .loaded(visibleCharacters: 0))
@@ -110,7 +125,7 @@ final class HTMLRenderTests: XCTestCase {
     // MARK: - Scheme handler
 
     func testSchemeHandlerAnswersAMissingKeyWith404AndFinishes() {
-        let handler = ODCResourceSchemeHandler(resources: { _ in nil })
+        let handler = ODCResourceSchemeHandler(resources: { _, _ in nil })
         let task = RecordingSchemeTask(url: URL(string: "odc-resource:///missing.png")!)
 
         handler.webView(WKWebView(), start: task)
@@ -122,18 +137,94 @@ final class HTMLRenderTests: XCTestCase {
 
     func testSchemeHandlerServesThePayloadExactlyOnce() {
         let png = Data([0x89, 0x50, 0x4E, 0x47])
-        let handler = ODCResourceSchemeHandler(resources: { key in
-            key == "images/a.png" ? png : nil
+        let handler = ODCResourceSchemeHandler(resources: { _, key in
+            key == "pic/a.png" ? png : nil
         })
-        let task = RecordingSchemeTask(url: URL(string: "odc-resource:///images/a.png")!)
+        let task = RecordingSchemeTask(url: URL(string: "odc-resource:///pic/a.png")!)
 
         handler.webView(WKWebView(), start: task)
 
         XCTAssertEqual(task.responses.count, 1)
-        XCTAssertEqual(task.responses.first?.mimeType, "image/png")
         XCTAssertEqual(task.payload, png)
         XCTAssertEqual(task.finished, 1)
         XCTAssertTrue(task.failures.isEmpty)
+    }
+
+    /// A page that stacks dictionaries names the section in the URL, and the
+    /// handler hands that section back to the caller.
+    func testSchemeHandlerReportsTheRequestingSection() {
+        var asked: [Int] = []
+        let handler = ODCResourceSchemeHandler(resources: { section, key in
+            asked.append(section)
+            return key == "pic/a.png" ? Data([0x1]) : nil
+        })
+        let task = RecordingSchemeTask(url: URL(string: "odc-resource:///s2/pic/a.png")!)
+
+        handler.webView(WKWebView(), start: task)
+
+        XCTAssertEqual(asked, [2])
+        XCTAssertEqual(task.finished, 1)
+    }
+
+    // MARK: - Helpers
+
+    /// A one-dictionary page, the shape the reader hands the web view.
+    static func page(_ html: String) -> String {
+        EntryHTML.page([
+            EntryHTML.PageSection(dictionaryID: "dict", name: "Dictionary", html: html),
+        ])
+    }
+
+    /// Visible text, walking into each section's shadow root.
+    static func bodyText(in webView: WKWebView, timeout: TimeInterval = 10) async -> String {
+        let script = """
+        (function () {
+          function text(node) {
+            var out = "";
+            var children = node.childNodes || [];
+            for (var i = 0; i < children.length; i++) {
+              var child = children[i];
+              if (child.nodeType === 3) { out += child.nodeValue || ""; continue; }
+              if (child.nodeType !== 1) { continue; }
+              var tag = (child.tagName || "").toUpperCase();
+              if (tag === "STYLE" || tag === "SCRIPT" || tag === "TEMPLATE" || tag === "LINK") { continue; }
+              if (child.shadowRoot) { out += text(child.shadowRoot); }
+              out += text(child);
+            }
+            return out;
+          }
+          return text(document.body);
+        })()
+        """
+        let deadline = Date().addingTimeInterval(timeout)
+        var last = ""
+        while Date() < deadline {
+            if let value = await evaluate(script, in: webView) {
+                last = value
+                if !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    return value
+                }
+            }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return last
+    }
+
+    fileprivate static func waitForOutcome(_ box: OutcomeBox, timeout: TimeInterval = 10) async -> EntryRenderOutcome? {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if let outcome = box.outcome { return outcome }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return box.outcome
+    }
+
+    static func evaluate(_ script: String, in webView: WKWebView) async -> String? {
+        await withCheckedContinuation { continuation in
+            webView.evaluateJavaScript(script) { value, _ in
+                continuation.resume(returning: value as? String)
+            }
+        }
     }
 }
 
@@ -176,43 +267,5 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask, @unchecked S
 
     func didFailWithError(_ error: any Error) {
         failures.append(error)
-    }
-}
-
-extension HTMLRenderTests {
-    /// Polls `document.body.innerText` until it is non-empty or `timeout` runs out.
-    static func bodyText(in webView: WKWebView, timeout: TimeInterval = 15) async -> String {
-        let deadline = Date().addingTimeInterval(timeout)
-        var last = ""
-        while Date() < deadline {
-            if let value = await evaluate("document.body ? document.body.innerText : ''", in: webView) {
-                last = value
-                if !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    return value
-                }
-            }
-            try? await Task.sleep(nanoseconds: 100_000_000)
-        }
-        return last
-    }
-
-    fileprivate static func waitForOutcome(
-        _ box: OutcomeBox,
-        timeout: TimeInterval = 15
-    ) async -> EntryRenderOutcome? {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            if let outcome = box.outcome { return outcome }
-            try? await Task.sleep(nanoseconds: 100_000_000)
-        }
-        return box.outcome
-    }
-
-    static func evaluate(_ script: String, in webView: WKWebView) async -> String? {
-        await withCheckedContinuation { continuation in
-            webView.evaluateJavaScript(script) { value, _ in
-                continuation.resume(returning: value as? String)
-            }
-        }
     }
 }

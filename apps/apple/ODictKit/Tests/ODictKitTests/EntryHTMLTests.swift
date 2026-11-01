@@ -315,4 +315,147 @@ final class EntryHTMLTests: XCTestCase {
         )
     }
 
+    // MARK: - Single page
+
+    private func section(_ html: String, name: String = "Dictionary") -> EntryHTML.PageSection {
+        EntryHTML.PageSection(dictionaryID: name, name: name, html: html)
+    }
+
+    func testPagePutsEverySectionInADeclarativeShadowRoot() {
+        let document = EntryHTML.page([
+            section("<p>one</p>", name: "A"),
+            section("<p>two</p>", name: "B"),
+        ])
+
+        XCTAssertTrue(document.hasPrefix("<!DOCTYPE html>"))
+        XCTAssertEqual(
+            document.components(separatedBy: "<template shadowrootmode=\"open\">").count - 1,
+            2
+        )
+        XCTAssertEqual(document.components(separatedBy: "class=\"odc-body\"").count - 1, 2)
+        XCTAssertFalse(document.contains("<script"), document)
+    }
+
+    func testPageShowsDictionaryTitlesOnlyWhenSeveralDictionariesShareThePage() {
+        let single = EntryHTML.page([section("<p>x</p>", name: "Only")])
+        XCTAssertFalse(single.contains("<h2 class=\"odc-dictionary\""), single)
+
+        let both = EntryHTML.page([
+            section("<p>x</p>", name: "First"),
+            section("<p>y</p>", name: "Second"),
+        ])
+        XCTAssertTrue(both.contains("<h2 class=\"odc-dictionary\">First</h2>"), both)
+        XCTAssertTrue(both.contains("<h2 class=\"odc-dictionary\">Second</h2>"), both)
+    }
+
+    func testPageKeepsTheSectionsInOrder() {
+        let document = EntryHTML.page([
+            section("<p>alpha</p>", name: "A"),
+            section("<p>beta</p>", name: "B"),
+            section("<p>gamma</p>", name: "C"),
+        ])
+
+        guard let alpha = document.range(of: "alpha")?.lowerBound,
+              let beta = document.range(of: "beta")?.lowerBound,
+              let gamma = document.range(of: "gamma")?.lowerBound
+        else {
+            return XCTFail("a section went missing: \(document)")
+        }
+        XCTAssertTrue(alpha < beta && beta < gamma)
+    }
+
+    func testPageCarriesTheDividerStylesheet() {
+        let document = EntryHTML.page([section("<p>x</p>")])
+        XCTAssertTrue(document.contains(".odc-section + .odc-section"), document)
+    }
+
+    func testPageScopesResourcesToTheirSection() {
+        let document = EntryHTML.page([
+            section("<img src=\"pic.png\">", name: "A"),
+            section("<img src=\"pic.png\">", name: "B"),
+        ])
+
+        XCTAssertTrue(document.contains("src=\"odc-resource:///s0/pic.png\""), document)
+        XCTAssertTrue(document.contains("src=\"odc-resource:///s1/pic.png\""), document)
+    }
+
+    func testPageScopesEntryLinksToTheirSection() {
+        let document = EntryHTML.page([
+            section("<a href=\"entry://word\">link</a>", name: "A"),
+            section("<a href=\"entry://word\">link</a>", name: "B"),
+        ])
+
+        XCTAssertTrue(document.contains("href=\"entry://s0/word\""), document)
+        XCTAssertTrue(document.contains("href=\"entry://s1/word\""), document)
+    }
+
+    func testPageRewritesEntryStyleBlocksForTheShadowRoot() {
+        let document = EntryHTML.page([
+            section("<style>body { color: red; } p { margin: 0; }</style><p>x</p>"),
+        ])
+
+        XCTAssertTrue(document.contains(".odc-body { color: red; }"), document)
+        XCTAssertFalse(document.contains("<style>body {"), document)
+        XCTAssertTrue(document.contains("p { margin: 0; }"), document)
+    }
+
+    func testShadowCSSMapsPageSelectorsOntoTheHost() {
+        let css = """
+        html { color: red; }
+        :root { --tone: 1; }
+        body.foo a { color: blue; }
+        body .inner { margin: 0; }
+        @media screen { body { padding: 0; } }
+        """
+        let scoped = EntryHTML.shadowCSS(css)
+
+        XCTAssertTrue(scoped.contains(":host { color: red; }"), scoped)
+        XCTAssertTrue(scoped.contains(":host { --tone: 1; }"), scoped)
+        XCTAssertTrue(scoped.contains(".odc-body.foo a { color: blue; }"), scoped)
+        XCTAssertTrue(scoped.contains(".odc-body .inner { margin: 0; }"), scoped)
+        XCTAssertTrue(scoped.contains("@media screen {"), scoped)
+        XCTAssertTrue(scoped.contains(".odc-body { padding: 0; }"), scoped)
+    }
+
+    func testShadowCSSLeavesNamesThatOnlyLookLikeElements() {
+        let css = ".html-body { color: red; } [data-body] { color: blue; }"
+        XCTAssertEqual(EntryHTML.shadowCSS(css), css)
+    }
+
+    func testPageDropsScriptsFromEverySection() {
+        let document = EntryHTML.page([
+            section("<script>alert(1)</script><p>one</p>", name: "A"),
+            section("<p onclick=\"x()\">two</p>", name: "B"),
+        ])
+
+        XCTAssertFalse(document.contains("<script"), document)
+        XCTAssertFalse(document.contains("onclick"), document)
+    }
+
+    func testAddressedEntryTargetSplitsTheSection() {
+        let addressed = EntryHTML.addressedEntryTarget(from: URL(string: "entry://s2/word")!)
+        XCTAssertEqual(addressed?.section, 2)
+        XCTAssertEqual(addressed?.target, "word")
+
+        let plain = EntryHTML.addressedEntryTarget(from: URL(string: "entry://word")!)
+        XCTAssertNil(plain?.section)
+        XCTAssertEqual(plain?.target, "word")
+    }
+
+    func testSectionIndexReadsOnlySNumberPrefixes() {
+        XCTAssertEqual(EntryHTML.sectionIndex(from: "s0"), 0)
+        XCTAssertEqual(EntryHTML.sectionIndex(from: "s12"), 12)
+        XCTAssertNil(EntryHTML.sectionIndex(from: "s"))
+        XCTAssertNil(EntryHTML.sectionIndex(from: "sound"))
+        XCTAssertNil(EntryHTML.sectionIndex(from: "s2a"))
+    }
+
+    /// A section with no markup belongs to the parsed layout, not the page.
+    func testHasMarkupIgnoresEmptyAndWhitespaceOnlyBodies() {
+        XCTAssertFalse(EntryHTML.hasMarkup(nil))
+        XCTAssertFalse(EntryHTML.hasMarkup(""))
+        XCTAssertFalse(EntryHTML.hasMarkup("   \n  "))
+        XCTAssertTrue(EntryHTML.hasMarkup("<p>x</p>"))
+    }
+
 }

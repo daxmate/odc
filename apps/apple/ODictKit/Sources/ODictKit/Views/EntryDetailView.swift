@@ -1,10 +1,21 @@
 import SwiftUI
 
-/// Renders the entry for the current selection, one section per open
-/// dictionary, stacked on a single scrolling page.
+/// Renders the entry for the current selection: one page for every open
+/// dictionary that carries the key, scrolled by the web view itself.
 public struct EntryDetailView: View {
     private let store: DictionaryStore
     private let explicitKey: String?
+
+    /// Entry a section shows after a link inside it was followed. Only that
+    /// section changes; the rest of the page keeps the selection.
+    @State private var overrides: [UUID: DictionaryEntry] = [:]
+    /// Note from the last follow-up link, keyed by dictionary.
+    @State private var notices: [UUID: String?] = [:]
+    /// Set when the web view could not show the page; the parsed fields take
+    /// its place instead of a blank panel.
+    @State private var renderFailure: String?
+    /// Memoises the built document so a redraw does not re-read stylesheets.
+    @State private var cache = PageCache()
 
     /// Detail column driven by the store's current selection.
     public init(store: DictionaryStore) {
@@ -29,15 +40,9 @@ public struct EntryDetailView: View {
                         systemImage: "exclamationmark.triangle",
                         description: Text(notice)
                     )
-                } else {
-                    ContentUnavailableView(
-                        "选择一个词条",
-                        systemImage: "character.book.closed",
-                        description: Text("在左侧搜索并选择词条。")
-                    )
                 }
             } else {
-                sections
+                page
             }
         }
         .task {
@@ -45,6 +50,7 @@ public struct EntryDetailView: View {
                 await store.select(key: explicitKey)
             }
         }
+        .onChange(of: pageIdentity) { resetFollowUps() }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 if let entry = store.entry {
@@ -54,42 +60,238 @@ public struct EntryDetailView: View {
         }
     }
 
-    /// One section per dictionary that carries the key, separated by a rule.
-    private var sections: some View {
-        let showsTitles = store.entrySections.count > 1
-        return ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                if let notice = store.noticeMessage {
-                    Label(notice, systemImage: "arrow.triangle.branch")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
-                }
-                ForEach(Array(store.entrySections.enumerated()), id: \.element.id) { index, section in
-                    if index > 0 {
-                        Divider()
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 12)
-                    }
-                    if showsTitles {
-                        Text(section.name)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 16)
-                            .padding(.top, index == 0 ? 12 : 0)
-                            .padding(.bottom, 4)
-                    }
-                    EntrySectionView(store: store, section: section)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+    // MARK: - The page
+
+    private var sections: [PageSectionState] {
+        store.entrySections.enumerated().map { index, section in
+            PageSectionState(
+                index: index,
+                section: section,
+                entry: overrides[section.dictionaryID] ?? section.entry,
+                notice: notices[section.dictionaryID] ?? section.notice
+            )
         }
     }
 
-    /// Star toggling for the entry on screen; the label is also its a11y name.
+    /// Sections the web view can draw: the ones that carry entry markup.
+    private var htmlSections: [PageSectionState] {
+        sections.filter { EntryHTML.hasMarkup($0.entry.rawHTML) }
+    }
+
+    /// Sections with no markup of their own; they keep the parsed layout.
+    private var structuredSections: [PageSectionState] {
+        sections.filter { !EntryHTML.hasMarkup($0.entry.rawHTML) }
+    }
+
+    private var showsDictionaryNames: Bool { sections.count > 1 }
+
+    private var page: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if let notice = store.noticeMessage {
+                Label(notice, systemImage: "arrow.triangle.branch")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+            }
+            if renderFailure == nil, let document = pageDocument {
+                ForEach(htmlSections.filter { $0.notice != nil }) { state in
+                    if let notice = state.notice {
+                        Label(notice, systemImage: "arrow.triangle.branch")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 4)
+                    }
+                }
+                HTMLRenderView(
+                    document: document,
+                    resources: { index, key in resource(for: key, section: index) },
+                    onEntryLink: { index, target in followLink(section: index, target: target) },
+                    onOutcome: { outcome in
+                        renderFailure = EntryDetailView.fallbackMessage(for: outcome)
+                    }
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if !structuredSections.isEmpty {
+                    structuredScroll
+                        .frame(maxHeight: 280)
+                }
+                disclosureList
+            } else {
+                fallbackScroll
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    /// Sections without markup, under the page the web view draws.
+    private var structuredScroll: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                ForEach(structuredSections) { state in
+                    VStack(alignment: .leading, spacing: 8) {
+                        if showsDictionaryNames {
+                            dictionaryTitle(state)
+                        }
+                        if let notice = state.notice {
+                            Text(notice)
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        }
+                        StructuredEntryContent(entry: state.entry)
+                    }
+                    .padding(.horizontal, 24)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+                }
+            }
+            .padding(.vertical, 16)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    /// Everything as parsed fields, used when the web view cannot show the page.
+    private var fallbackScroll: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                if let renderFailure {
+                    Label(renderFailure, systemImage: "exclamationmark.triangle")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 24)
+                }
+                ForEach(sections) { state in
+                    VStack(alignment: .leading, spacing: 8) {
+                        if showsDictionaryNames {
+                            dictionaryTitle(state)
+                        }
+                        if let notice = state.notice {
+                            Text(notice)
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        }
+                        StructuredEntryContent(entry: state.entry)
+                    }
+                    .padding(.horizontal, 24)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+                }
+            }
+            .padding(.vertical, 16)
+        }
+    }
+
+    /// The parsed fields behind each section that the web view draws.
+    private var disclosureList: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(htmlSections) { state in
+                DisclosureGroup {
+                    ScrollView {
+                        StructuredEntryContent(entry: state.entry)
+                            .padding(.top, 8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 260)
+                    .textSelection(.enabled)
+                } label: {
+                    Text(showsDictionaryNames ? "结构化释义 · \(state.section.name)" : "结构化释义")
+                        .font(.callout)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func dictionaryTitle(_ state: PageSectionState) -> some View {
+        Text(state.section.name)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+    }
+
+    // MARK: - The document
+
+    /// Identity of what the store asked for. A new key or a different set of
+    /// dictionaries drops the follow-ups, which belong to the old page.
+    private var pageIdentity: String {
+        store.entrySections
+            .map { "\($0.dictionaryID.uuidString)#\($0.entry.key)" }
+            .joined(separator: "|")
+    }
+
+    private func resetFollowUps() {
+        overrides = [:]
+        notices = [:]
+        renderFailure = nil
+        cache.signature = nil
+        cache.document = nil
+    }
+
+    /// Builds the one page the web view loads, or nil when no section carries
+    /// markup. Rebuilt only when an entry changes: the memo keeps the
+    /// stylesheet reads off the redraw path.
+    private var pageDocument: String? {
+        let inputs = htmlSections
+        guard !inputs.isEmpty else { return nil }
+        let signature = inputs
+            .map { state in
+                "\(state.index)|\(state.section.dictionaryID.uuidString)|"
+                    + "\(state.entry.key)|\(state.entry.rawHTML?.hashValue ?? 0)"
+            }
+            .joined(separator: "\n")
+        if cache.signature == signature {
+            return cache.document
+        }
+        let built = inputs.map { state in
+            let inlined = EntryHTML.inlineStylesheets(
+                in: state.entry.rawHTML ?? "",
+                resource: { key in
+                    store.resource(for: key, in: state.section.dictionaryID)
+                }
+            )
+            return EntryHTML.PageSection(
+                dictionaryID: state.section.dictionaryID.uuidString,
+                name: state.section.name,
+                html: inlined.html,
+                stylesheets: inlined.stylesheets
+            )
+        }
+        let document = built.isEmpty ? nil : EntryHTML.page(built)
+        cache.signature = signature
+        cache.document = document
+        return document
+    }
+
+    /// Serves one key from the dictionary behind section index.
+    private func resource(for key: String, section index: Int) -> Data? {
+        guard let state = sections.first(where: { $0.index == index })
+            ?? sections.first
+        else { return nil }
+        return store.resource(for: key, in: state.section.dictionaryID)
+    }
+
+    /// Follows a link tapped inside one section, leaving the others alone.
+    private func followLink(section index: Int, target: String) {
+        guard let state = sections.first(where: { $0.index == index }) ?? sections.first else {
+            return
+        }
+        guard let resolved = store.entrySection(for: target, in: state.section.dictionaryID) else {
+            notices[state.section.dictionaryID] = "这本词典里没有「\(target)」"
+            cache.signature = nil
+            return
+        }
+        overrides[state.section.dictionaryID] = resolved.entry
+        notices[state.section.dictionaryID] = resolved.notice
+        renderFailure = nil
+        cache.signature = nil
+    }
+
+/// Star toggling for the entry on screen; the label is also its a11y name.
     private func bookmarkButton(for entry: DictionaryEntry) -> some View {
         let isBookmarked = store.isBookmarked(key: entry.key)
         return Button {
@@ -116,126 +318,32 @@ public struct EntryDetailView: View {
     }
 }
 
-
-/// One dictionary's share of the detail page.
-///
-/// The section owns its own key: following a link inside it swaps only this
-/// dictionary's entry, so the other dictionaries keep what they showed. Its web
-/// view reports its height so the sections share one scroll view.
-private struct EntrySectionView: View {
-    let store: DictionaryStore
+/// Where a section stands: the store's entry, or the one a link led to.
+private struct PageSectionState: Identifiable {
+    let index: Int
     let section: DictionaryEntrySection
+    let entry: DictionaryEntry
+    let notice: String?
 
-    /// Key this section navigated to on its own; nil while it follows the page.
-    @State private var localKey: String?
-    @State private var localEntry: DictionaryEntry?
-    @State private var localNotice: String?
-    /// Set when the web view could not show the entry; the parsed fields take
-    /// its place instead of a blank panel.
-    @State private var renderFailure: String?
-    /// Height the document reported, so the page scrolls as a whole.
-    @State private var contentHeight: CGFloat?
+    var id: Int { index }
+}
 
-    /// Height used until the document reports its own, tall enough to read.
-    private static let unmeasuredHeight: CGFloat = 240
+/// Memoises the built page between redraws.
+@MainActor
+private final class PageCache {
+    var signature: String?
+    var document: String?
+}
 
-    private var entry: DictionaryEntry { localEntry ?? section.entry }
-
-    private var notice: String? { localEntry == nil ? section.notice : localNotice }
+/// One dictionary's parsed fields: the fallback for an entry with no markup,
+/// and the content behind each section's disclosure.
+private struct StructuredEntryContent: View {
+    let entry: DictionaryEntry
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if let notice {
-                Label(notice, systemImage: "arrow.triangle.branch")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-            }
-            if let renderFailure {
-                VStack(alignment: .leading, spacing: 16) {
-                    Label(renderFailure, systemImage: "exclamationmark.triangle")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                    structuredContent(entry)
-                }
-                .padding(24)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .textSelection(.enabled)
-            } else if let rawHTML = entry.rawHTML, !rawHTML.isEmpty {
-                renderedEntry(entry, html: rawHTML)
-            } else {
-                structuredContent(entry)
-                    .padding(24)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
-            }
-        }
-        .onChange(of: section.entry) { resetLocalNavigation() }
-        .onChange(of: store.selectedKey) { resetLocalNavigation() }
-        .task(id: localKey) {
-            await followLocalLink()
-        }
+        structuredContent(entry)
     }
 
-    /// The dictionary's own HTML leads; the parsed fields stay one disclosure away.
-    private func renderedEntry(_ entry: DictionaryEntry, html: String) -> some View {
-        VStack(spacing: 0) {
-            HTMLRenderView(
-                html: html,
-                resources: { key in store.resource(for: key, in: section.dictionaryID) },
-                onEntryLink: { target in localKey = target },
-                onOutcome: { outcome in
-                    renderFailure = EntryDetailView.fallbackMessage(for: outcome)
-                },
-                onContentHeight: { height in update(height: height) }
-            )
-            .frame(maxWidth: .infinity)
-            .frame(height: contentHeight ?? Self.unmeasuredHeight)
-            DisclosureGroup("结构化释义") {
-                ScrollView {
-                    structuredContent(entry)
-                        .padding(.top, 8)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .frame(maxHeight: 260)
-                .textSelection(.enabled)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-        }
-        .onChange(of: html) { renderFailure = nil }
-    }
-
-    /// Drop this section's own navigation so it follows the page again.
-    private func resetLocalNavigation() {
-        localKey = nil
-        localEntry = nil
-        localNotice = nil
-        renderFailure = nil
-        contentHeight = nil
-    }
-
-    /// Follow a link that was tapped inside this section only.
-    private func followLocalLink() async {
-        guard let localKey else { return }
-        guard let resolved = store.entrySection(for: localKey, in: section.dictionaryID) else {
-            localNotice = "这本词典里没有「\(localKey)」"
-            return
-        }
-        localEntry = resolved.entry
-        localNotice = resolved.notice
-        renderFailure = nil
-        contentHeight = nil
-    }
-
-    /// Keep the reported height steady; tiny differences would loop the layout.
-    private func update(height: CGFloat) {
-        guard height.isFinite, height > 0 else { return }
-        if let contentHeight, abs(contentHeight - height) < 0.5 { return }
-        contentHeight = height
-    }
     private func structuredContent(_ entry: DictionaryEntry) -> some View {
         VStack(alignment: .leading, spacing: 20) {
             header(entry)

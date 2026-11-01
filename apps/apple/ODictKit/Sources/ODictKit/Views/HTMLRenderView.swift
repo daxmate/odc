@@ -18,46 +18,44 @@ public enum EntryRenderOutcome: Equatable, Sendable {
 }
 
 /// Navigation diagnostics for the entry reader: watch them with
-/// `log stream --predicate 'subsystem == "com.daxmate.odict" && category == "render"'`.
+/// log stream --predicate 'subsystem == "com.daxmate.odict" && category == "render"'.
 private let renderLog = Logger(subsystem: "com.daxmate.odict", category: "render")
 
-/// Shows an entry's HTML exactly as the dictionary wrote it, in a web view that
-/// cannot run scripts.
+/// Shows the entry page in a web view that cannot run scripts.
+///
+/// The web view owns the scrolling: it carries an NSScrollView of its own, so a
+/// document that is exactly as tall as its content can never hand the wheel to
+/// an enclosing SwiftUI scroll view. One page for every dictionary is loaded
+/// instead, and the web view scrolls it natively.
 public struct HTMLRenderView: View {
-    private let html: String
-    private let resources: @MainActor @Sendable (String) -> Data?
-    private let onEntryLink: @MainActor @Sendable (String) -> Void
+    private let document: String
+    private let resources: @MainActor @Sendable (Int, String) -> Data?
+    private let onEntryLink: @MainActor @Sendable (Int, String) -> Void
     private let onOutcome: (@MainActor (EntryRenderOutcome) -> Void)?
-    /// Reports how tall the document is, so a page can stack several entries
-    /// instead of giving each one a scrolling window of its own.
-    private let onContentHeight: (@MainActor (CGFloat) -> Void)?
 
     /// - Parameters:
-    ///   - html: The entry's raw HTML.
-    ///   - resources: Payload for one MDD key, `nil` when the dictionary has
-    ///     none. Served under the `odc-resource` scheme.
-    ///   - onEntryLink: Called with a target key when a link uses `entry://`.
+    ///   - document: A complete page, normally built by EntryHTML.page(_:).
+    ///   - resources: Payload for one MDD key, nil when the dictionary has
+    ///     none. The section names the dictionary that asked for it.
+    ///   - onEntryLink: Called with the section and target key of an entry link.
     public init(
-        html: String,
-        resources: @escaping @MainActor @Sendable (String) -> Data? = { _ in nil },
-        onEntryLink: @escaping @MainActor @Sendable (String) -> Void = { _ in },
-        onOutcome: (@MainActor (EntryRenderOutcome) -> Void)? = nil,
-        onContentHeight: (@MainActor (CGFloat) -> Void)? = nil
+        document: String,
+        resources: @escaping @MainActor @Sendable (Int, String) -> Data? = { _, _ in nil },
+        onEntryLink: @escaping @MainActor @Sendable (Int, String) -> Void = { _, _ in },
+        onOutcome: (@MainActor (EntryRenderOutcome) -> Void)? = nil
     ) {
-        self.html = html
+        self.document = document
         self.resources = resources
         self.onEntryLink = onEntryLink
         self.onOutcome = onOutcome
-        self.onContentHeight = onContentHeight
     }
 
     public var body: some View {
         HTMLRenderRepresentable(
-            html: html,
+            document: document,
             resources: resources,
             onEntryLink: onEntryLink,
-            onOutcome: onOutcome,
-            onContentHeight: onContentHeight
+            onOutcome: onOutcome
         )
     }
 }
@@ -66,18 +64,14 @@ public struct HTMLRenderView: View {
 @MainActor
 final class HTMLRenderer: NSObject, WKNavigationDelegate {
     let webView: WKWebView
-    var onEntryLink: (@MainActor @Sendable (String) -> Void)?
+    var onEntryLink: (@MainActor @Sendable (Int, String) -> Void)?
     /// Reports the document's fate so the reader can replace a blank web view.
     var onOutcome: (@MainActor (EntryRenderOutcome) -> Void)?
-    /// Reports the document's height when someone is stacking entries.
-    var onContentHeight: (@MainActor (CGFloat) -> Void)?
-    /// Width the last reported height was measured at; a resize invalidates it.
-    private var measuredWidth: CGFloat?
     /// Last document handed to the web view; reloading the same HTML would only
     /// make SwiftUI redraws flicker.
-    private var loadedHTML: String?
-    /// Payload source for `odc-resource` links and the scheme handler.
-    private let resources: @MainActor (String) -> Data?
+    private var loadedDocument: String?
+    /// Payload source for odc-resource links and the scheme handler.
+    private let resources: @MainActor (Int, String) -> Data?
     /// Speaker icons are links to an audio clip; the reader plays them in
     /// place instead of navigating to a media file.
     private let audio = ResourceAudioPlayer()
@@ -91,7 +85,7 @@ final class HTMLRenderer: NSObject, WKNavigationDelegate {
         #endif
     }
 
-    init(resources: @escaping @MainActor (String) -> Data?) {
+    init(resources: @escaping @MainActor (Int, String) -> Data?) {
         self.resources = resources
         let configuration = WKWebViewConfiguration()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = false
@@ -105,9 +99,6 @@ final class HTMLRenderer: NSObject, WKNavigationDelegate {
         webView = WKWebView(frame: .zero, configuration: configuration)
         #endif
         super.init()
-        webView.navigationDelegate = self
-        webView.isInspectable = false
-        webView.allowsBackForwardNavigationGestures = false
         #if os(macOS)
         webView.underPageBackgroundColor = .clear
         #else
@@ -115,23 +106,16 @@ final class HTMLRenderer: NSObject, WKNavigationDelegate {
         webView.backgroundColor = .clear
         webView.scrollView.backgroundColor = .clear
         #endif
+        webView.isInspectable = false
+        webView.allowsBackForwardNavigationGestures = false
+        webView.navigationDelegate = self
     }
 
-    /// Loads `html` unless it is already on screen.
-    func load(html: String) {
-        guard html != loadedHTML else { return }
-        loadedHTML = html
-        // Inline first: rewriteResources() would turn each <link href> into an
-        // odc-resource URL, which no longer names a repository key.
-        let inlined = EntryHTML.inlineStylesheets(in: html, resource: resources)
-        let body = EntryHTML.rewriteResources(inlined.html)
-        if !inlined.skipped.isEmpty {
-            renderLog.debug("entry stylesheets skipped: \(inlined.skipped.joined(separator: ", "), privacy: .public)")
-        }
-        webView.loadHTMLString(
-            EntryHTML.document(html: body, stylesheets: inlined.stylesheets),
-            baseURL: ODCResource.baseURL
-        )
+    /// Loads document unless it is already on screen.
+    func load(document: String) {
+        guard document != loadedDocument else { return }
+        loadedDocument = document
+        webView.loadHTMLString(document, baseURL: ODCResource.baseURL)
     }
 
     // MARK: - Navigation
@@ -140,68 +124,49 @@ final class HTMLRenderer: NSObject, WKNavigationDelegate {
         renderLog.debug("start \(webView.url?.absoluteString ?? "-", privacy: .public)")
     }
 
-    /// Re-read the document height after the layout settled.
-    ///
-    /// The height depends on how wide the entry is laid out, so a column resize
-    /// has to re-measure; an unchanged width is skipped to keep SwiftUI from
-    /// looping on its own height updates.
-    func measureContentHeightAfterLayout() {
-        Task { @MainActor in
-            await Task.yield()
-            self.measureContentHeight()
-        }
-    }
-
-    /// Ask the document how tall it is and hand the answer to `onContentHeight`.
-    func measureContentHeight() {
-        guard onContentHeight != nil else { return }
-        let width = webView.bounds.width
-        if let measuredWidth, abs(measuredWidth - width) < 0.5 { return }
-        measuredWidth = width
-        webView.evaluateJavaScript(
-            "(function () { var body = document.body; if (!body) { return 0; } " +
-            "var style = getComputedStyle(body); " +
-            "return Math.ceil(body.getBoundingClientRect().height " +
-            "+ parseFloat(style.marginTop || 0) + parseFloat(style.marginBottom || 0)); })()"
-        ) { [weak self] value, error in
-            Task { @MainActor in
-                guard let self, error == nil, let height = value as? NSNumber else { return }
-                let reported = CGFloat(truncating: height)
-                guard reported > 0 else { return }
-                self.onContentHeight?(reported)
-            }
-        }
-    }
-
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         renderLog.debug("finish \(webView.url?.absoluteString ?? "-", privacy: .public)")
-        // -1 means the document was not a complete page; measuring it would
+        // -1 means the document was not a complete page; counting it would
         // report a blank entry that is only mid-load.
-        webView.evaluateJavaScript("document.readyState === 'complete' && document.body ? document.body.innerText.length : -1") { [weak self] value, error in
+        webView.evaluateJavaScript(Self.visibleTextScript) { [weak self] value, error in
             Task { @MainActor in
                 guard let self else { return }
                 if let error {
-                    renderLog.error("measure failed: \(error.localizedDescription, privacy: .public)")
+                    renderLog.debug("visible text failed: \(error.localizedDescription, privacy: .public)")
                     self.onOutcome?(.failed(error.localizedDescription))
                     return
                 }
-                let characters = (value as? NSNumber)?.intValue ?? -1
-                guard characters >= 0 else { return }
-                renderLog.debug("visible characters: \(characters)")
+                guard let characters = (value as? NSNumber)?.intValue, characters >= 0 else { return }
                 self.onOutcome?(.loaded(visibleCharacters: characters))
             }
         }
-        // A new document invalidates the old width, so measure it afresh.
-        measuredWidth = nil
-        measureContentHeight()
-        Task { @MainActor in
-            // Images and late fonts can still grow the document; one more look
-            // a moment later keeps the section from clipping them.
-            try? await Task.sleep(for: .milliseconds(500))
-            self.measuredWidth = nil
-            self.measureContentHeight()
-        }
     }
+
+    /// Counts the text the reader can see.
+    ///
+    /// body.innerText stops at a shadow boundary, and every section now lives
+    /// in one, so the script walks shadow roots (skipping styles and scripts)
+    /// and collapses whitespace the way innerText does.
+    static let visibleTextScript = """
+    (function () {
+      function text(node) {
+        var out = "";
+        var children = node.childNodes || [];
+        for (var i = 0; i < children.length; i++) {
+          var child = children[i];
+          if (child.nodeType === 3) { out += child.nodeValue || ""; continue; }
+          if (child.nodeType !== 1) { continue; }
+          var tag = (child.tagName || "").toUpperCase();
+          if (tag === "STYLE" || tag === "SCRIPT" || tag === "TEMPLATE" || tag === "LINK") { continue; }
+          if (child.shadowRoot) { out += text(child.shadowRoot); }
+          out += text(child);
+        }
+        return out;
+      }
+      if (document.readyState !== "complete" || !document.body) { return -1; }
+      return text(document.body).replace(/\\s+/g, " ").trim().length;
+    })()
+    """
 
     func webView(
         _ webView: WKWebView,
@@ -222,7 +187,7 @@ final class HTMLRenderer: NSObject, WKNavigationDelegate {
     /// A superseded load reports a cancellation error; that is not a failure.
     private func reportFailure(_ error: any Error) {
         guard (error as NSError).code != NSURLErrorCancelled else { return }
-        renderLog.error("failed: \(error.localizedDescription, privacy: .public)")
+        renderLog.debug("failed: \(error.localizedDescription, privacy: .public)")
         onOutcome?(.failed(error.localizedDescription))
     }
 
@@ -239,8 +204,8 @@ final class HTMLRenderer: NSObject, WKNavigationDelegate {
         }
         switch url.scheme?.lowercased() {
         case "entry":
-            if let target = EntryHTML.entryTarget(from: url) {
-                onEntryLink?(target)
+            if let addressed = EntryHTML.addressedEntryTarget(from: url) {
+                onEntryLink?(addressed.section ?? 0, addressed.target)
             }
             decisionHandler(.cancel, preferences)
         case "http", "https", "mailto":
@@ -251,20 +216,22 @@ final class HTMLRenderer: NSObject, WKNavigationDelegate {
                 decisionHandler(.allow, preferences)
             }
         case "odc-resource":
-            let key = ODCResource.key(from: url)
-            if let key, ODCResource.isAudio(key), let payload = resources(key) {
-                audio.play(payload)
-                // A tapped speaker icon plays in place instead of navigating.
-                decisionHandler(.cancel, preferences)
-            } else if navigationAction.navigationType == .linkActivated {
-                // A link to a resource (an image, say) must not replace the entry.
-                decisionHandler(.cancel, preferences)
-            } else {
-                // What is left is the document `loadHTMLString` is loading (its
-                // base URL carries no key) and the resources it references.
-                // Cancelling those leaves the reader on a blank page.
-                decisionHandler(.allow, preferences)
+            if let addressed = ODCResource.address(from: url) {
+                if ODCResource.isAudio(addressed.key) {
+                    if let data = resources(addressed.section ?? 0, addressed.key) {
+                        audio.play(data)
+                    }
+                    decisionHandler(.cancel, preferences)
+                    return
+                }
+                if navigationAction.navigationType == .linkActivated {
+                    // A link to a resource (an image, say) must not replace the entry.
+                    decisionHandler(.cancel, preferences)
+                    return
+                }
             }
+            // Images, styles and media load in place; the entry stays put.
+            decisionHandler(.allow, preferences)
         case "about", "data", "blob":
             decisionHandler(.allow, preferences)
         default:
@@ -272,8 +239,6 @@ final class HTMLRenderer: NSObject, WKNavigationDelegate {
         }
     }
 }
-
-
 
 /// Plays one MDD audio clip when the reader taps a speaker icon.
 ///
@@ -291,15 +256,14 @@ private final class ResourceAudioPlayer {
     }
 }
 
-/// Serves MDD payloads to the web view under the `odc-resource` scheme.
+/// Serves MDD payloads to the web view under the odc-resource scheme.
 ///
-/// The handler answers on the main actor and reads straight from the open
-/// repository; a missing key is a 404, which leaves the entry readable.
-@MainActor
+/// The first path component names the section that asked for the payload, so a
+/// page that stacks several dictionaries can hand each one its own file.
 final class ODCResourceSchemeHandler: NSObject, WKURLSchemeHandler {
-    private let resources: @MainActor (String) -> Data?
+    private let resources: @MainActor (Int, String) -> Data?
 
-    init(resources: @escaping @MainActor (String) -> Data?) {
+    init(resources: @escaping @MainActor (Int, String) -> Data?) {
         self.resources = resources
         super.init()
     }
@@ -309,7 +273,9 @@ final class ODCResourceSchemeHandler: NSObject, WKURLSchemeHandler {
             urlSchemeTask.didFailWithError(URLError(.badURL))
             return
         }
-        guard let key = ODCResource.key(from: url), let data = resources(key) else {
+        guard let addressed = ODCResource.address(from: url),
+              let data = resources(addressed.section ?? 0, addressed.key)
+        else {
             let response = HTTPURLResponse(
                 url: url,
                 statusCode: 404,
@@ -325,6 +291,7 @@ final class ODCResourceSchemeHandler: NSObject, WKURLSchemeHandler {
             }
             return
         }
+        let key = addressed.key
         let response = URLResponse(
             url: url,
             mimeType: ODCResource.mimeType(for: key),
@@ -337,14 +304,15 @@ final class ODCResourceSchemeHandler: NSObject, WKURLSchemeHandler {
     }
 
     func webView(_ webView: WKWebView, stop urlSchemeTask: any WKURLSchemeTask) {
-        // The payload is handed over synchronously in `start`, so there is
+        // The payload is handed over synchronously in start, so there is
         // nothing to cancel here.
     }
 }
+
 #if os(macOS)
 
-/// Keeps the page background transparent when the window changes appearance;
-/// the page's own `prefers-color-scheme` media query does the rest.
+/// Keeps the page background transparent when the system appearance changes:
+/// WebKit resets underPageBackgroundColor on a dynamic switch.
 private final class AppearanceAwareWebView: WKWebView {
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
@@ -354,11 +322,10 @@ private final class AppearanceAwareWebView: WKWebView {
 }
 
 private struct HTMLRenderRepresentable: NSViewRepresentable {
-    let html: String
-    let resources: @MainActor @Sendable (String) -> Data?
-    let onEntryLink: @MainActor @Sendable (String) -> Void
+    let document: String
+    let resources: @MainActor @Sendable (Int, String) -> Data?
+    let onEntryLink: @MainActor @Sendable (Int, String) -> Void
     let onOutcome: (@MainActor (EntryRenderOutcome) -> Void)?
-    let onContentHeight: (@MainActor (CGFloat) -> Void)?
 
     func makeCoordinator() -> HTMLRenderer {
         HTMLRenderer(resources: resources)
@@ -369,27 +336,24 @@ private struct HTMLRenderRepresentable: NSViewRepresentable {
         return context.coordinator.webView
     }
 
-    func updateNSView(_ nsView: WKWebView, context: Context) {
+    func updateNSView(_ webView: WKWebView, context: Context) {
         update(context.coordinator)
-        context.coordinator.measureContentHeightAfterLayout()
     }
 
     private func update(_ renderer: HTMLRenderer) {
         renderer.onEntryLink = onEntryLink
         renderer.onOutcome = onOutcome
-        renderer.onContentHeight = onContentHeight
-        renderer.load(html: html)
+        renderer.load(document: document)
     }
 }
 
 #else
 
 private struct HTMLRenderRepresentable: UIViewRepresentable {
-    let html: String
-    let resources: @MainActor @Sendable (String) -> Data?
-    let onEntryLink: @MainActor @Sendable (String) -> Void
+    let document: String
+    let resources: @MainActor @Sendable (Int, String) -> Data?
+    let onEntryLink: @MainActor @Sendable (Int, String) -> Void
     let onOutcome: (@MainActor (EntryRenderOutcome) -> Void)?
-    let onContentHeight: (@MainActor (CGFloat) -> Void)?
 
     func makeCoordinator() -> HTMLRenderer {
         HTMLRenderer(resources: resources)
@@ -400,16 +364,14 @@ private struct HTMLRenderRepresentable: UIViewRepresentable {
         return context.coordinator.webView
     }
 
-    func updateUIView(_ uiView: WKWebView, context: Context) {
+    func updateUIView(_ webView: WKWebView, context: Context) {
         update(context.coordinator)
-        context.coordinator.measureContentHeightAfterLayout()
     }
 
     private func update(_ renderer: HTMLRenderer) {
         renderer.onEntryLink = onEntryLink
         renderer.onOutcome = onOutcome
-        renderer.onContentHeight = onContentHeight
-        renderer.load(html: html)
+        renderer.load(document: document)
     }
 }
 

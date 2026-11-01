@@ -106,4 +106,18 @@ public enum ODCResource {
         let key = normalizedKey(joined)
         return key.isEmpty ? nil : key
     }
+
+    /// Splits one of our URLs into the section that asked for the payload and
+    /// the repository key. odc-resource:///s2/img/a.png resolves to
+    /// (2, "img/a.png"); a link without a section resolves with nil, so a page
+    /// that carries a single dictionary keeps working.
+    public static func address(from url: URL) -> (section: Int?, key: String)? {
+        guard let key = key(from: url) else { return nil }
+        let parts = key.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count == 2, let section = EntryHTML.sectionIndex(from: String(parts[0])) else {
+            return (nil, key)
+        }
+        let remainder = String(parts[1])
+        return remainder.isEmpty ? nil : (section, remainder)
+    }
 }
