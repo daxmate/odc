@@ -50,6 +50,12 @@ public final class DictionaryStore {
     @ObservationIgnored private var importTask: Task<Void, Never>?
     @ObservationIgnored private var conversionTask: Task<Void, Never>?
     @ObservationIgnored private var restoreTask: Task<Void, Never>?
+    /// Hides the import summary once its lifetime runs out.
+    @ObservationIgnored private var summaryTask: Task<Void, Never>?
+    /// Stamped on every summary change so a stale timer cannot clear a newer one.
+    @ObservationIgnored private var summaryGeneration = 0
+    /// How long a success note stays on screen.
+    @ObservationIgnored private let importSummaryLifetime: Duration
     /// Identifier of the library entry backing `documentURL`.
     @ObservationIgnored private var openItemID: UUID?
     @ObservationIgnored private var hasRestored = false
@@ -59,9 +65,14 @@ public final class DictionaryStore {
     /// Search debounce, in milliseconds.
     private static let debounceMilliseconds = 200
 
-    /// - Parameter container: Override for tests; defaults to Application Support.
-    public init(container: URL? = nil) {
+    /// - Parameters:
+    ///   - container: Override for tests; defaults to Application Support.
+    ///   - importSummaryLifetime: How long a success note stays on screen. The
+    ///     note describes the import that just finished, so it clears itself
+    ///     instead of sitting under the entry until someone dismisses it.
+    public init(container: URL? = nil, importSummaryLifetime: Duration = .seconds(6)) {
         self.container = container
+        self.importSummaryLifetime = importSummaryLifetime
     }
 
     // MARK: - Opening and closing
@@ -97,7 +108,7 @@ public final class DictionaryStore {
         errorMessage = nil
         isLoading = false
         importPhase = nil
-        importSummary = nil
+        clearImportSummary()
     }
 
     private func performOpen(url: URL, source: LibrarySourceDescriptor? = nil) async {
@@ -119,7 +130,7 @@ public final class DictionaryStore {
                     atPath: LibraryStore.openTarget(for: existing, in: directory).path
                 ) {
                     try await openExisting(existing, in: directory)
-                    importSummary = "这本词典已在库中，已直接打开。"
+                    presentImportSummary("这本词典已在库中，已直接打开。")
                     return
                 }
                 forgetStaleEntry(existing, in: directory)
@@ -134,7 +145,7 @@ public final class DictionaryStore {
             ) {
                 try register(orphan, in: directory)
                 try await openExisting(orphan, in: directory)
-                importSummary = "这本词典已在库中，已直接打开。"
+                presentImportSummary("这本词典已在库中，已直接打开。")
                 return
             }
 
@@ -222,7 +233,7 @@ public final class DictionaryStore {
     public func importMDX(url: URL) {
         conversionTask?.cancel()
         errorMessage = nil
-        importSummary = nil
+        clearImportSummary()
         importPhase = .preparing
         importProgress = .preparingSample
         conversionTask = Task { [weak self] in
@@ -230,8 +241,34 @@ public final class DictionaryStore {
         }
     }
 
-    /// Dismiss the post-import summary.
+    /// Dismiss the post-import summary right away.
     public func dismissImportSummary() {
+        clearImportSummary()
+    }
+
+    /// Shows the note for the import that just finished.
+    ///
+    /// A success note is transient: it clears itself after
+    /// `importSummaryLifetime` unless the reader closes it first. Failures go
+    /// through `errorMessage` and stay until dismissed.
+    func presentImportSummary(_ text: String) {
+        summaryGeneration += 1
+        let generation = summaryGeneration
+        importSummary = text
+        summaryTask?.cancel()
+        let lifetime = importSummaryLifetime
+        summaryTask = Task { [weak self] in
+            try? await Task.sleep(for: lifetime)
+            guard !Task.isCancelled, let self, self.summaryGeneration == generation else { return }
+            self.importSummary = nil
+            self.summaryTask = nil
+        }
+    }
+
+    private func clearImportSummary() {
+        summaryGeneration += 1
+        summaryTask?.cancel()
+        summaryTask = nil
         importSummary = nil
     }
 
@@ -247,7 +284,7 @@ public final class DictionaryStore {
                ) {
                 importPhase = nil
                 importProgress = nil
-                importSummary = "这本词典已在库中，已直接打开。"
+                presentImportSummary("这本词典已在库中，已直接打开。")
                 try await openExisting(existing, in: directory)
                 return
             }
@@ -268,7 +305,7 @@ public final class DictionaryStore {
             guard !Task.isCancelled else { return }
             importPhase = nil
             importProgress = nil
-            importSummary = result.report.summary
+            presentImportSummary(result.report.summary)
             await performOpen(url: result.outputURL, source: descriptor)
             discardStagedConversion(result.outputURL, in: staging)
         } catch is CancellationError {

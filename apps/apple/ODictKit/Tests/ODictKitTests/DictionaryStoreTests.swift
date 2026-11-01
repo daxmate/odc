@@ -197,6 +197,25 @@ final class DictionaryStoreTests: XCTestCase {
         XCTAssertEqual(store.query, "zzzzzz")
     }
 
+    func testImportSummaryClearsItself() async throws {
+        let store = DictionaryStore(importSummaryLifetime: .milliseconds(60))
+        store.presentImportSummary("导入完成：1 本")
+        XCTAssertEqual(store.importSummary, "导入完成：1 本", "the note is visible first")
+
+        try await waitUntil { store.importSummary == nil }
+    }
+
+    func testImportSummaryDismissesOnDemand() async throws {
+        let store = DictionaryStore(importSummaryLifetime: .seconds(60))
+        store.presentImportSummary("导入完成：1 本")
+        store.dismissImportSummary()
+        XCTAssertNil(store.importSummary)
+
+        // The cancelled timer must not resurrect or clear anything else.
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertNil(store.importSummary)
+    }
+
     func testCloseResetsState() {
         let store = DictionaryStore()
         store.close()
