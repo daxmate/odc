@@ -6,6 +6,8 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-01
+
 ### Added
 
 * Core, FFI (`odc_repo_search_substring_json`) and Apple: substring search over
