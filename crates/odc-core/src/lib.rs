@@ -19,6 +19,7 @@ pub mod cdc;
 pub mod entry;
 pub mod error;
 pub mod hash;
+pub mod link;
 pub mod mdd_import;
 pub mod mdx;
 pub mod mdx_import;
@@ -29,6 +30,7 @@ pub mod patch;
 pub mod repo;
 pub mod snapshot;
 pub mod store;
+pub mod stylesheets;
 pub mod varint;
 
 pub use entry::{Def, Entry};

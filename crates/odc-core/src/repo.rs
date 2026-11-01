@@ -1172,6 +1172,15 @@ impl Repo {
         Ok(Some(entry))
     }
 
+    /// Follows `@@@LINK=` redirects starting at `word`.
+    ///
+    /// MDict cross-reference entries carry a body of exactly
+    /// `@@@LINK=<target>` instead of markup. Callers that render entries
+    /// must resolve them, otherwise the line shows up as body text.
+    pub fn resolve_link(&self, word: &str) -> Result<crate::link::LinkResolution> {
+        crate::link::resolve(word, |key| self.show(key))
+    }
+
     /// Read the working-set payload for `word`.
     ///
     /// Committed entries keep only a pointer in `staging`; their payload is

@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 use odc_core::cbor;
 use odc_core::entry::{normalize_key, Def, Entry};
 use odc_core::hash;
+use odc_core::link::LinkResolution;
 use odc_core::merge::{self, Choice, MergeKind, MergeOutcome, Strategy};
 use odc_core::patch;
 use odc_core::repo::Repo;
@@ -336,19 +337,9 @@ fn run() -> odc_core::Result<ExitCode> {
         }
         Command::Show { word, json } => {
             let repo = Repo::open(&cli.repo)?;
-            match repo.show(&word)? {
-                Some(entry) => {
-                    if json {
-                        println!(
-                            "{}",
-                            serde_json::to_string_pretty(&entry_json(&entry)).unwrap_or_default()
-                        );
-                    } else {
-                        print_entry(&entry);
-                    }
-                    Ok(ExitCode::SUCCESS)
-                }
-                None => Err(odc_core::Error::InvalidArgument(format!(
+            match print_resolved(&repo, &word, json)? {
+                PrintOutcome::Printed => Ok(ExitCode::SUCCESS),
+                PrintOutcome::NotFound => Err(odc_core::Error::InvalidArgument(format!(
                     "entry not found: {}",
                     normalize_key(&word)
                 ))),
@@ -356,19 +347,9 @@ fn run() -> odc_core::Result<ExitCode> {
         }
         Command::Lookup { word, json } => {
             let repo = Repo::open(&cli.repo)?;
-            match repo.show(&word)? {
-                Some(entry) => {
-                    if json {
-                        println!(
-                            "{}",
-                            serde_json::to_string_pretty(&entry_json(&entry)).unwrap_or_default()
-                        );
-                    } else {
-                        print_entry(&entry);
-                    }
-                    Ok(ExitCode::SUCCESS)
-                }
-                None => {
+            match print_resolved(&repo, &word, json)? {
+                PrintOutcome::Printed => Ok(ExitCode::SUCCESS),
+                PrintOutcome::NotFound => {
                     eprintln!("not found: {}", normalize_key(&word));
                     Ok(ExitCode::from(4))
                 }
@@ -815,6 +796,56 @@ fn format_ts(ts: i64) -> String {
     format!("@{ts}")
 }
 
+/// What a word lookup ended up printing.
+enum PrintOutcome {
+    /// The entry (possibly after following link redirects) was printed.
+    Printed,
+    /// The dictionary carries no such word.
+    NotFound,
+}
+
+/// Looks a word up through link redirects and prints the entry it reaches.
+fn print_resolved(repo: &Repo, word: &str, json: bool) -> odc_core::Result<PrintOutcome> {
+    match repo.resolve_link(word)? {
+        LinkResolution::Found {
+            requested,
+            key,
+            hops,
+            entry,
+        } => {
+            if json {
+                let mut value = entry_json(&entry);
+                if hops > 0 {
+                    value["requested_key"] = json!(requested);
+                    value["redirect_hops"] = json!(hops);
+                }
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&value).unwrap_or_default()
+                );
+            } else {
+                if hops > 0 {
+                    eprintln!("@@@LINK: {requested} -> {key} ({hops} redirects)");
+                }
+                print_entry(&entry);
+            }
+            Ok(PrintOutcome::Printed)
+        }
+        LinkResolution::Missing { target, .. } => Err(odc_core::Error::InvalidArgument(format!(
+            "redirect target not found: {target}"
+        ))),
+        LinkResolution::Cycle { chain, .. } => Err(odc_core::Error::InvalidArgument(format!(
+            "redirect cycle: {}",
+            chain.join(" -> ")
+        ))),
+        LinkResolution::TooLong { chain, .. } => Err(odc_core::Error::InvalidArgument(format!(
+            "redirect chain too long: {}",
+            chain.join(" -> ")
+        ))),
+        LinkResolution::NotFound { .. } => Ok(PrintOutcome::NotFound),
+    }
+}
+
 fn entry_json(entry: &Entry) -> serde_json::Value {
     let defs: Vec<_> = entry
         .defs
@@ -1045,6 +1076,12 @@ fn import_mdx(
             report.resource_count,
             report.resource_bytes,
             report.mdd_files.len()
+        );
+    }
+    if report.stylesheets > 0 {
+        println!(
+            "stylesheets: {} copied from beside the .mdx",
+            report.stylesheets
         );
     }
     if report.skipped_blocks > 0 {

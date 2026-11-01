@@ -58,6 +58,25 @@ char *odc_repo_entry_json(const OdcRepo *repo, const char *key_utf8,
                           char **error_message);
 
 /*
+ * Resolve a word through `@@@LINK=` redirects and return a NUL-terminated JSON
+ * object whose "status" is one of:
+ *
+ *   "found"     {"status","requested","key","hops","entry"}
+ *   "missing"   {"status","requested","target","hops"}
+ *   "cycle"     {"status","requested","chain"}
+ *   "too_long"  {"status","requested","chain"}
+ *   "not_found" {"status","requested"}
+ *
+ * "entry" carries the same object odc_repo_entry_json() returns. Returns NULL
+ * on failure; *error_message then carries the diagnostic. Release the result
+ * with odc_string_free().
+ */
+char *odc_repo_entry_link_json(const OdcRepo *repo, const char *key_utf8,
+                               char **error_message);
+
+
+
+/*
  * Import an MDX file into a standalone .odc file.
  *
  * Returns 0 on success and -1 on failure. On success *report_json_out holds a

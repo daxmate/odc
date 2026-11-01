@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 use std::ptr;
 
 use odc_core::cbor::Value as CborValue;
+use odc_core::link::LinkResolution;
 use odc_core::pack::PackOptions;
 use odc_core::{import_mdx, Entry, ImportProgress, MdxImportOptions, MdxImportReport, Repo};
 use serde_json::{json, Map, Value as JsonValue};
@@ -240,6 +241,41 @@ pub unsafe extern "C" fn odc_repo_entry_json(
             .map_err(|error| error.to_string())?
             .ok_or_else(|| format!("entry not found: {key}"))?;
         to_c_string(&entry_to_json(&entry))
+    })
+}
+
+/// Resolve a word through `@@@LINK=` redirects.
+///
+/// Returns a JSON object whose `status` is one of:
+///
+/// * `found` — `~{ requested, key, hops, entry }`; `key` is the entry that
+///   was finally found and `hops` the number of redirects followed;
+/// * `missing` — `~{ requested, target, hops }`; a redirect pointed at a word
+///   the dictionary does not carry;
+/// * `cycle` / `too_long` — `~{ requested, chain }`; the chain never settles;
+/// * `not_found` — `~{ requested }`; the word itself is absent.
+///
+/// # Safety
+///
+/// `repo` must be `NULL` or a live handle; `error_message` must be
+/// `NULL` or point to writable storage for one `char *`.
+#[no_mangle]
+pub unsafe extern "C" fn odc_repo_entry_link_json(
+    repo: *const OdcRepo,
+    key_utf8: *const c_char,
+    error_message: *mut *mut c_char,
+) -> *mut c_char {
+    guarded(error_message, ptr::null_mut(), || {
+        let repo = repo_ref(repo)?;
+        let key = text_arg(key_utf8, "key")?;
+        if key.trim().is_empty() {
+            return Err("key must not be empty".to_string());
+        }
+        let resolution = repo
+            .repo
+            .resolve_link(&key)
+            .map_err(|error| error.to_string())?;
+        to_c_string(&link_resolution_json(&resolution))
     })
 }
 
@@ -799,6 +835,48 @@ fn to_c_string(value: &JsonValue) -> Result<*mut c_char, String> {
     CString::new(encoded)
         .map(CString::into_raw)
         .map_err(|_| "JSON payload contains an interior NUL byte".to_string())
+}
+
+/// JSON view of a redirect resolution, shared by the C ABI.
+fn link_resolution_json(resolution: &LinkResolution) -> JsonValue {
+    match resolution {
+        LinkResolution::Found {
+            requested,
+            key,
+            hops,
+            entry,
+        } => json!({
+            "status": "found",
+            "requested": requested,
+            "key": key,
+            "hops": hops,
+            "entry": entry_to_json(entry),
+        }),
+        LinkResolution::Missing {
+            requested,
+            target,
+            hops,
+        } => json!({
+            "status": "missing",
+            "requested": requested,
+            "target": target,
+            "hops": hops,
+        }),
+        LinkResolution::Cycle { requested, chain } => json!({
+            "status": "cycle",
+            "requested": requested,
+            "chain": chain,
+        }),
+        LinkResolution::TooLong { requested, chain } => json!({
+            "status": "too_long",
+            "requested": requested,
+            "chain": chain,
+        }),
+        LinkResolution::NotFound { requested } => json!({
+            "status": "not_found",
+            "requested": requested,
+        }),
+    }
 }
 
 fn entry_to_json(entry: &Entry) -> JsonValue {

@@ -14,6 +14,7 @@ use crate::mdd_import::{self, MddImportReport, MddScan, MddVolumeReport};
 use crate::mdx::{entry_from_record, MdxHeader, MdxKeys, MdxSource};
 use crate::mdx_scan::{self, CorruptBlock};
 use crate::repo::Repo;
+use crate::stylesheets;
 
 /// Options for `import_mdx`.
 pub struct MdxImportOptions {
@@ -237,6 +238,9 @@ pub struct MdxImportReport {
     pub resource_bytes: u64,
     /// Non-fatal problems: unreadable or corrupt MDD volumes, per line.
     pub warnings: Vec<String>,
+    /// Stylesheets copied from beside the .mdx because the volumes lacked
+    /// them; zero when every sheet came out of the .mdd.
+    pub stylesheets: usize,
 }
 
 /// Import an MDX file into `repo`.
@@ -323,6 +327,7 @@ pub fn import_mdx(
     let mut processed = 0_u64;
     let entries_total = limit.map_or(header.records, |cap| (cap as u64).min(header.records));
 
+    let mut style_keys = std::collections::BTreeSet::new();
     let report = repo.import_stream(
         || loop {
             if limit.is_some_and(|cap| taken >= cap) {
@@ -361,6 +366,9 @@ pub fn import_mdx(
             if collided {
                 deduplicated += 1;
             }
+            for key in stylesheets::link_targets(entry.raw_html.as_deref().unwrap_or_default()) {
+                style_keys.insert(key);
+            }
             taken += 1;
             return Ok(Some(entry));
         },
@@ -384,6 +392,10 @@ pub fn import_mdx(
         None => MddImportReport::default(),
     };
 
+    // Sheets the volumes do not carry are read from beside the .mdx; without
+    // this an entry that links its CSS out of band renders unstyled.
+    let imported_stylesheets = import_sibling_stylesheets(path, &style_keys, repo)?;
+
     // Everything the core owns is written; committing the working set and
     // packing the container happen in the caller, hence a stage of their own.
     let complete = entries_total + scan.total;
@@ -396,6 +408,7 @@ pub fn import_mdx(
     });
 
     Ok(MdxImportReport {
+        stylesheets: imported_stylesheets,
         imported_entries: taken,
         written: report.written,
         removed: report.removed,
@@ -413,4 +426,33 @@ pub fn import_mdx(
         resource_bytes: mdd.resource_bytes,
         warnings,
     })
+}
+
+/// Copies stylesheets the entries link to but the MDD volumes do not carry.
+///
+/// MDict keeps CSS next to the .mdx as often as inside the .mdd; the volumes
+/// are authoritative, so a sibling file only fills a gap.
+fn import_sibling_stylesheets(
+    mdx: &Path,
+    keys: &std::collections::BTreeSet<String>,
+    repo: &mut Repo,
+) -> Result<usize> {
+    let Some(dir) = mdx.parent() else {
+        return Ok(0);
+    };
+    let mut imported = 0usize;
+    for key in keys {
+        if repo.resource(key)?.is_some() {
+            continue;
+        }
+        let candidate = dir.join(key);
+        if !candidate.is_file() {
+            continue;
+        }
+        if let Ok(bytes) = std::fs::read(&candidate) {
+            repo.put_resource(key, &bytes)?;
+            imported += 1;
+        }
+    }
+    Ok(imported)
 }
