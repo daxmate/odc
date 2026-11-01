@@ -351,10 +351,24 @@ public final class DictionaryStore {
         }
         var state = LibraryStore.load(from: directory)
         let pruned = LibraryStore.pruneMissing(in: &state, directory: directory)
+        // Copies that predate `library.json` (older builds kept no index) are
+        // registered so the reader sees them instead of an empty window.
+        let adopted = LibraryStore.adoptableCopies(in: directory, registered: state)
+        for item in adopted {
+            LibraryStore.add(item, to: &state)
+        }
         library = state
         if !pruned.isEmpty {
             libraryLog.warning("dropped \(pruned.count) missing librar\(pruned.count == 1 ? "y item" : "y items")")
+        }
+        if !pruned.isEmpty || !adopted.isEmpty {
             saveLibrary(in: directory)
+        }
+        if !adopted.isEmpty {
+            libraryLog.info("adopted \(adopted.count) librar\(adopted.count == 1 ? "y copy" : "y copies")")
+            // Nothing is opened behind the reader's back: the adopted entries
+            // may be duplicates, so they pick the one to open.
+            return
         }
         // A file opened while the restore was running wins.
         guard documentURL == nil,

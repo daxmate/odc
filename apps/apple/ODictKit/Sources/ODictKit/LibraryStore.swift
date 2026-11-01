@@ -41,6 +41,14 @@ public struct LibraryItem: Codable, Identifiable, Sendable, Equatable {
 }
 
 extension LibraryItem {
+    /// True for a copy the app found on disk without knowing its source file.
+    ///
+    /// Placeholders carry a generated name and no source identity; a later
+    /// import of the same file replaces the descriptive fields in place.
+    public var isPlaceholder: Bool {
+        sourceName.isEmpty
+    }
+
     /// Identity a fresh import of the same file would produce.
     public var sourceDescriptor: LibrarySourceDescriptor {
         LibrarySourceDescriptor(name: sourceName, bytes: sourceBytes, contentHash: sourceHash)
@@ -163,7 +171,10 @@ public enum LibraryStore {
     /// When an entry already covers the source the existing entry (and therefore
     /// its copy on disk) is kept; only the descriptive fields are refreshed.
     public static func add(_ item: LibraryItem, to state: inout LibraryState) {
-        let match = state.items.firstIndex { $0.id == item.id || $0.matches(item) }
+        let match = state.items.firstIndex {
+            $0.id == item.id
+                || (!item.isPlaceholder && !$0.isPlaceholder && $0.matches(item))
+        }
         guard let index = match else {
             state.items.append(item)
             return
@@ -209,10 +220,14 @@ public enum LibraryStore {
             includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles]
         )
-        for entry in entries.sorted(by: { $0.lastPathComponent < $1.lastPathComponent })
-        where entry.pathExtension == "odc" {
+        for entry in entries.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+            let values = try? entry.resourceValues(forKeys: [.isDirectoryKey, .creationDateKey])
+            guard values?.isDirectory == true else { continue }
             let storedName = entry.lastPathComponent
-            if state.items.contains(where: { $0.storedName == storedName }) {
+            // Entries with a real source are already accounted for; a
+            // placeholder is upgraded in place instead of copied again.
+            let registered = state.items.first { $0.storedName == storedName }
+            if let registered, !registered.isPlaceholder {
                 continue
             }
             let database = entry.appending(path: "odc.db", directoryHint: .notDirectory)
@@ -222,15 +237,65 @@ public enum LibraryStore {
                 continue
             }
             return LibraryItem(
-                id: UUID(uuidString: entry.deletingPathExtension().lastPathComponent) ?? UUID(),
+                id: registered?.id
+                    ?? UUID(uuidString: entry.deletingPathExtension().lastPathComponent)
+                    ?? UUID(),
                 displayName: source.name,
                 storedName: storedName,
                 sourceName: source.name,
                 sourceBytes: source.bytes,
-                sourceHash: hash
+                sourceHash: hash,
+                importedAt: registered?.importedAt ?? Date()
             )
         }
         return nil
+    }
+
+    /// Copies on disk that `library.json` does not know about yet.
+    ///
+    /// Used on launch so a build that predates the library still shows the
+    /// dictionaries the reader imported earlier. The source file is unknown, so
+    /// the name is a placeholder (`未命名词典 <uuid 前 8 位>`) that a later
+    /// import of the same file replaces; nothing is guessed from the content.
+    public static func adoptableCopies(
+        in directory: URL,
+        registered: LibraryState = LibraryState(),
+        fileManager: FileManager = .default
+    ) -> [LibraryItem] {
+        guard let entries = try? fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.isDirectoryKey, .creationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+
+        var items: [LibraryItem] = []
+        for entry in entries.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+            let storedName = entry.lastPathComponent
+            if registered.items.contains(where: { $0.storedName == storedName }) {
+                continue
+            }
+            let values = try? entry.resourceValues(forKeys: [.isDirectoryKey, .creationDateKey])
+            guard values?.isDirectory == true else { continue }
+            let database = entry.appending(path: "odc.db", directoryHint: .notDirectory)
+            let databaseValues = try? database.resourceValues(forKeys: [.fileSizeKey])
+            guard let size = databaseValues?.fileSize, size > 0,
+                  fileManager.fileExists(atPath: database.path) else { continue }
+            let id = UUID(uuidString: entry.deletingPathExtension().lastPathComponent) ?? UUID()
+            items.append(
+                LibraryItem(
+                    id: id,
+                    displayName: "未命名词典 \(id.uuidString.prefix(8))",
+                    storedName: storedName,
+                    sourceName: "",
+                    sourceBytes: Int64(size),
+                    sourceHash: nil,
+                    importedAt: values?.creationDate ?? Date()
+                )
+            )
+        }
+        return items
     }
 
     /// The entry for the copy stored under `storedName`.

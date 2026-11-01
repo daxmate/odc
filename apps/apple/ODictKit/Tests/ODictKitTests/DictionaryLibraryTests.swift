@@ -79,6 +79,93 @@ final class DictionaryLibraryTests: XCTestCase {
         XCTAssertEqual(copies.count, 1, "adopting must not write a second copy")
     }
 
+    func testRestoreAdoptsCopiesThatPredateTheLibrary() async throws {
+        let container = try Fixture.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: container) }
+        let database = try Data(contentsOf: Fixture.demoRepository.appending(path: "odc.db"))
+
+        var storedNames: [String] = []
+        var createdAt: [String: Date] = [:]
+        for _ in 0..<2 {
+            let id = UUID()
+            let copy = container.appending(
+                path: "\(id.uuidString).odc",
+                directoryHint: .isDirectory
+            )
+            try FileManager.default.createDirectory(at: copy, withIntermediateDirectories: true)
+            try database.write(to: copy.appending(path: "odc.db"))
+            storedNames.append(copy.lastPathComponent)
+            let created = try copy.resourceValues(forKeys: [.creationDateKey]).creationDate
+            createdAt[copy.lastPathComponent] = created
+        }
+
+        let store = DictionaryStore(container: container)
+        store.restore()
+        await store.awaitRestore()
+
+        XCTAssertNil(store.documentURL, "adopted copies are not opened without the reader picking one")
+        XCTAssertEqual(store.library.items.count, 2)
+        XCTAssertEqual(Set(store.library.items.map(\.storedName)), Set(storedNames))
+        for item in store.library.items {
+            XCTAssertTrue(item.displayName.hasPrefix("未命名词典 "), item.displayName)
+            XCTAssertEqual(item.displayName.count, "未命名词典 ".count + 8)
+            XCTAssertTrue(item.sourceName.isEmpty)
+            XCTAssertEqual(item.sourceBytes, Int64(database.count))
+            let expected = try XCTUnwrap(createdAt[item.storedName])
+            XCTAssertEqual(
+                item.importedAt.timeIntervalSince1970,
+                expected.timeIntervalSince1970,
+                accuracy: 1,
+                "the directory creation date is the import date"
+            )
+        }
+        XCTAssertEqual(LibraryStore.load(from: container).items.count, 2)
+
+        let second = DictionaryStore(container: container)
+        second.restore()
+        await second.awaitRestore()
+
+        XCTAssertEqual(second.library.items.count, 2, "adoption is idempotent")
+        XCTAssertEqual(LibraryStore.load(from: container).items.count, 2)
+    }
+
+    func testReimportingAnAdoptedCopyReplacesThePlaceholderName() async throws {
+        let container = try Fixture.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: container) }
+        let picked = try Fixture.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: picked) }
+        let database = try Data(contentsOf: Fixture.demoRepository.appending(path: "odc.db"))
+
+        let id = UUID()
+        let copy = container.appending(path: "\(id.uuidString).odc", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: copy, withIntermediateDirectories: true)
+        try database.write(to: copy.appending(path: "odc.db"))
+
+        let store = DictionaryStore(container: container)
+        store.restore()
+        await store.awaitRestore()
+        XCTAssertTrue(try XCTUnwrap(store.library.items.first).isPlaceholder)
+
+        let file = picked.appending(path: "demo.odc")
+        try database.write(to: file)
+        store.open(url: file)
+        try await waitUntil { store.importSummary != nil }
+
+        XCTAssertEqual(store.library.items.count, 1, "the adopted copy is upgraded, not duplicated")
+        let item = try XCTUnwrap(store.library.items.first)
+        XCTAssertFalse(item.isPlaceholder)
+        XCTAssertEqual(item.displayName, "demo.odc")
+        XCTAssertEqual(item.sourceName, "demo.odc")
+        XCTAssertEqual(item.storedName, copy.lastPathComponent)
+        XCTAssertEqual(store.documentURL?.lastPathComponent, copy.lastPathComponent)
+        XCTAssertEqual(
+            try FileManager.default.contentsOfDirectory(atPath: container.path)
+                .filter { $0.hasSuffix(".odc") }
+                .count,
+            1
+        )
+    }
+
     func testRemovingAnItemDeletesItsCopyAndEntry() async throws {
         let container = try Fixture.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: container) }
