@@ -458,4 +458,123 @@ final class EntryHTMLTests: XCTestCase {
         XCTAssertTrue(EntryHTML.hasMarkup("<p>x</p>"))
     }
 
+    // MARK: - One document, one shadow root per dictionary (v0.5.1)
+
+    /// The page scrolls natively only while it stays a single document: one
+    /// doctype, one section and one declarative shadow root per dictionary.
+    func testTwoDictionariesShareOneDocumentWithASectionAndShadowRootEach() {
+        let document = EntryHTML.page([
+            section("<p>alpha</p>", name: "Alpha"),
+            section("<p>beta</p>", name: "Beta"),
+        ])
+
+        XCTAssertEqual(document.components(separatedBy: "<!DOCTYPE html>").count - 1, 1, document)
+        XCTAssertEqual(document.components(separatedBy: "<html>").count - 1, 1, document)
+        XCTAssertEqual(
+            document.components(separatedBy: "<section class=\"odc-section\">").count - 1,
+            2,
+            document
+        )
+        XCTAssertEqual(
+            document.components(separatedBy: "<template shadowrootmode=\"open\">").count - 1,
+            2,
+            document
+        )
+        XCTAssertTrue(document.contains("<h2 class=\"odc-dictionary\">Alpha</h2>"), document)
+        XCTAssertTrue(document.contains("<h2 class=\"odc-dictionary\">Beta</h2>"), document)
+        guard let alpha = document.range(of: "Alpha</h2>")?.lowerBound,
+              let beta = document.range(of: "Beta</h2>")?.lowerBound
+        else { return XCTFail("a dictionary title went missing: \(document)") }
+        XCTAssertTrue(alpha < beta, document)
+    }
+
+    /// A lone dictionary keeps the page chrome quiet: no title, same
+    /// single-document shape.
+    func testSingleDictionaryPageHasNoTitleAndOneShadowRoot() {
+        let document = EntryHTML.page([section("<p>x</p>", name: "Only")])
+
+        XCTAssertEqual(document.components(separatedBy: "<!DOCTYPE html>").count - 1, 1, document)
+        XCTAssertEqual(
+            document.components(separatedBy: "<section class=\"odc-section\">").count - 1,
+            1,
+            document
+        )
+        XCTAssertEqual(
+            document.components(separatedBy: "<template shadowrootmode=\"open\">").count - 1,
+            1,
+            document
+        )
+        XCTAssertFalse(document.contains("<h2"), document)
+        XCTAssertFalse(document.contains("Only"), document)
+    }
+
+    /// A dictionary's own style block must stay inside its shadow template;
+    /// the page stylesheet carries no dictionary selectors.
+    func testDictionaryStylesStayInsideTheirOwnShadowRoot() {
+        let document = EntryHTML.page([
+            section("<style>.def { color: red; }</style><p class=\"def\">a</p>", name: "A"),
+            section("<style>.def { color: blue; }</style><p class=\"def\">b</p>", name: "B"),
+        ])
+
+        guard let firstRoot = document.range(of: "<template shadowrootmode=\"open\">"),
+              let secondRoot = document.range(
+                  of: "<template shadowrootmode=\"open\">",
+                  range: firstRoot.upperBound..<document.endIndex
+              )
+        else { return XCTFail("expected two shadow templates: \(document)") }
+
+        let pageChrome = document[document.startIndex..<firstRoot.lowerBound]
+        let firstSection = document[firstRoot.lowerBound..<secondRoot.lowerBound]
+        let secondSection = document[secondRoot.lowerBound...]
+
+        XCTAssertFalse(pageChrome.contains(".def"), "page chrome leaked a dictionary selector: \(pageChrome)")
+        XCTAssertTrue(firstSection.contains(".def { color: red; }"), String(firstSection))
+        XCTAssertFalse(firstSection.contains("color: blue"), String(firstSection))
+        XCTAssertTrue(secondSection.contains(".def { color: blue; }"), String(secondSection))
+        XCTAssertFalse(secondSection.contains("color: red"), String(secondSection))
+    }
+
+    /// html/body are page elements, not shadow content: the rewrite has to map
+    /// them onto the host and .odc-body, and leave at-rule bodies alone except
+    /// for the selectors they legitimately contain.
+    func testShadowCSSMapsBodyAndHtmlWithoutTouchingAtRulePreludes() {
+        XCTAssertEqual(EntryHTML.shadowCSS("body { color: red; }"), ".odc-body { color: red; }")
+        XCTAssertEqual(EntryHTML.shadowCSS("html { color: red; }"), ":host { color: red; }")
+        XCTAssertEqual(EntryHTML.shadowCSS("body .x { color: red; }"), ".odc-body .x { color: red; }")
+        XCTAssertEqual(
+            EntryHTML.shadowCSS("@media screen { body { color: red; } }"),
+            "@media screen { .odc-body { color: red; } }"
+        )
+        XCTAssertEqual(
+            EntryHTML.shadowCSS("@keyframes fade { from { opacity: 0; } to { opacity: 1; } }"),
+            "@keyframes fade { from { opacity: 0; } to { opacity: 1; } }"
+        )
+    }
+
+    /// The same sheet key resolved for two dictionaries must land in its own
+    /// section instead of being inlined into both.
+    func testEachSectionCarriesItsOwnInlinedStylesheet() {
+        let document = EntryHTML.page([
+            EntryHTML.PageSection(
+                dictionaryID: "a",
+                name: "A",
+                html: "<p class=\"def\">one</p>",
+                stylesheets: [EntryHTML.LinkedStylesheet(key: "style.css", css: ".def { color: red; }")]
+            ),
+            EntryHTML.PageSection(
+                dictionaryID: "b",
+                name: "B",
+                html: "<p class=\"def\">two</p>",
+                stylesheets: [EntryHTML.LinkedStylesheet(key: "style.css", css: ".def { color: blue; }")]
+            ),
+        ])
+
+        XCTAssertEqual(document.components(separatedBy: ".def { color: red; }").count - 1, 1, document)
+        XCTAssertEqual(document.components(separatedBy: ".def { color: blue; }").count - 1, 1, document)
+        guard let red = document.range(of: ".def { color: red; }"),
+              let blue = document.range(of: ".def { color: blue; }")
+        else { return XCTFail("a stylesheet went missing: \(document)") }
+        XCTAssertTrue(red.lowerBound < blue.lowerBound, document)
+    }
+
 }

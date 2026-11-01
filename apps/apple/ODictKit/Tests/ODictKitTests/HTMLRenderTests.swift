@@ -166,6 +166,112 @@ final class HTMLRenderTests: XCTestCase {
         XCTAssertEqual(task.finished, 1)
     }
 
+    // MARK: - Single-page scrolling and style isolation (v0.5.1)
+
+    /// Two dictionaries can disagree about what `.def` looks like; each shadow
+    /// root must keep its own colour, and both bodies must stay readable.
+    func testTwoDictionariesKeepTheirOwnConflictingStyles() async throws {
+        let renderer = HTMLRenderer(resources: { _, _ in nil })
+        renderer.load(document: EntryHTML.page([
+            EntryHTML.PageSection(
+                dictionaryID: "a",
+                name: "A",
+                html: "<p class=\"def\">alpha text</p>",
+                stylesheets: [EntryHTML.LinkedStylesheet(key: "style.css", css: ".def { color: rgb(255, 0, 0); }")]
+            ),
+            EntryHTML.PageSection(
+                dictionaryID: "b",
+                name: "B",
+                html: "<p class=\"def\">beta text</p>",
+                stylesheets: [EntryHTML.LinkedStylesheet(key: "style.css", css: ".def { color: rgb(0, 0, 255); }")]
+            ),
+        ]))
+
+        let colours = await Self.waitForJS("""
+        (function () {
+          var sections = document.querySelectorAll('.odc-section');
+          if (sections.length < 2) { return null; }
+          return [].map.call(sections, function (section) {
+            var target = section.shadowRoot && section.shadowRoot.querySelector('.def');
+            return target ? getComputedStyle(target).color : null;
+          }).join('|');
+        })()
+        """, in: renderer.webView) { $0 == "rgb(255, 0, 0)|rgb(0, 0, 255)" }
+        XCTAssertEqual(colours, "rgb(255, 0, 0)|rgb(0, 0, 255)")
+
+        let text = await Self.bodyText(in: renderer.webView)
+        XCTAssertTrue(text.contains("alpha text"), "body text was: \(text)")
+        XCTAssertTrue(text.contains("beta text"), "body text was: \(text)")
+    }
+
+    /// A tall entry in a short viewport must actually scroll: the page owns the
+    /// scrolling, not a nested element that could be pinned.
+    func testLongEntryScrollsInASmallViewport() async throws {
+        let renderer = HTMLRenderer(resources: { _, _ in nil })
+        renderer.webView.frame = CGRect(x: 0, y: 0, width: 400, height: 300)
+        let paragraphs = (0..<200).map { "<p>line \($0)</p>" }.joined()
+        renderer.load(document: Self.page(paragraphs))
+
+        let heights = await Self.waitForJS("""
+        (function () {
+          var scroller = document.scrollingElement;
+          if (!scroller) { return null; }
+          return String(scroller.scrollHeight) + '|' + String(scroller.clientHeight);
+        })()
+        """, in: renderer.webView) { value in
+            guard let value else { return false }
+            let parts = value.split(separator: "|").compactMap { Int($0) }
+            return parts.count == 2 && parts[0] > parts[1]
+        }
+        XCTAssertNotNil(heights, "the document never became scrollable")
+
+        _ = await Self.evaluate("window.scrollTo(0, 500);", in: renderer.webView)
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        let offset = await Self.evaluate("String(window.scrollY)", in: renderer.webView)
+        XCTAssertGreaterThan(Int(offset ?? "") ?? 0, 0, "scrollY was: \(String(describing: offset))")
+    }
+
+    /// The dictionary's `body` rule has to style the shadow root's wrapper —
+    /// a string that merely looks rewritten would not compute to 20px.
+    func testBodyStyleReachesShadowContent() async throws {
+        let renderer = HTMLRenderer(resources: { _, _ in nil })
+        renderer.load(document: Self.page("""
+        <style>body { font-size: 20px; }</style>
+        <p class="def">sized</p>
+        """))
+
+        let size = await Self.waitForJS("""
+        (function () {
+          var section = document.querySelector('.odc-section');
+          var node = section && section.shadowRoot && section.shadowRoot.querySelector('.odc-body');
+          return node ? getComputedStyle(node).fontSize : null;
+        })()
+        """, in: renderer.webView) { $0 == "20px" }
+        XCTAssertEqual(size, "20px")
+    }
+
+    /// The same resource key in two dictionaries resolves against the section
+    /// that asked for it.
+    func testEachSectionKeepsItsOwnResourceURL() async throws {
+        let renderer = HTMLRenderer(resources: { _, _ in nil })
+        renderer.load(document: EntryHTML.page([
+            EntryHTML.PageSection(dictionaryID: "a", name: "A", html: "<img src=\"pic.png\"><p>one</p>"),
+            EntryHTML.PageSection(dictionaryID: "b", name: "B", html: "<img src=\"pic.png\"><p>two</p>"),
+        ]))
+
+        let sources = await Self.waitForJS("""
+        (function () {
+          var sections = document.querySelectorAll('.odc-section');
+          if (sections.length < 2) { return null; }
+          return [].map.call(sections, function (section) {
+            var image = section.shadowRoot && section.shadowRoot.querySelector('img');
+            return image ? image.getAttribute('src') : null;
+          }).join('|');
+        })()
+        """, in: renderer.webView) { $0 == "odc-resource:///s0/pic.png|odc-resource:///s1/pic.png" }
+        XCTAssertEqual(sources, "odc-resource:///s0/pic.png|odc-resource:///s1/pic.png")
+    }
+
     // MARK: - Helpers
 
     /// A one-dictionary page, the shape the reader hands the web view.
@@ -225,6 +331,24 @@ final class HTMLRenderTests: XCTestCase {
                 continuation.resume(returning: value as? String)
             }
         }
+    }
+
+    /// Polls a script until it satisfies `predicate`, so a load still in flight
+    /// is not mistaken for a broken document.
+    static func waitForJS(
+        _ script: String,
+        in webView: WKWebView,
+        timeout: TimeInterval = 10,
+        satisfies predicate: @escaping (String?) -> Bool
+    ) async -> String? {
+        let deadline = Date().addingTimeInterval(timeout)
+        var last: String?
+        while Date() < deadline {
+            last = await Self.evaluate(script, in: webView)
+            if predicate(last) { return last }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return last
     }
 }
 
