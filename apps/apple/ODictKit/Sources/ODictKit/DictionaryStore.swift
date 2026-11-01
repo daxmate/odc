@@ -27,6 +27,8 @@ public final class DictionaryStore {
     public private(set) var isLoading = false
     /// Stage of a running MDX conversion, `nil` when idle.
     public private(set) var importPhase: MDXImportPhase?
+    /// Overall progress of the running conversion, `nil` when idle.
+    public private(set) var importProgress: MDXImportProgress?
     /// Summary shown once an MDX conversion finished, until dismissed.
     public private(set) var importSummary: String?
     /// Dictionaries copied into the app's storage.
@@ -213,6 +215,7 @@ public final class DictionaryStore {
         errorMessage = nil
         importSummary = nil
         importPhase = .preparing
+        importProgress = .preparingSample
         conversionTask = Task { [weak self] in
             await self?.performImport(url: url)
         }
@@ -234,24 +237,29 @@ public final class DictionaryStore {
                    atPath: LibraryStore.openTarget(for: existing, in: directory).path
                ) {
                 importPhase = nil
+                importProgress = nil
                 importSummary = "这本词典已在库中，已直接打开。"
                 try await openExisting(existing, in: directory)
                 return
             }
-            let result = try await MDXImporter.convert(source: url) { [weak self] phase in
+            let result = try await MDXImporter.convert(source: url, onProgress: { [weak self] sample in
                 Task { @MainActor in
-                    self?.importPhase = phase
+                    self?.importProgress = sample
+                    self?.importPhase = sample.phase
                 }
-            }
+            })
             guard !Task.isCancelled else { return }
             importPhase = nil
+            importProgress = nil
             importSummary = result.report.summary
             await performOpen(url: result.outputURL, source: descriptor)
         } catch is CancellationError {
             importPhase = nil
+            importProgress = nil
             return
         } catch {
             importPhase = nil
+            importProgress = nil
             errorMessage = error.localizedDescription
         }
     }

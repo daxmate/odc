@@ -192,4 +192,75 @@ final class MDXImportTests: XCTestCase {
         let source = directory.appending(path: "dictionary.mdx")
         XCTAssertEqual(MDXImporter.volumes(for: source), [])
     }
+
+    func testProgressTallyWeighsEntriesAndResources() {
+        var tally = MDXImportProgressTally()
+
+        let preparing = tally.apply(stage: .preparing, done: 0, total: 100, volumeIndex: 0, volumeCount: 1)
+        XCTAssertEqual(preparing.fraction, 0, accuracy: 0.0001)
+        XCTAssertEqual(preparing.detail, "扫描到 100 个资源")
+        XCTAssertTrue(preparing.isDeterminate)
+
+        let half = tally.apply(stage: .entries, done: 50, total: 100, volumeIndex: 0, volumeCount: 0)
+        XCTAssertEqual(half.fraction, 0.25, accuracy: 0.0001, "50 of 200 records")
+        XCTAssertEqual(half.title, "导入词条")
+        XCTAssertEqual(half.detail, "词条 50 / 100")
+
+        let entriesDone = tally.apply(stage: .entries, done: 100, total: 100, volumeIndex: 0, volumeCount: 0)
+        XCTAssertEqual(entriesDone.fraction, 0.5, accuracy: 0.0001)
+
+        let volumes = tally.apply(stage: .resources, done: 100, total: 100, volumeIndex: 2, volumeCount: 2)
+        XCTAssertEqual(volumes.fraction, 1, accuracy: 0.0001)
+        XCTAssertEqual(volumes.detail, "资源 100 / 100 · 卷 2/2")
+        XCTAssertEqual(volumes.percent, 100)
+        XCTAssertEqual(volumes.title, "导入资源")
+    }
+
+    func testProgressTallyFormatsCountsAndVolumes() {
+        var tally = MDXImportProgressTally()
+        _ = tally.apply(stage: .preparing, done: 0, total: 182_429, volumeIndex: 0, volumeCount: 2)
+        _ = tally.apply(stage: .entries, done: 52_738, total: 52_738, volumeIndex: 0, volumeCount: 0)
+        let sample = tally.apply(
+            stage: .resources,
+            done: 45_000,
+            total: 182_429,
+            volumeIndex: 2,
+            volumeCount: 2
+        )
+        XCTAssertEqual(sample.detail, "资源 45,000 / 182,429 · 卷 2/2")
+        XCTAssertEqual(sample.percent, 42, "97,738 of 235,167 records")
+    }
+
+    func testProgressTallyNeverMovesBackwards() {
+        var tally = MDXImportProgressTally()
+        _ = tally.apply(stage: .entries, done: 0, total: 100, volumeIndex: 0, volumeCount: 0)
+        let ahead = tally.apply(stage: .entries, done: 60, total: 100, volumeIndex: 0, volumeCount: 0)
+        let behind = tally.apply(stage: .entries, done: 10, total: 100, volumeIndex: 0, volumeCount: 0)
+        XCTAssertGreaterThan(ahead.fraction, 0)
+        XCTAssertEqual(behind.fraction, ahead.fraction, accuracy: 0.0001)
+    }
+
+    func testProgressTallyHandlesEmptyJobs() {
+        var tally = MDXImportProgressTally()
+        let empty = tally.apply(stage: .preparing, done: 0, total: 0, volumeIndex: 0, volumeCount: 0)
+        XCTAssertEqual(empty.fraction, 0)
+        XCTAssertFalse(empty.isDeterminate, "an unknown total keeps the spinner")
+
+        let committing = tally.apply(stage: .committing, done: 0, total: 0, volumeIndex: 0, volumeCount: 0)
+        XCTAssertEqual(committing.fraction, 1)
+
+        let finished = tally.finish()
+        XCTAssertEqual(finished.fraction, 1)
+        XCTAssertEqual(finished.percent, 100)
+        XCTAssertEqual(finished.stage, .finished)
+    }
+
+    func testLegacyPhaseFollowsTheDetailedStage() {
+        var tally = MDXImportProgressTally()
+        let preparing = tally.apply(stage: .preparing, done: 0, total: 0, volumeIndex: 0, volumeCount: 0)
+        XCTAssertEqual(preparing.phase, .preparing)
+        let importing = tally.apply(stage: .entries, done: 1, total: 2, volumeIndex: 0, volumeCount: 0)
+        XCTAssertEqual(importing.phase, .importing)
+        XCTAssertEqual(tally.finish().phase, .finished)
+    }
 }

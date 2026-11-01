@@ -45,8 +45,8 @@ public struct DictionaryRootView: View {
                 Text(store.errorMessage ?? "")
             }
             .overlay(alignment: .bottom) {
-                if let phase = store.importPhase {
-                    ImportProgressView(phase: phase)
+                if let progress = store.importProgress {
+                    ImportProgressView(progress: progress)
                         .padding(.bottom, 24)
                         .transition(.opacity)
                 } else if let summary = store.importSummary {

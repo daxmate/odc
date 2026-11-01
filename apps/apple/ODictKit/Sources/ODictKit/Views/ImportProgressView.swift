@@ -2,21 +2,36 @@ import SwiftUI
 
 /// Bottom banner shown while an MDX conversion runs.
 ///
-/// The progress is indeterminate on purpose: the core reports stages, not
-/// percentages, so the UI must not invent one.
+/// The bar is determinate as soon as the core knows how big the job is;
+/// until then the banner falls back to a spinner and a stage name rather
+/// than inventing a percentage.
 public struct ImportProgressView: View {
-    private let phase: MDXImportPhase
+    private let progress: MDXImportProgress
 
-    public init(phase: MDXImportPhase) {
-        self.phase = phase
+    public init(progress: MDXImportProgress) {
+        self.progress = progress
     }
 
     public var body: some View {
         HStack(spacing: 10) {
-            ProgressView()
-                .controlSize(.small)
-            Text(phase.title)
-                .font(.callout)
+            if progress.isDeterminate {
+                ProgressView(value: progress.fraction)
+                    .progressViewStyle(.linear)
+                    .frame(width: 110)
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+            }
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.callout)
+                if !progress.detail.isEmpty {
+                    Text(progress.detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
@@ -25,5 +40,10 @@ public struct ImportProgressView: View {
             Capsule().strokeBorder(.quaternary)
         }
         .accessibilityElement(children: .combine)
+    }
+
+    private var title: String {
+        guard progress.isDeterminate else { return progress.title }
+        return "\(progress.title) · \(progress.percent)%"
     }
 }

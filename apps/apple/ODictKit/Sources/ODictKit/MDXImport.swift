@@ -52,6 +52,189 @@ public enum MDXImportPhase: Equatable, Sendable {
     }
 }
 
+/// Stage of a running conversion, mirroring `odc_import_progress_fn`.
+public enum MDXImportStage: Int, Equatable, Sendable {
+    case preparing = 0
+    case entries = 1
+    case resources = 2
+    case committing = 3
+    /// The core returned; the app is opening the converted document.
+    case finished = 4
+
+    public var title: String {
+        switch self {
+        case .preparing: return "准备"
+        case .entries: return "导入词条"
+        case .resources: return "导入资源"
+        case .committing: return "写入 / 打包"
+        case .finished: return "完成"
+        }
+    }
+}
+
+/// Overall progress of one conversion, ready for the banner.
+public struct MDXImportProgress: Equatable, Sendable {
+    /// Stage the sample belongs to.
+    public let stage: MDXImportStage
+    /// 0…1. Never decreases during one conversion.
+    public let fraction: Double
+    /// Stage name, e.g. 导入资源.
+    public let title: String
+    /// Counts under the bar, e.g. 资源 45,000 / 182,429 · 卷 2/2.
+    public let detail: String
+    /// Whether `fraction` measures a known total. False while the size of the
+    /// job is unknown, which is when the banner falls back to a spinner.
+    public let isDeterminate: Bool
+
+    public init(
+        stage: MDXImportStage,
+        fraction: Double,
+        title: String,
+        detail: String,
+        isDeterminate: Bool
+    ) {
+        self.stage = stage
+        self.fraction = fraction
+        self.title = title
+        self.detail = detail
+        self.isDeterminate = isDeterminate
+    }
+
+    /// Whole percent, clamped to 0…100.
+    public var percent: Int {
+        Int((min(max(fraction, 0), 1) * 100).rounded())
+    }
+
+    /// Sample shown before the core reports anything.
+    public static var preparingSample: MDXImportProgress {
+        var tally = MDXImportProgressTally()
+        return tally.apply(stage: .preparing, done: 0, total: 0, volumeIndex: 0, volumeCount: 0)
+    }
+
+    /// Sample shown once the core returned and the app takes over.
+    public static var finishedSample: MDXImportProgress {
+        var tally = MDXImportProgressTally()
+        return tally.finish()
+    }
+
+    /// Coarse stage the older `progress:` callback used.
+    public var phase: MDXImportPhase {
+        switch stage {
+        case .preparing: return .preparing
+        case .entries, .resources, .committing: return .importing
+        case .finished: return .finished
+        }
+    }
+}
+
+/// Adds stage-scoped samples up into one overall fraction.
+///
+/// The core reports `done` and `total` per stage; the banner needs one bar over
+/// the whole job, so the entries and the resources are weighted by count.
+public struct MDXImportProgressTally {
+    private var entriesTotal: UInt64 = 0
+    private var entriesDone: UInt64 = 0
+    private var resourcesTotal: UInt64 = 0
+    private var resourcesDone: UInt64 = 0
+    private var lastFraction: Double = 0
+    private var finished = false
+
+    public init() {}
+
+    /// Fold one core sample into the running total.
+    public mutating func apply(
+        stage: MDXImportStage,
+        done: UInt64,
+        total: UInt64,
+        volumeIndex: UInt32,
+        volumeCount: UInt32
+    ) -> MDXImportProgress {
+        switch stage {
+        case .preparing:
+            resourcesTotal = total
+            resourcesDone = 0
+            entriesDone = 0
+        case .entries:
+            entriesTotal = total
+            entriesDone = min(done, total)
+        case .resources:
+            resourcesTotal = total
+            resourcesDone = min(done, total)
+            entriesDone = entriesTotal
+        case .committing, .finished:
+            entriesDone = entriesTotal
+            resourcesDone = resourcesTotal
+            finished = stage == .finished
+        }
+        let grandTotal = entriesTotal + resourcesTotal
+        let measured: Double
+        if grandTotal == 0 {
+            measured = finished || stage == .committing ? 1 : 0
+        } else {
+            measured = Double(entriesDone + resourcesDone) / Double(grandTotal)
+        }
+        // The core throttles its samples but the UI must never move backwards.
+        let fraction = max(lastFraction, min(max(measured, 0), 1))
+        lastFraction = fraction
+        return MDXImportProgress(
+            stage: stage,
+            fraction: fraction,
+            title: stage.title,
+            detail: Self.detail(
+                stage: stage,
+                done: done,
+                total: total,
+                volumeIndex: volumeIndex,
+                volumeCount: volumeCount
+            ),
+            isDeterminate: grandTotal > 0
+        )
+    }
+
+    /// Final sample once the core returned.
+    public mutating func finish() -> MDXImportProgress {
+        apply(stage: .finished, done: 0, total: 0, volumeIndex: 0, volumeCount: 0)
+    }
+
+    private static func detail(
+        stage: MDXImportStage,
+        done: UInt64,
+        total: UInt64,
+        volumeIndex: UInt32,
+        volumeCount: UInt32
+    ) -> String {
+        switch stage {
+        case .preparing:
+            return total > 0 ? "扫描到 \(grouped(total)) 个资源" : "正在准备…"
+        case .entries:
+            return "词条 \(grouped(min(done, total))) / \(grouped(total))"
+        case .resources:
+            var text = "资源 \(grouped(min(done, total))) / \(grouped(total))"
+            if volumeCount > 0 {
+                text += " · 卷 \(volumeIndex)/\(volumeCount)"
+            }
+            return text
+        case .committing:
+            return "共 \(grouped(total)) 条"
+        case .finished:
+            return ""
+        }
+    }
+
+    /// Thousands separator, stable across locales so the tests and the UI agree.
+    static func grouped(_ value: UInt64) -> String {
+        let digits = Array(String(value))
+        var text = ""
+        for (index, digit) in digits.enumerated() {
+            if index > 0 && (digits.count - index) % 3 == 0 {
+                text.append(",")
+            }
+            text.append(digit)
+        }
+        return text
+    }
+}
+
 /// Outcome of converting one MDX file.
 public struct MDXImportResult: Equatable, Sendable {
     /// Where the converted document was written.
@@ -214,17 +397,30 @@ public enum MDXImporter {
         documents: URL? = nil,
         progress: (@Sendable (MDXImportPhase) -> Void)? = nil
     ) async throws -> MDXImportResult {
+        try await convert(source: source, documents: documents) { sample in
+            progress?(sample.phase)
+        }
+    }
+
+    /// Convert `source` on a background thread, reporting overall progress.
+    ///
+    /// Samples arrive on the importing thread, at most about ten times per
+    /// second; hop to the main actor before touching the UI.
+    public static func convert(
+        source: URL,
+        documents: URL? = nil,
+        onProgress: (@Sendable (MDXImportProgress) -> Void)?
+    ) async throws -> MDXImportResult {
         try await Task.detached(priority: .userInitiated) {
-            try convertSynchronously(source: source, documents: documents, progress: progress)
+            try convertSynchronously(source: source, documents: documents, onProgress: onProgress)
         }.value
     }
 
     private static func convertSynchronously(
         source: URL,
         documents: URL?,
-        progress: (@Sendable (MDXImportPhase) -> Void)?
+        onProgress: (@Sendable (MDXImportProgress) -> Void)?
     ) throws -> MDXImportResult {
-        progress?(.preparing)
         // The picker only grants the file the user chose. Sibling MDD volumes
         // need their own scope, which the importer holds for the whole run.
         var scopes: [(url: URL, active: Bool)] = []
@@ -245,16 +441,44 @@ public enum MDXImporter {
         let output = try outputURL(for: source, documents: documents)
 
         let volumes = volumes(for: source).map(claim)
-        progress?(.importing)
-        let report = try runCore(source: source, output: output, volumes: volumes)
-        progress?(.finished)
+        onProgress?(MDXImportProgress.preparingSample)
+        let report = try runCore(
+            source: source,
+            output: output,
+            volumes: volumes,
+            onProgress: onProgress
+        )
+        onProgress?(MDXImportProgress.finishedSample)
         return MDXImportResult(outputURL: output, report: report)
+    }
+
+    /// Carries the running total and the handler across the C ABI.
+    ///
+    /// The box is created on the importing thread, used only from the C
+    /// callback on that thread and released when the core returns.
+    private final class ProgressBox: @unchecked Sendable {
+        var tally = MDXImportProgressTally()
+        let handler: @Sendable (MDXImportProgress) -> Void
+
+        init(handler: @escaping @Sendable (MDXImportProgress) -> Void) {
+            self.handler = handler
+        }
+    }
+
+    /// Runs `body` with a C string for `value`, or `nil` when it is absent.
+    private static func withOptionalCString<Result>(
+        _ value: String?,
+        _ body: (UnsafePointer<CChar>?) -> Result
+    ) -> Result {
+        guard let value else { return body(nil) }
+        return value.withCString { pointer in body(pointer) }
     }
 
     private static func runCore(
         source: URL,
         output: URL,
-        volumes: [URL]
+        volumes: [URL],
+        onProgress: (@Sendable (MDXImportProgress) -> Void)? = nil
     ) throws -> MDXImportReport {
         var reportPointer: UnsafeMutablePointer<CChar>?
         var errorPointer: UnsafeMutablePointer<CChar>?
@@ -264,25 +488,43 @@ public enum MDXImporter {
         let volumeJSON = volumeList.flatMap { list -> Data? in
             try? JSONSerialization.data(withJSONObject: list, options: [])
         }
+        // The C callback cannot capture Swift state, so the running total and
+        // the handler travel through an Unmanaged box owned by this call.
+        let box = onProgress.map(ProgressBox.init(handler:))
+        let context = box.map { Unmanaged.passRetained($0).toOpaque() }
+        defer {
+            if let context {
+                Unmanaged<ProgressBox>.fromOpaque(context).release()
+            }
+        }
+        let callback: odc_import_progress_fn? = onProgress == nil
+            ? nil
+            : { stage, done, total, volumeIndex, volumeCount, context in
+                guard let context else { return }
+                let box = Unmanaged<ProgressBox>.fromOpaque(context).takeUnretainedValue()
+                let sample = box.tally.apply(
+                    stage: MDXImportStage(rawValue: Int(stage)) ?? .entries,
+                    done: done,
+                    total: total,
+                    volumeIndex: volumeIndex,
+                    volumeCount: volumeCount
+                )
+                box.handler(sample)
+            }
         let code: Int32 = sourcePath.withCString { sourceCString in
             outputPath.withCString { outputCString in
-                if let volumeJSON, let json = String(data: volumeJSON, encoding: .utf8) {
-                    return json.withCString { jsonCString in
-                        odc_import_mdx_to_odc_with_mdd(
-                            sourceCString,
-                            outputCString,
-                            jsonCString,
-                            &reportPointer,
-                            &errorPointer
-                        )
-                    }
+                let json = volumeJSON.flatMap { String(data: $0, encoding: .utf8) }
+                return withOptionalCString(json) { jsonCString in
+                    odc_import_mdx_to_odc_with_mdd_progress(
+                        sourceCString,
+                        outputCString,
+                        jsonCString,
+                        callback,
+                        context,
+                        &reportPointer,
+                        &errorPointer
+                    )
                 }
-                return odc_import_mdx_to_odc(
-                    sourceCString,
-                    outputCString,
-                    &reportPointer,
-                    &errorPointer
-                )
             }
         }
 
