@@ -5,6 +5,7 @@ public struct DictionaryRootView: View {
     private let store: DictionaryStore
     @Binding private var isImporterPresented: Bool
     @State private var isLibraryPresented = false
+    @State private var isWordbookPresented = false
     /// Compact-width navigation path; the search field's submit action pushes
     /// the first hit by selecting it.
     @State private var phonePath: [String] = []
@@ -65,6 +66,9 @@ public struct DictionaryRootView: View {
             .sheet(isPresented: $isLibraryPresented) {
                 LibraryListView(store: store)
             }
+            .sheet(isPresented: $isWordbookPresented) {
+                WordbookView(store: store)
+            }
     }
 
     /// MDX files are converted into a standalone document first.
@@ -119,6 +123,14 @@ public struct DictionaryRootView: View {
 
     private var openButton: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
+            Button {
+                isWordbookPresented = true
+            } label: {
+                Label("生词本", systemImage: "bookmark")
+            }
+            #if os(macOS)
+            .keyboardShortcut("b", modifiers: .command)
+            #endif
             Button {
                 isLibraryPresented = true
             } label: {

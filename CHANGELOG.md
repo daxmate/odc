@@ -8,6 +8,9 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ### Added
 
+* Wordbook: bookmarks and recent lookups moved out of the library sheet into
+  their own sheet, reachable from a toolbar bookmark button on both platforms
+  (⌘B on macOS), so kept words are one click away from the main screen.
 * Reader memory: bookmarks and a 200-entry query history live in `reader.json`
   next to `library.json`, written atomically and reset to an empty state when
   the file cannot be decoded. The library sheet now lists dictionaries, recent
