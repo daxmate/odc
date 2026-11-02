@@ -329,9 +329,19 @@ fn finish_entry<W: Write>(
 }
 
 /// True when `staging` was dropped after a commit and therefore mirrors HEAD.
+///
+/// Packed repositories deliberately omit the marker (see `pack.rs`), and
+/// databases written before the marker existed never had it. When the marker
+/// is absent, an empty `staging` table is the only safe reading: treating a
+/// freshly opened pack as dirty would make the first edit skip materialising
+/// the working set, and the next commit would drop every entry.
 fn workset_is_clean(connection: &Connection) -> Result<bool> {
     let value = store::get_meta(connection, store::META_WORKSET_CLEAN)?;
-    Ok(matches!(value.as_deref(), Some(b"1")))
+    if let Some(value) = value {
+        return Ok(value == b"1");
+    }
+    let staged: i64 = connection.query_row("SELECT COUNT(*) FROM staging", [], |row| row.get(0))?;
+    Ok(staged == 0)
 }
 
 /// Drop the "working set equals HEAD" marker after anything wrote to staging.
@@ -1079,6 +1089,22 @@ impl Repo {
         let status = self.status()?;
         if status.is_clean() {
             return Err(Error::NoChanges);
+        }
+        // An empty working set with a populated HEAD means the staging table is
+        // missing, not that the user deleted every entry. Committing it would
+        // write an empty snapshot and erase the dictionary.
+        let staged: i64 = self
+            .connection
+            .query_row("SELECT COUNT(*) FROM staging", [], |row| row.get(0))?;
+        if staged == 0 {
+            let committed: i64 =
+                self.connection
+                    .query_row("SELECT COUNT(*) FROM entries", [], |row| row.get(0))?;
+            if committed > 0 {
+                return Err(Error::Inconsistent(format!(
+                    "working set is empty but HEAD has {committed} entries; refusing to commit"
+                )));
+            }
         }
         let parent = self.head()?.unwrap_or(ZERO_HASH);
         let temp = TempPath::new(&self.dir, "commit-index");

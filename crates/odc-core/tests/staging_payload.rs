@@ -3,6 +3,7 @@
 
 use odc_core::entry::{Def, Entry};
 use odc_core::error::Error;
+use odc_core::pack::PackOptions;
 use odc_core::repo::Repo;
 use odc_core::store::DB_FILE;
 use rusqlite::Connection;
@@ -287,5 +288,56 @@ fn commit_keeps_staging_small() {
         "staging payloads {cached} should be under 5% of {raw_bytes} raw bytes"
     );
     drop(repo);
+    cleanup(&dir);
+}
+
+/// Packed files omit `workset_clean`. Opening one and editing must not treat
+/// the empty staging table as a working set where every entry was deleted.
+#[test]
+fn editing_a_packed_dictionary_keeps_committed_entries() {
+    let (dir, entries) = seeded("packed-edit", 8);
+    let pack_path = dir.join("dictionary.odc");
+    let repo = Repo::open(&dir).expect("open");
+    repo.pack(
+        &pack_path,
+        PackOptions {
+            shallow: true,
+            force: false,
+        },
+    )
+    .expect("pack");
+    drop(repo);
+
+    // The app copies a packed file into a writable library directory. The copy
+    // inherits the pack's missing `workset_clean` marker.
+    let library = temp_dir("packed-library");
+    std::fs::create_dir_all(&library).expect("library");
+    std::fs::copy(&pack_path, library.join(DB_FILE)).expect("copy pack");
+    let mut packed = Repo::open(&library).expect("open library copy");
+    let status = packed.status().expect("status");
+    assert!(
+        status.is_clean(),
+        "a fresh library copy is clean: {status:?}"
+    );
+
+    let mut changed = entries[2].clone();
+    changed.defs[0].sense = "edited after packing".to_string();
+    packed.import(&[changed.clone()], false).expect("import");
+    packed
+        .commit("edit packed dictionary", "tester", 1_700_000_100)
+        .expect("commit");
+
+    assert_eq!(
+        packed.entry_count().expect("entry count"),
+        entries.len(),
+        "editing must not drop the other entries"
+    );
+    let shown = packed
+        .show(&changed.word)
+        .expect("show")
+        .expect("edited entry");
+    assert_eq!(shown.defs, changed.defs);
+    drop(packed);
+    cleanup(&library);
     cleanup(&dir);
 }
