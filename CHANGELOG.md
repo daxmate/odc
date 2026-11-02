@@ -6,6 +6,20 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-02
+
+### Added
+
+* macOS: the main window restores its size and position between launches, and
+  the sidebar width is carried over through the underlying split view.
+* The reader remembers the dictionary, entry and search term in
+  `session.json` (next to `library.json`) and restores them after the library
+  loads; a dictionary or entry that no longer exists is skipped silently.
+* Word book: sort by recency or alphabetically, filter by all / bookmarks /
+  history and by dictionary. Both choices are persisted.
+* Search field: a "recently viewed" list of up to eight entries appears above
+  the recent searches while the field is empty.
+
 ## [0.6.0] - 2026-11-02
 
 ### Added

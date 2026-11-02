@@ -91,7 +91,12 @@ deleted.
 
 ## Known limitations (v0)
 
-* **Read-only.** Editing, importing, word books and sync are out of scope.
+* **iOS stays read-only.** Editing and MDX import are macOS-only, and sync is
+  out of scope.
+* **Session restore is best effort.** The last dictionary, entry and search
+  term are kept in `session.json`; an entry or dictionary that was removed is
+  skipped. The macOS sidebar width is restored through the AppKit split view
+  behind `NavigationSplitView`, so it depends on AppKit still providing one.
 * **Prefix and substring search, no fuzzy matching.** The core exposes
   `search_prefix` and `search_substring`; a query with no prefix hits falls
   back to case-insensitive substring matches over normalised keys and display
