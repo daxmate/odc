@@ -114,6 +114,11 @@ public final class DictionaryStore {
     @ObservationIgnored private var isRestoringOpenSet = false
     /// Directory `reader` was loaded from.
     @ObservationIgnored private var readerDirectory: URL?
+    /// Debounced write of `session.json`; cancelled and flushed on demand.
+    @ObservationIgnored private var sessionSaveTask: Task<Void, Never>?
+    /// True while the stored session is being applied, so restoring does not
+    /// count as the reader opening the entry again.
+    @ObservationIgnored private var isRestoringSession = false
     private let container: URL?
     /// Debounce before a keystroke turns into a search.
     private static let debounceMilliseconds = 200
@@ -256,6 +261,7 @@ public final class DictionaryStore {
         activeDictionaryID = id
         resetSelection()
         persistOpenState(in: try? libraryDirectoryURL())
+        scheduleSessionSave()
     }
 
     /// Open `item` the first time, or bring it forward when it is already open.
@@ -350,6 +356,7 @@ public final class DictionaryStore {
         resetSelection()
         errorMessage = nil
         isLoading = false
+        scheduleSessionSave()
         importPhase = nil
         clearImportSummary()
     }
@@ -757,6 +764,7 @@ public final class DictionaryStore {
         if needsSave || restoredIDs.count != openIDs.count {
             persistOpenState(in: directory)
         }
+        await restoreSession(in: directory)
     }
 
     /// Open `item` and mark it as the last opened dictionary.
@@ -783,6 +791,63 @@ public final class DictionaryStore {
             try LibraryStore.save(library, to: directory)
         } catch {
             libraryLog.error("could not save the library: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    // MARK: - Session
+
+    /// Write the pending session now; the normal path is debounced.
+    public func flushSession() {
+        sessionSaveTask?.cancel()
+        sessionSaveTask = nil
+        guard let directory = try? libraryDirectoryURL() else { return }
+        writeSession(in: directory)
+    }
+
+    private func scheduleSessionSave() {
+        guard let directory = try? libraryDirectoryURL() else { return }
+        sessionSaveTask?.cancel()
+        sessionSaveTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled else { return }
+            self?.writeSession(in: directory)
+        }
+    }
+
+    private func writeSession(in directory: URL) {
+        let session = ReaderSession(
+            dictionaryID: activeDictionaryID?.uuidString,
+            key: selectedKey,
+            query: query
+        )
+        do {
+            try SessionStore.save(session, in: directory)
+        } catch {
+            libraryLog.error(
+                "could not save the session: \(error.localizedDescription, privacy: .public)"
+            )
+        }
+    }
+
+    /// Apply `session.json` once the library has opened. Anything that no
+    /// longer exists is skipped in silence.
+    private func restoreSession(in directory: URL) async {
+        let session = SessionStore.load(in: directory)
+        guard let plan = SessionRestore.plan(for: session, using: self) else { return }
+        isRestoringSession = true
+        defer { isRestoringSession = false }
+        if activeDictionaryID != plan.dictionaryID {
+            activateDictionary(id: plan.dictionaryID)
+        }
+        if let storedQuery = plan.query {
+            setQuery(storedQuery)
+            // Let the debounced search land before the entry is selected, so a
+            // late result cannot clear the restored selection.
+            let search = searchTask
+            await search?.value
+        }
+        if let key = plan.key {
+            await select(key: key)
         }
     }
 
@@ -906,6 +971,7 @@ public final class DictionaryStore {
     /// dictionary.
     public func setQuery(_ text: String) {
         query = text
+        scheduleSessionSave()
         searchTask?.cancel()
 
         guard activeDictionaryID != nil else {
@@ -1082,7 +1148,10 @@ public final class DictionaryStore {
                 if loaded.key != requestedKey {
                     await followRedirect(to: loaded)
                 }
-                recordHistory(for: loaded)
+                if !isRestoringSession {
+                    recordHistory(for: loaded)
+                }
+                scheduleSessionSave()
                 selectionRevision += 1
             case let .missingTarget(target, _):
                 entry = previous
@@ -1178,5 +1247,19 @@ public final class DictionaryStore {
 
     public func dismissError() {
         errorMessage = nil
+    }
+}
+
+extension DictionaryStore: SessionLookup {
+    func sessionHasDictionary(id: UUID) -> Bool {
+        library.item(id: id) != nil && handles[id] != nil
+    }
+
+    func sessionHasEntry(key: String, in dictionaryID: UUID) -> Bool {
+        guard let handle = handles[dictionaryID],
+              let result = try? handle.resolve(key)
+        else { return false }
+        if case .entry = result { return true }
+        return false
     }
 }
