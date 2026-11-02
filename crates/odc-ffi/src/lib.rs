@@ -537,7 +537,10 @@ pub unsafe extern "C" fn odc_repo_working_status_json(
 ) -> *mut c_char {
     guarded(error_message, ptr::null_mut(), || {
         let repo = repo_ref(repo)?;
-        let status = repo.repo.status().map_err(|error| error.to_string())?;
+        let status = repo
+            .repo
+            .working_status()
+            .map_err(|error| error.to_string())?;
         to_c_string(&status_json(&status))
     })
 }

@@ -1058,6 +1058,15 @@ impl Repo {
         })
     }
 
+    /// Working-set status against HEAD, for editing sessions.
+    ///
+    /// This is [`Repo::status`]: the editor and the CLI must never report
+    /// different counts for the same repository, so there is one
+    /// implementation, not two.
+    pub fn working_status(&self) -> Result<Status> {
+        self.status()
+    }
+
     /// Record the working set as a new commit.
     ///
     /// Nothing is bulk-loaded: the staging table is read once in word order,
