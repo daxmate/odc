@@ -228,7 +228,6 @@ struct EditorView: View {
                     model.alertMessage = "工作区没有改动，不需要提交。"
                 }
             }
-            .keyboardShortcut(.defaultAction)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
@@ -392,7 +391,6 @@ private struct EntryFormView: View {
                 Button("保存到工作区") {
                     _ = model.save()
                 }
-                .keyboardShortcut("s", modifiers: .command)
             }
         }
     }
@@ -574,6 +572,11 @@ private struct CommitSheet: View {
             TextField("提交信息", text: $message)
                 .textFieldStyle(.roundedBorder)
                 .onSubmit(commit)
+            if let errorText = model.alertMessage {
+                Text(errorText)
+                    .font(.callout)
+                    .foregroundStyle(.red)
+            }
             HStack {
                 Spacer()
                 Button("取消") { dismiss() }

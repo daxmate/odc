@@ -203,7 +203,11 @@ public final class DictionaryEditorModel {
 
     public func reload() {
         isLoaded = false
-        loadIfNeeded()
+        if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            loadFirstPage()
+        } else {
+            applySearch()
+        }
     }
 
     public func loadFirstPage() {
