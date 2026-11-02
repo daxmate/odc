@@ -5,13 +5,22 @@ use odc_core::error::Error;
 use odc_core::pack::PackOptions;
 use odc_core::repo::{ChangeKind, DiffKind, EntryWriteOutcome, Repo};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Parallel tests can observe the same clock value; a counter keeps every
+/// scratch directory unique within one test binary.
+static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 fn temp_dir(label: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_nanos());
-    let dir = std::env::temp_dir().join(format!("odc-edit-{label}-{}-{nanos}", std::process::id()));
+    let sequence = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "odc-edit-{label}-{}-{nanos}-{sequence}",
+        std::process::id()
+    ));
     std::fs::create_dir_all(&dir).expect("temp dir");
     dir
 }
