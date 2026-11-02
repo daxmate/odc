@@ -10,6 +10,9 @@ public struct DictionaryRootView: View {
     /// the first hit by selecting it.
     @State private var phonePath: [String] = []
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #if os(macOS)
+    @Environment(\.openWindow) private var openWindow
+    #endif
 
     public init(store: DictionaryStore, isImporterPresented: Binding<Bool>) {
         self.store = store
@@ -93,7 +96,10 @@ public struct DictionaryRootView: View {
         } detail: {
             EntryDetailView(store: store)
         }
-        .toolbar { openButton }
+        .toolbar {
+            openButton
+            editButton
+        }
     }
     #else
     @ViewBuilder
@@ -138,6 +144,29 @@ public struct DictionaryRootView: View {
                 .offset(x: 9, y: -7)
         }
     }
+
+    #if os(macOS)
+    /// Opens the editor window; disabled for read-only single-file packs with
+    /// the reason visible in the label itself.
+    private var editButton: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            Button {
+                openWindow(id: "editor")
+            } label: {
+                Label(
+                    store.isEditingAvailable ? "编辑" : "编辑（只读 pack）",
+                    systemImage: "square.and.pencil"
+                )
+            }
+            .disabled(!store.isEditingAvailable)
+            .help(
+                store.isEditingAvailable
+                    ? "在独立窗口里编辑当前词典"
+                    : "单文件 .odc 词典是只读的；请打开包含 odc.db 的文件夹。"
+            )
+        }
+    }
+    #endif
 
     private var openButton: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {

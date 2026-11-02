@@ -37,6 +37,11 @@ struct ODictDesktopApp: App {
                 .disabled(store.documentURL == nil)
             }
         }
+
+        Window("词条编辑器", id: "editor") {
+            EditorWindowView(store: store)
+        }
+        .defaultSize(width: 1100, height: 720)
     }
 }
 

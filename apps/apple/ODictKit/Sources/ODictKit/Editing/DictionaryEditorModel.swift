@@ -184,6 +184,11 @@ public final class DictionaryEditorModel {
         status.added + status.modified + status.removed > 0
     }
 
+    /// Importer bound to the same handle; opens with the current status.
+    public func makeCSVImportModel() -> CSVImportModel {
+        CSVImportModel(editing: editing)
+    }
+
     public var visibleDiffFields: [FieldDiff] {
         let fields = diff?.fields ?? []
         return showOnlyChanged ? fields.filter(\.changed) : fields

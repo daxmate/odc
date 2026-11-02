@@ -4,9 +4,11 @@ SwiftUI front ends for ODC: **ODict** (iOS) and **ODict Desktop** (macOS), both
 built on the shared `ODictKit` Swift package, which wraps the `ODCFFI`
 XCFramework produced from `crates/odc-ffi`.
 
-This is the v0 slice: open a dictionary, search it (prefix, then substring),
-render entries.
-It is read-only — no editing, importing, word books or sync.
+The readers open a dictionary, search it (prefix, then substring) and render
+entries. **ODict Desktop** also has an editing mode for repository
+directories: paged browsing, structured field editing, field diffs, commit and
+discard, plus CSV import into the working set. Single-file `.odc` packs stay
+read-only, and the iOS app has no editing entry point.
 
 ## Prerequisites
 

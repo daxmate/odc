@@ -33,6 +33,7 @@ public final class CSVImportModel {
     }
 
     public private(set) var table: CSVTable?
+    public private(set) var fileName: String?
     public var mapping = CSVColumnMapping()
     public private(set) var phase: Phase = .idle
     public private(set) var processedRows = 0
@@ -65,12 +66,14 @@ public final class CSVImportModel {
             let text = try String(contentsOf: url, encoding: .utf8)
             let parsed = try CSVTable(parsing: text)
             table = parsed
+            fileName = url.lastPathComponent
             mapping = CSVColumnMapping.suggested(for: parsed.header)
             makePlan()
             phase = .ready
             alertMessage = nil
         } catch {
             table = nil
+            fileName = url.lastPathComponent
             plan = nil
             phase = .idle
             alertMessage = error.localizedDescription
