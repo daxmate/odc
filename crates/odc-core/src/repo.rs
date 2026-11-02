@@ -630,15 +630,23 @@ impl Repo {
     /// Reading a v1 repository never touches the file; the first write is the
     /// point where the layout is upgraded and `meta.schema_version` becomes 2.
     pub(crate) fn ensure_writable(&mut self) -> Result<()> {
-        if self.read_only {
-            return Err(Error::ReadOnly(self.dir.display().to_string()));
-        }
         if store::upgrade_to_v2(&self.connection)? {
             // The rewrite leaves the old table pages on the free list; give the
             // space back once instead of carrying it for the life of the file.
             self.connection.execute_batch("VACUUM")?;
         }
         Ok(())
+    }
+
+    /// [`Repo::ensure_writable`] plus the pack guard for editing.
+    ///
+    /// A packed distribution file can be maintained in place (`gc`) but not
+    /// edited: a single file has nowhere to stage a commit next to it.
+    fn ensure_editable(&mut self) -> Result<()> {
+        if self.read_only {
+            return Err(Error::ReadOnly(self.dir.display().to_string()));
+        }
+        self.ensure_writable()
     }
 
     /// Rebuild the working set from HEAD when the previous commit dropped it.
@@ -662,7 +670,7 @@ impl Repo {
 
     /// Insert or replace entries in the working set.
     pub fn import(&mut self, entries: &[Entry], prune: bool) -> Result<ImportReport> {
-        self.ensure_writable()?;
+        self.ensure_editable()?;
         self.ensure_workset()?;
         let transaction = self.connection.transaction()?;
         {
@@ -762,7 +770,7 @@ impl Repo {
         F: FnMut() -> Result<Option<Entry>>,
         P: FnMut(usize),
     {
-        self.ensure_writable()?;
+        self.ensure_editable()?;
         self.ensure_workset()?;
         if prune {
             self.connection.execute_batch(
@@ -1058,7 +1066,7 @@ impl Repo {
     /// straight into the database file. Peak memory is one block plus that
     /// block's entry metadata, never the whole dictionary.
     pub fn commit(&mut self, message: &str, author: &str, ts: i64) -> Result<CommitOutcome> {
-        self.ensure_writable()?;
+        self.ensure_editable()?;
         let status = self.status()?;
         if status.is_clean() {
             return Err(Error::NoChanges);
@@ -1696,7 +1704,7 @@ impl Repo {
     /// [`Repo::status`], [`Repo::working_changes`] and
     /// [`Repo::entry_diff`] immediately.
     pub fn upsert_entry(&mut self, entry: &Entry) -> Result<EntryWriteOutcome> {
-        self.ensure_writable()?;
+        self.ensure_editable()?;
         self.ensure_workset()?;
         let key = normalize_key(&entry.word);
         let existed = self
@@ -1736,7 +1744,7 @@ impl Repo {
     /// key that only exists in HEAD is staged first, so deleting it counts as
     /// a deletion against HEAD.
     pub fn delete_entry(&mut self, key: &str) -> Result<EntryWriteOutcome> {
-        self.ensure_writable()?;
+        self.ensure_editable()?;
         self.ensure_workset()?;
         let key = normalize_key(key);
         let transaction = self.connection.transaction()?;
@@ -1822,7 +1830,7 @@ impl Repo {
     /// History is untouched; only the staging table and its clean marker
     /// change. Calling this on a clean working set is a no-op.
     pub fn discard_working(&mut self) -> Result<()> {
-        self.ensure_writable()?;
+        self.ensure_editable()?;
         if workset_is_clean(&self.connection)? {
             return Ok(());
         }
