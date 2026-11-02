@@ -12,8 +12,10 @@ struct ODictDesktopApp: App {
         WindowGroup {
             DictionaryRootView(store: store, isImporterPresented: $isImporterPresented)
                 .frame(minWidth: 720, minHeight: 480)
+                .modifier(DesktopWindowStateModifier())
                 .onAppear {
                     store.restore()
+                    appDelegate.terminateHandler = { store.flushSession() }
                     appDelegate.connect { urls in
                         for url in urls {
                             store.openDocument(url: url)
@@ -54,6 +56,12 @@ struct ODictDesktopApp: App {
 final class ODictDesktopAppDelegate: NSObject, NSApplicationDelegate {
     private var openHandler: (([URL]) -> Void)?
     private var pendingURLs: [URL] = []
+    /// Called from `applicationWillTerminate`; writes the pending session.
+    var terminateHandler: (() -> Void)?
+
+    func applicationWillTerminate(_ notification: Notification) {
+        terminateHandler?()
+    }
 
     func connect(_ handler: @escaping ([URL]) -> Void) {
         openHandler = handler
