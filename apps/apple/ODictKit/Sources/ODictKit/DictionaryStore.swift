@@ -40,6 +40,8 @@ public final class DictionaryStore {
     public var documentName: String? { activeDictionary?.name }
     /// Search text as typed; the debounced search follows it.
     public private(set) var query: String = ""
+    /// Recent queries offered while the search field is empty.
+    public let searchHistory: SearchHistoryStore
     /// Prefix-search results of the active dictionary, newest query only.
     public var hits: [SearchHit] {
         guard let activeDictionaryID else { return [] }
@@ -122,9 +124,14 @@ public final class DictionaryStore {
     /// `importSummaryLifetime` describes the import that just finished, so it
     ///     clears itself instead of sitting under the entry until someone
     ///     dismisses it.
-    public init(container: URL? = nil, importSummaryLifetime: Duration = .seconds(6)) {
+    public init(
+        container: URL? = nil,
+        importSummaryLifetime: Duration = .seconds(6),
+        searchHistory: SearchHistoryStore? = nil
+    ) {
         self.container = container
         self.importSummaryLifetime = importSummaryLifetime
+        self.searchHistory = searchHistory ?? SearchHistoryStore()
     }
 
     /// The open dictionary the reader is looking at, if any.
@@ -1031,6 +1038,7 @@ public final class DictionaryStore {
             case let .entry(loaded, requestedKey, _):
                 guard selectedKey == key else { return }
                 entry = loaded
+                recordSearchHistory()
                 if loaded.key != requestedKey {
                     await followRedirect(to: loaded)
                 }
@@ -1108,8 +1116,16 @@ public final class DictionaryStore {
         searchGroups.insert(group, at: insertAt)
     }
 
+    /// Record the current (trimmed) query in the search history, if any.
+    public func recordSearchHistory() {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        searchHistory.record(trimmed)
+    }
+
     /// Open the first hit of the active dictionary — what Return does.
     public func submitQuery() {
+        recordSearchHistory()
         guard let first = hits.first else { return }
         Task { await select(key: first.key) }
     }

@@ -47,8 +47,12 @@ public struct SearchResultsView: View {
 
     private var splitList: some View {
         List(selection: hitSelection) {
-            splitResults
-            emptyResultsRow
+            if isQueryEmpty {
+                recentSearches
+            } else {
+                splitResults
+                emptyResultsRow
+            }
         }
         .searchable(text: queryBinding, placement: .sidebar, prompt: "搜索词条")
         .onSubmit(of: .search) { store.submitQuery() }
@@ -62,8 +66,12 @@ public struct SearchResultsView: View {
 
     private var stackList: some View {
         List {
-            stackResults
-            emptyResultsRow
+            if isQueryEmpty {
+                recentSearches
+            } else {
+                stackResults
+                emptyResultsRow
+            }
         }
         .searchable(text: queryBinding, prompt: "搜索词条")
         .onSubmit(of: .search) { store.submitQuery() }
@@ -87,6 +95,9 @@ public struct SearchResultsView: View {
     private var trimmedQuery: String {
         store.query.trimmingCharacters(in: .whitespacesAndNewlines)
     }
+
+    /// An empty field swaps the results for the recent searches.
+    private var isQueryEmpty: Bool { trimmedQuery.isEmpty }
 
     private var splitResults: some View {
         ForEach(store.searchGroups) { group in
@@ -133,15 +144,63 @@ public struct SearchResultsView: View {
     private var emptyResultsRow: some View {
         if !store.isLoading, store.searchGroups.allSatisfy({ $0.hits.isEmpty }) {
             Section {
-                Text(
-                    store.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        ? "输入以搜索"
-                        : "没有匹配的词条"
-                )
+                Text("没有匹配的词条")
                 .font(.callout)
                 .foregroundStyle(.secondary)
             }
         }
+    }
+    /// Recent queries; empty until a search is submitted or a result opened.
+    @ViewBuilder
+    private var recentSearches: some View {
+        if !store.searchHistory.items.isEmpty {
+            recentSearchesHeader
+            ForEach(store.searchHistory.items, id: \.self) { term in
+                recentSearchRow(term)
+            }
+        }
+    }
+
+    private var recentSearchesHeader: some View {
+        HStack(spacing: 8) {
+            Text("最近搜索")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            Button("清除") {
+                store.searchHistory.clear()
+            }
+            .font(.footnote)
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    private func recentSearchRow(_ term: String) -> some View {
+        Button {
+            store.setQuery(term)
+        } label: {
+            Label(term, systemImage: "clock")
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        #if os(macOS)
+        .contextMenu {
+            Button("从历史中删除") {
+                store.searchHistory.remove(term)
+            }
+        }
+        #else
+        .swipeActions(edge: .trailing) {
+            Button(role: .destructive) {
+                store.searchHistory.remove(term)
+            } label: {
+                Label("删除", systemImage: "trash")
+            }
+        }
+        #endif
     }
 }
 

@@ -62,6 +62,44 @@ final class DictionaryStoreTests: XCTestCase {
         XCTAssertEqual(store.hits.map(\.key), ["apple", "application"])
     }
 
+    func testSelectingAnEntryRecordsTheQuery() async throws {
+        let suiteName = "DictionaryStoreTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = DictionaryStore(
+            container: try makeContainer(),
+            searchHistory: SearchHistoryStore(userDefaults: defaults, storageKey: "history")
+        )
+        defer { store.close() }
+
+        store.open(url: Fixture.demoRepository)
+        try await waitUntil { store.documentURL != nil }
+
+        store.setQuery("app")
+        try await waitUntil { !store.hits.isEmpty }
+        await store.select(key: "apple")
+
+        XCTAssertNotNil(store.entry)
+        XCTAssertEqual(store.searchHistory.items, ["app"])
+    }
+
+    func testSubmittingAQueryRecordsItEvenWithoutHits() {
+        let suiteName = "DictionaryStoreTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = DictionaryStore(
+            searchHistory: SearchHistoryStore(userDefaults: defaults, storageKey: "history")
+        )
+        store.setQuery("  apple ")
+        store.submitQuery()
+
+        XCTAssertEqual(store.searchHistory.items, ["apple"])
+    }
+
     func testCloseAfterOpeningRemovesTheCopy() async throws {
         let store = DictionaryStore(container: try makeContainer())
         store.open(url: Fixture.demoRepository)
