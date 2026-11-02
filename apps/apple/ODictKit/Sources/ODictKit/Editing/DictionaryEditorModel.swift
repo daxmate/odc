@@ -440,7 +440,11 @@ public final class DictionaryEditorModel {
             )
         }
 
+        let term = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         for row in deletedRows where entriesByKey[row.key] == nil {
+            if searching && !row.key.hasPrefix(term) {
+                continue
+            }
             rows.append(row)
         }
 
