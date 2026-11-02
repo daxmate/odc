@@ -48,6 +48,7 @@ public struct SearchResultsView: View {
     private var splitList: some View {
         List(selection: hitSelection) {
             if isQueryEmpty {
+                recentBrowsing
                 recentSearches
             } else {
                 splitResults
@@ -67,6 +68,7 @@ public struct SearchResultsView: View {
     private var stackList: some View {
         List {
             if isQueryEmpty {
+                recentBrowsing
                 recentSearches
             } else {
                 stackResults
@@ -150,6 +152,44 @@ public struct SearchResultsView: View {
             }
         }
     }
+    /// Entries opened recently, newest first. The section is skipped when
+    /// there is nothing to show; recent searches follow it.
+    @ViewBuilder
+    private var recentBrowsing: some View {
+        let rows = RecentBrowsing.rows(
+            from: store.recentEntries,
+            dictionaryNames: dictionaryNames
+        )
+        if !rows.isEmpty {
+            HStack(spacing: 8) {
+                Text("最近浏览")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+            }
+            ForEach(rows) { row in
+                Button {
+                    Task { await store.openEntry(row.ref) }
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(row.ref.key)
+                            .lineLimit(1)
+                        Text(row.dictionaryName)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private var dictionaryNames: [UUID: String] {
+        Dictionary(uniqueKeysWithValues: store.library.items.map { ($0.id, $0.displayName) })
+    }
+
     /// Recent queries; empty until a search is submitted or a result opened.
     @ViewBuilder
     private var recentSearches: some View {
