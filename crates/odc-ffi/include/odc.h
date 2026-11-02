@@ -85,6 +85,82 @@ char *odc_repo_entry_json(const OdcRepo *repo, const char *key_utf8,
 char *odc_repo_entry_link_json(const OdcRepo *repo, const char *key_utf8,
                                char **error_message);
 
+/*
+ * One page of working-set entries as a JSON array of entry objects (the
+ * same shape odc_repo_entry_json returns).
+ *
+ * after_key_utf8 is NULL for the first page, otherwise the last key of the
+ * previous page. limit must be between 1 and 500 inclusive. Returns NULL on
+ * failure; *error_message then carries the diagnostic. Release the result
+ * with odc_string_free().
+ */
+char *odc_repo_entries_page_json(const OdcRepo *repo, const char *after_key_utf8,
+                                 int32_t limit, char **error_message);
+
+/*
+ * Insert or replace one entry in the working set.
+ *
+ * entry_json_utf8 accepts the object shape odc_repo_entry_json returns:
+ * key, display, phonetic, defs, raw_html and extra. Returns a JSON object
+ * {"key", "outcome"} where outcome is "added" or "modified". HEAD is not
+ * touched until odc_repo_commit_json() succeeds.
+ */
+char *odc_repo_entry_put_json(OdcRepo *repo, const char *entry_json_utf8,
+                              char **error_message);
+
+/*
+ * Remove one entry from the working set.
+ *
+ * Returns {"key", "outcome"} where outcome is "deleted" or "not_found".
+ */
+char *odc_repo_entry_delete_json(OdcRepo *repo, const char *key_utf8,
+                                 char **error_message);
+
+/*
+ * Working-set status against HEAD.
+ *
+ * Returns {"added", "modified", "removed", "total", "entries", "blocks",
+ * "head"}; head is null before the first commit.
+ */
+char *odc_repo_working_status_json(const OdcRepo *repo, char **error_message);
+
+/*
+ * Changed keys against HEAD as {"key", "kind"} objects in key order.
+ *
+ * kind is "added", "modified" or "deleted". after_key_utf8 is NULL for the
+ * first page; limit must be between 1 and 500 inclusive.
+ */
+char *odc_repo_working_changes_json(const OdcRepo *repo, const char *after_key_utf8,
+                                    int32_t limit, char **error_message);
+
+/*
+ * Field-level diff of one key between HEAD and the working set.
+ *
+ * Returns {"key", "kind", "fields": [{"field", "before", "after",
+ * "changed"}]}. kind is "added", "modified", "deleted" or "absent";
+ * before/after are null when the field does not exist on that side.
+ */
+char *odc_repo_entry_diff_json(const OdcRepo *repo, const char *key_utf8,
+                               char **error_message);
+
+/*
+ * Commit the working set with the current wall-clock timestamp.
+ *
+ * Returns {"hash", "entry_count", "ts", "author", "message",
+ * "new_blocks", "reused_blocks", "entries"}. An empty working set fails
+ * with the usual ODC-E012 diagnostic.
+ */
+char *odc_repo_commit_json(OdcRepo *repo, const char *message_utf8,
+                           const char *author_utf8, char **error_message);
+
+/*
+ * Discard every working-set change. HEAD is untouched.
+ *
+ * Returns {"discarded": true}.
+ */
+char *odc_repo_discard_json(OdcRepo *repo, char **error_message);
+
+
 
 
 /*

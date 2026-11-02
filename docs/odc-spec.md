@@ -365,6 +365,7 @@ index_entry = varint(len(word)) | word | content_hash:32B
 | ODC-E028 | 合并已在进行中 |
 | ODC-E029 | 合并仍有未解决的冲突 |
 | ODC-E030 | 没有进行中的合并 |
+| ODC-E031 | 仓库只读（单文件 pack 分发件，不可原地写入） |
 
 ## 13. 版本兼容
 

@@ -12,9 +12,12 @@ use odc_core::mdx_scan::{scan, ScanOutcome};
 use odc_core::{Def, Entry, Repo};
 use odc_ffi::{
     odc_import_mdx_to_odc, odc_import_mdx_to_odc_with_mdd, odc_import_mdx_to_odc_with_mdd_progress,
-    odc_repo_close, odc_repo_entry_count, odc_repo_entry_json, odc_repo_open,
-    odc_repo_resource_copy, odc_repo_resource_count, odc_repo_resource_len, odc_repo_search_json,
-    odc_repo_search_substring_json, odc_string_free, odc_version,
+    odc_repo_close, odc_repo_commit_json, odc_repo_discard_json, odc_repo_entries_page_json,
+    odc_repo_entry_count, odc_repo_entry_delete_json, odc_repo_entry_diff_json,
+    odc_repo_entry_json, odc_repo_entry_put_json, odc_repo_open, odc_repo_resource_copy,
+    odc_repo_resource_count, odc_repo_resource_len, odc_repo_search_json,
+    odc_repo_search_substring_json, odc_repo_working_changes_json, odc_repo_working_status_json,
+    odc_string_free, odc_version,
 };
 use serde_json::Value;
 use tempfile::TempDir;
@@ -780,4 +783,157 @@ fn import_with_explicit_mdd_volumes_stores_resources() {
     assert_eq!(length, 9);
     // SAFETY: the handle is closed exactly once.
     unsafe { odc_repo_close(handle) };
+}
+#[test]
+fn editing_round_trip_over_the_abi() {
+    let dir = seeded_repo();
+    let repo = open(&dir);
+
+    // Page one: two entries in key order.
+    let mut error: *mut c_char = ptr::null_mut();
+    // SAFETY: repo is live and error is a writable slot.
+    let first = unsafe { odc_repo_entries_page_json(repo, ptr::null(), 2, &mut error) };
+    assert!(take_error_if_any(error).is_none(), "page failed");
+    let first: Value = serde_json::from_str(&take_string(first)).expect("page json");
+    let first = first.as_array().expect("page array");
+    assert_eq!(first.len(), 2);
+    assert_eq!(first[0]["key"], "apple");
+    let cursor = CString::new(first[1]["key"].as_str().expect("cursor")).expect("cursor");
+
+    let mut error: *mut c_char = ptr::null_mut();
+    // SAFETY: cursor is NUL-terminated and outlives the call.
+    let rest = unsafe { odc_repo_entries_page_json(repo, cursor.as_ptr(), 10, &mut error) };
+    assert!(take_error_if_any(error).is_none(), "second page failed");
+    let rest: Value = serde_json::from_str(&take_string(rest)).expect("page json");
+    assert_eq!(rest.as_array().expect("array").len(), 2);
+    assert_eq!(rest[0]["key"], "caf\u{00e9}");
+
+    // Put a new entry: the ABI accepts the object entry_to_json emits.
+    let body = serde_json::json!({
+        "key": "apricot",
+        "display": "Apricot",
+        "phonetic": [],
+        "defs": [{"pos": "noun", "sense": "a fruit", "examples": [], "labels": []}],
+        "raw_html": null,
+        "extra": {"source": "abi"}
+    })
+    .to_string();
+    let body = CString::new(body).expect("entry json");
+    let mut error: *mut c_char = ptr::null_mut();
+    // SAFETY: body is NUL-terminated and outlives the call.
+    let put = unsafe { odc_repo_entry_put_json(repo, body.as_ptr(), &mut error) };
+    assert!(take_error_if_any(error).is_none(), "put failed");
+    let put: Value = serde_json::from_str(&take_string(put)).expect("put json");
+    assert_eq!(put["key"], "apricot");
+    assert_eq!(put["outcome"], "added");
+
+    // Status and the change list agree.
+    let mut error: *mut c_char = ptr::null_mut();
+    // SAFETY: repo is live and error is a writable slot.
+    let status = unsafe { odc_repo_working_status_json(repo, &mut error) };
+    assert!(take_error_if_any(error).is_none(), "status failed");
+    let status: Value = serde_json::from_str(&take_string(status)).expect("status json");
+    assert_eq!(status["added"], 1);
+    assert_eq!(status["total"], 5);
+
+    let mut error: *mut c_char = ptr::null_mut();
+    // SAFETY: repo is live and error is a writable slot.
+    let changes = unsafe { odc_repo_working_changes_json(repo, ptr::null(), 10, &mut error) };
+    assert!(take_error_if_any(error).is_none(), "changes failed");
+    let changes: Value = serde_json::from_str(&take_string(changes)).expect("changes json");
+    assert_eq!(changes.as_array().expect("array").len(), 1);
+    assert_eq!(changes[0]["key"], "apricot");
+    assert_eq!(changes[0]["kind"], "added");
+
+    // Field-level diff marks the entry as added.
+    let key = CString::new("apricot").expect("key");
+    let mut error: *mut c_char = ptr::null_mut();
+    // SAFETY: key is NUL-terminated and outlives the call.
+    let diff = unsafe { odc_repo_entry_diff_json(repo, key.as_ptr(), &mut error) };
+    assert!(take_error_if_any(error).is_none(), "diff failed");
+    let diff: Value = serde_json::from_str(&take_string(diff)).expect("diff json");
+    assert_eq!(diff["kind"], "added");
+    let fields = diff["fields"].as_array().expect("fields");
+    assert!(fields.iter().any(|field| field["field"] == "defs[0].sense"
+        && field["changed"] == true
+        && field["before"].is_null()));
+
+    // Commit and then discard the next edit.
+    let message = CString::new("add apricot").expect("message");
+    let author = CString::new("tester").expect("author");
+    let mut error: *mut c_char = ptr::null_mut();
+    // SAFETY: both strings are NUL-terminated and outlive the call.
+    let commit =
+        unsafe { odc_repo_commit_json(repo, message.as_ptr(), author.as_ptr(), &mut error) };
+    assert!(take_error_if_any(error).is_none(), "commit failed");
+    let commit: Value = serde_json::from_str(&take_string(commit)).expect("commit json");
+    assert_eq!(commit["entry_count"], 5);
+    assert_eq!(commit["author"], "tester");
+
+    let body = CString::new("{\"key\":\"badger\",\"display\":\"Badger\"}").expect("entry");
+    let mut error: *mut c_char = ptr::null_mut();
+    // SAFETY: body is NUL-terminated and outlives the call.
+    let put = unsafe { odc_repo_entry_put_json(repo, body.as_ptr(), &mut error) };
+    assert!(take_error_if_any(error).is_none(), "second put failed");
+    let put: Value = serde_json::from_str(&take_string(put)).expect("put json");
+    assert_eq!(put["outcome"], "added");
+
+    let mut error: *mut c_char = ptr::null_mut();
+    // SAFETY: repo is live and error is a writable slot.
+    let discard = unsafe { odc_repo_discard_json(repo, &mut error) };
+    assert!(take_error_if_any(error).is_none(), "discard failed");
+    let discard: Value = serde_json::from_str(&take_string(discard)).expect("discard json");
+    assert_eq!(discard["discarded"], true);
+
+    let mut error: *mut c_char = ptr::null_mut();
+    // SAFETY: repo is live and error is a writable slot.
+    let status = unsafe { odc_repo_working_status_json(repo, &mut error) };
+    let status: Value = serde_json::from_str(&take_string(status)).expect("status json");
+    assert_eq!(status["added"], 0);
+    assert_eq!(status["total"], 5);
+
+    // SAFETY: the handle is closed exactly once and not used afterwards.
+    unsafe { odc_repo_close(repo) };
+}
+
+#[test]
+fn editing_calls_report_errors() {
+    let dir = seeded_repo();
+    let repo = open(&dir);
+
+    let body = CString::new("{not json").expect("body");
+    let mut error: *mut c_char = ptr::null_mut();
+    // SAFETY: body is NUL-terminated and outlives the call.
+    let result = unsafe { odc_repo_entry_put_json(repo, body.as_ptr(), &mut error) };
+    assert!(result.is_null());
+    let message = take_error_if_any(error).expect("expected an error");
+    assert!(message.contains("JSON"), "{message}");
+
+    let mut error: *mut c_char = ptr::null_mut();
+    // SAFETY: repo is live and error is a writable slot.
+    let result = unsafe { odc_repo_entries_page_json(repo, ptr::null(), 0, &mut error) };
+    assert!(result.is_null());
+    let message = take_error_if_any(error).expect("expected an error");
+    assert!(message.contains("limit"), "{message}");
+
+    let message_text = CString::new("nothing").expect("message");
+    let author = CString::new("tester").expect("author");
+    let mut error: *mut c_char = ptr::null_mut();
+    // SAFETY: both strings are NUL-terminated and outlive the call.
+    let result =
+        unsafe { odc_repo_commit_json(repo, message_text.as_ptr(), author.as_ptr(), &mut error) };
+    assert!(result.is_null());
+    let message = take_error_if_any(error).expect("expected an error");
+    assert!(message.contains("ODC-E012"), "{message}");
+
+    let key = CString::new("missing").expect("key");
+    let mut error: *mut c_char = ptr::null_mut();
+    // SAFETY: key is NUL-terminated and outlives the call.
+    let result = unsafe { odc_repo_entry_delete_json(repo, key.as_ptr(), &mut error) };
+    assert!(take_error_if_any(error).is_none(), "delete failed");
+    let result: Value = serde_json::from_str(&take_string(result)).expect("delete json");
+    assert_eq!(result["outcome"], "not_found");
+
+    // SAFETY: the handle is closed exactly once and not used afterwards.
+    unsafe { odc_repo_close(repo) };
 }

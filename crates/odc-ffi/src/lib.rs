@@ -29,7 +29,8 @@ use std::ptr;
 use odc_core::cbor::Value as CborValue;
 use odc_core::link::LinkResolution;
 use odc_core::pack::PackOptions;
-use odc_core::{import_mdx, Entry, ImportProgress, MdxImportOptions, MdxImportReport, Repo};
+use odc_core::repo::{ChangeKind, DiffKind, EntryDiff, EntryWriteOutcome, FieldDiff, Status};
+use odc_core::{import_mdx, Def, Entry, ImportProgress, MdxImportOptions, MdxImportReport, Repo};
 use serde_json::{json, Map, Value as JsonValue};
 
 /// Largest accepted `limit` for [`odc_repo_search_json`].
@@ -425,6 +426,246 @@ pub unsafe extern "C" fn odc_repo_resource_copy(
             unsafe { *out_len = bytes.len() };
         }
         Ok(1)
+    })
+}
+
+/// Largest accepted `limit` for the paged editing calls.
+const MAX_PAGE_LIMIT: i32 = 500;
+
+/// One page of working-set entries as a JSON array of entry objects.
+///
+/// `after_key_utf8` is `NULL` for the first page, otherwise the last key of
+/// the previous page. `limit` must be between 1 and `MAX_PAGE_LIMIT`.
+/// Returns `NULL` on failure. Release the result with [`odc_string_free`].
+///
+/// # Safety
+///
+/// `repo` must be `NULL` or a live handle; `after_key_utf8` must be `NULL`
+/// or a NUL-terminated UTF-8 string; `error_message` must be `NULL` or point
+/// to writable storage for one `char *`.
+#[no_mangle]
+pub unsafe extern "C" fn odc_repo_entries_page_json(
+    repo: *const OdcRepo,
+    after_key_utf8: *const c_char,
+    limit: i32,
+    error_message: *mut *mut c_char,
+) -> *mut c_char {
+    guarded(error_message, ptr::null_mut(), || {
+        let repo = repo_ref(repo)?;
+        let after = optional_text_arg(after_key_utf8, "after_key")?;
+        let limit = page_limit(limit)?;
+        let entries = repo
+            .repo
+            .entries_page(after.as_deref(), limit)
+            .map_err(|error| error.to_string())?;
+        let items: Vec<JsonValue> = entries.iter().map(entry_to_json).collect();
+        to_c_string(&JsonValue::Array(items))
+    })
+}
+
+/// Insert or replace one entry in the working set.
+///
+/// `entry_json_utf8` accepts the object shape [`odc_repo_entry_json`]
+/// returns: `key`, `display`, `phonetic`, `defs`, `raw_html` and `extra`.
+/// Returns `{"key": "...", "outcome": "added"|"modified"}`.
+///
+/// # Safety
+///
+/// `repo` must be `NULL` or a live handle; `entry_json_utf8` must be a
+/// NUL-terminated UTF-8 string; `error_message` must be `NULL` or point to
+/// writable storage for one `char *`.
+#[no_mangle]
+pub unsafe extern "C" fn odc_repo_entry_put_json(
+    repo: *mut OdcRepo,
+    entry_json_utf8: *const c_char,
+    error_message: *mut *mut c_char,
+) -> *mut c_char {
+    guarded(error_message, ptr::null_mut(), || {
+        let repo = repo_mut(repo)?;
+        let text = text_arg(entry_json_utf8, "entry")?;
+        let value: JsonValue = serde_json::from_str(&text)
+            .map_err(|error| format!("entry is not valid JSON: {error}"))?;
+        let entry = entry_from_json(&value)?;
+        let key = odc_core::entry::normalize_key(&entry.word);
+        let outcome = repo
+            .repo
+            .upsert_entry(&entry)
+            .map_err(|error| error.to_string())?;
+        to_c_string(&json!({ "key": key, "outcome": outcome_json(outcome) }))
+    })
+}
+
+/// Remove one entry from the working set.
+///
+/// Returns `{"key": "...", "outcome": "deleted"|"not_found"}`.
+///
+/// # Safety
+///
+/// `repo` must be `NULL` or a live handle; `key_utf8` must be `NULL` or a
+/// NUL-terminated UTF-8 string; `error_message` must be `NULL` or point to
+/// writable storage for one `char *`.
+#[no_mangle]
+pub unsafe extern "C" fn odc_repo_entry_delete_json(
+    repo: *mut OdcRepo,
+    key_utf8: *const c_char,
+    error_message: *mut *mut c_char,
+) -> *mut c_char {
+    guarded(error_message, ptr::null_mut(), || {
+        let repo = repo_mut(repo)?;
+        let key = text_arg(key_utf8, "key")?;
+        let outcome = repo
+            .repo
+            .delete_entry(&key)
+            .map_err(|error| error.to_string())?;
+        to_c_string(&json!({ "key": key, "outcome": outcome_json(outcome) }))
+    })
+}
+
+/// Working-set status against HEAD.
+///
+/// Returns `{"added", "modified", "removed", "total", "entries",
+/// "blocks", "head"}`; `head` is `null` before the first commit.
+///
+/// # Safety
+///
+/// `repo` must be `NULL` or a live handle; `error_message` must be `NULL` or
+/// point to writable storage for one `char *`.
+#[no_mangle]
+pub unsafe extern "C" fn odc_repo_working_status_json(
+    repo: *const OdcRepo,
+    error_message: *mut *mut c_char,
+) -> *mut c_char {
+    guarded(error_message, ptr::null_mut(), || {
+        let repo = repo_ref(repo)?;
+        let status = repo.repo.status().map_err(|error| error.to_string())?;
+        to_c_string(&status_json(&status))
+    })
+}
+
+/// Changed keys against HEAD as `{"key", "kind"}` objects, key order.
+///
+/// `kind` is `added`, `modified` or `deleted`. `after_key_utf8` is `NULL`
+/// for the first page; `limit` must be between 1 and `MAX_PAGE_LIMIT`.
+///
+/// # Safety
+///
+/// `repo` must be `NULL` or a live handle; `after_key_utf8` must be `NULL`
+/// or a NUL-terminated UTF-8 string; `error_message` must be `NULL` or point
+/// to writable storage for one `char *`.
+#[no_mangle]
+pub unsafe extern "C" fn odc_repo_working_changes_json(
+    repo: *const OdcRepo,
+    after_key_utf8: *const c_char,
+    limit: i32,
+    error_message: *mut *mut c_char,
+) -> *mut c_char {
+    guarded(error_message, ptr::null_mut(), || {
+        let repo = repo_ref(repo)?;
+        let after = optional_text_arg(after_key_utf8, "after_key")?;
+        let limit = page_limit(limit)?;
+        let changes = repo
+            .repo
+            .working_changes(after.as_deref(), limit)
+            .map_err(|error| error.to_string())?;
+        let items: Vec<JsonValue> = changes
+            .iter()
+            .map(|row| json!({ "key": row.key, "kind": change_kind_json(row.kind) }))
+            .collect();
+        to_c_string(&JsonValue::Array(items))
+    })
+}
+
+/// Field-level diff of one key between HEAD and the working set.
+///
+/// Returns `{"key", "kind", "fields": [{"field", "before", "after",
+/// "changed"}]}`; `kind` is `added`, `modified`, `deleted` or `absent`.
+///
+/// # Safety
+///
+/// `repo` must be `NULL` or a live handle; `key_utf8` must be `NULL` or a
+/// NUL-terminated UTF-8 string; `error_message` must be `NULL` or point to
+/// writable storage for one `char *`.
+#[no_mangle]
+pub unsafe extern "C" fn odc_repo_entry_diff_json(
+    repo: *const OdcRepo,
+    key_utf8: *const c_char,
+    error_message: *mut *mut c_char,
+) -> *mut c_char {
+    guarded(error_message, ptr::null_mut(), || {
+        let repo = repo_ref(repo)?;
+        let key = text_arg(key_utf8, "key")?;
+        let diff = repo
+            .repo
+            .entry_diff(&key)
+            .map_err(|error| error.to_string())?;
+        to_c_string(&entry_diff_json(&diff))
+    })
+}
+
+/// Commit the working set with the current wall-clock timestamp.
+///
+/// Returns `{"hash", "entry_count", "ts", "author", "message",
+/// "new_blocks", "reused_blocks", "entries"}`. An empty working set fails
+/// with the usual `ODC-E012` diagnostic.
+///
+/// # Safety
+///
+/// `repo` must be `NULL` or a live handle; `message_utf8` and `author_utf8`
+/// must be NUL-terminated UTF-8 strings; `error_message` must be `NULL` or
+/// point to writable storage for one `char *`.
+#[no_mangle]
+pub unsafe extern "C" fn odc_repo_commit_json(
+    repo: *mut OdcRepo,
+    message_utf8: *const c_char,
+    author_utf8: *const c_char,
+    error_message: *mut *mut c_char,
+) -> *mut c_char {
+    guarded(error_message, ptr::null_mut(), || {
+        let repo = repo_mut(repo)?;
+        let message = text_arg(message_utf8, "message")?;
+        if message.trim().is_empty() {
+            return Err("message must not be empty".to_string());
+        }
+        let author = text_arg(author_utf8, "author")?;
+        if author.trim().is_empty() {
+            return Err("author must not be empty".to_string());
+        }
+        let outcome = repo
+            .repo
+            .commit(&message, &author, now())
+            .map_err(|error| error.to_string())?;
+        to_c_string(&json!({
+            "hash": odc_core::hash::to_hex(&outcome.commit.hash),
+            "entry_count": outcome.commit.entry_count,
+            "ts": outcome.commit.ts,
+            "author": outcome.commit.author,
+            "message": outcome.commit.message,
+            "new_blocks": outcome.new_blocks,
+            "reused_blocks": outcome.reused_blocks,
+            "entries": outcome.entries,
+        }))
+    })
+}
+
+/// Discard every working-set change; HEAD is untouched.
+///
+/// Returns `{"discarded": true}`.
+///
+/// # Safety
+///
+/// `repo` must be `NULL` or a live handle; `error_message` must be `NULL` or
+/// point to writable storage for one `char *`.
+#[no_mangle]
+pub unsafe extern "C" fn odc_repo_discard_json(
+    repo: *mut OdcRepo,
+    error_message: *mut *mut c_char,
+) -> *mut c_char {
+    guarded(error_message, ptr::null_mut(), || {
+        let repo = repo_mut(repo)?;
+        repo.repo
+            .discard_working()
+            .map_err(|error| error.to_string())?;
+        to_c_string(&json!({ "discarded": true }))
     })
 }
 /// Import an MDX file into a standalone `.odc` file.
@@ -869,6 +1110,214 @@ unsafe fn text_arg(value: *const c_char, name: &str) -> Result<String, String> {
     text.to_str()
         .map(str::to_owned)
         .map_err(|_| format!("{name} is not valid UTF-8"))
+}
+
+/// Mutable handle reference for the write entry points.
+///
+/// # Safety
+///
+/// `repo` must be `NULL` or a live handle whose storage is writable and is
+/// used by one thread at a time.
+unsafe fn repo_mut<'a>(repo: *mut OdcRepo) -> Result<&'a mut OdcRepo, String> {
+    if repo.is_null() {
+        return Err("repository handle is NULL".to_string());
+    }
+    // SAFETY: the caller guarantees the pointer is live and exclusive for
+    // the duration of the call.
+    Ok(unsafe { &mut *repo })
+}
+
+/// A NUL-terminated argument that may be omitted by passing `NULL`.
+unsafe fn optional_text_arg(value: *const c_char, name: &str) -> Result<Option<String>, String> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    text_arg(value, name).map(Some)
+}
+
+/// Validate and convert a paged call's `limit`.
+fn page_limit(limit: i32) -> Result<usize, String> {
+    if !(1..=MAX_PAGE_LIMIT).contains(&limit) {
+        return Err(format!("limit must be between 1 and {MAX_PAGE_LIMIT}"));
+    }
+    usize::try_from(limit).map_err(|_| "limit out of range".to_string())
+}
+
+/// JSON shape of [`odc_core::repo::Status`].
+fn status_json(status: &Status) -> JsonValue {
+    json!({
+        "added": status.added,
+        "modified": status.modified,
+        "removed": status.removed,
+        "total": status.total,
+        "entries": status.entries,
+        "blocks": status.blocks,
+        "head": status.head.clone(),
+    })
+}
+
+fn outcome_json(outcome: EntryWriteOutcome) -> &'static str {
+    match outcome {
+        EntryWriteOutcome::Added => "added",
+        EntryWriteOutcome::Modified => "modified",
+        EntryWriteOutcome::Deleted => "deleted",
+        EntryWriteOutcome::NotFound => "not_found",
+    }
+}
+
+fn change_kind_json(kind: ChangeKind) -> &'static str {
+    match kind {
+        ChangeKind::Added => "added",
+        ChangeKind::Modified => "modified",
+        ChangeKind::Deleted => "deleted",
+    }
+}
+
+fn diff_kind_json(kind: DiffKind) -> &'static str {
+    match kind {
+        DiffKind::Added => "added",
+        DiffKind::Modified => "modified",
+        DiffKind::Deleted => "deleted",
+        DiffKind::Absent => "absent",
+    }
+}
+
+/// JSON shape of one field in an [`odc_core::repo::EntryDiff`].
+fn field_diff_json(field: &FieldDiff) -> JsonValue {
+    json!({
+        "field": field.field,
+        "before": field.before.as_ref().map(cbor_to_json),
+        "after": field.after.as_ref().map(cbor_to_json),
+        "changed": field.changed,
+    })
+}
+
+/// JSON shape of [`odc_core::repo::EntryDiff`].
+fn entry_diff_json(diff: &EntryDiff) -> JsonValue {
+    json!({
+        "key": diff.key,
+        "kind": diff_kind_json(diff.kind),
+        "fields": diff.fields.iter().map(field_diff_json).collect::<Vec<_>>(),
+    })
+}
+
+/// Map a JSON value onto the canonical CBOR subset used by `extra`.
+///
+/// ODC payloads have no floating point type, so a JSON number must be an
+/// integer; anything else is rejected instead of being silently rounded.
+fn json_to_cbor(value: &JsonValue) -> Result<CborValue, String> {
+    match value {
+        JsonValue::Null => Ok(CborValue::Null),
+        JsonValue::Bool(flag) => Ok(CborValue::Bool(*flag)),
+        JsonValue::String(text) => Ok(CborValue::Text(text.clone())),
+        JsonValue::Number(number) => number
+            .as_i64()
+            .map(CborValue::Int)
+            .ok_or_else(|| "extra numbers must be integers".to_string()),
+        JsonValue::Array(items) => items
+            .iter()
+            .map(json_to_cbor)
+            .collect::<Result<Vec<_>, String>>()
+            .map(CborValue::Array),
+        JsonValue::Object(pairs) => pairs
+            .iter()
+            .map(|(name, item)| Ok((CborValue::Text(name.clone()), json_to_cbor(item)?)))
+            .collect::<Result<Vec<_>, String>>()
+            .map(CborValue::Map),
+    }
+}
+
+/// Read an array of strings, rejecting any other element type.
+fn string_array(value: &JsonValue, field: &str) -> Result<Vec<String>, String> {
+    value
+        .as_array()
+        .ok_or_else(|| format!("{field} must be an array"))?
+        .iter()
+        .map(|item| {
+            item.as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| format!("{field} must be strings"))
+        })
+        .collect()
+}
+
+/// Read one definition object from the entry JSON.
+fn def_from_json(value: &JsonValue) -> Result<Def, String> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| "def must be an object".to_string())?;
+    let mut def = Def::default();
+    if let Some(pos) = object.get("pos").and_then(JsonValue::as_str) {
+        def.pos = pos.to_string();
+    }
+    if let Some(sense) = object.get("sense").and_then(JsonValue::as_str) {
+        def.sense = sense.to_string();
+    }
+    if let Some(examples) = object.get("examples") {
+        def.examples = string_array(examples, "examples")?;
+    }
+    if let Some(labels) = object.get("labels") {
+        def.labels = string_array(labels, "labels")?;
+    }
+    Ok(def)
+}
+
+/// Parse the entry object [`entry_to_json`] produces.
+fn entry_from_json(value: &JsonValue) -> Result<Entry, String> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| "entry must be a JSON object".to_string())?;
+    let word = object
+        .get("key")
+        .or_else(|| object.get("word"))
+        .and_then(JsonValue::as_str)
+        .ok_or_else(|| "entry is missing \"key\"".to_string())?;
+    let mut entry = Entry::new(word);
+    entry.word = word.to_string();
+    if let Some(display) = object.get("display").and_then(JsonValue::as_str) {
+        entry.display = display.to_string();
+    }
+    if let Some(phonetic) = object.get("phonetic") {
+        entry.phonetic = string_array(phonetic, "phonetic")?;
+    }
+    if let Some(defs) = object.get("defs") {
+        let items = defs
+            .as_array()
+            .ok_or_else(|| "defs must be an array".to_string())?;
+        for item in items {
+            entry.defs.push(def_from_json(item)?);
+        }
+    }
+    if let Some(raw) = object.get("raw_html") {
+        entry.raw_html = if raw.is_null() {
+            None
+        } else {
+            Some(
+                raw.as_str()
+                    .ok_or_else(|| "raw_html must be a string or null".to_string())?
+                    .to_string(),
+            )
+        };
+    }
+    if let Some(extra) = object.get("extra") {
+        let pairs = extra
+            .as_object()
+            .ok_or_else(|| "extra must be an object".to_string())?;
+        entry.extra = pairs
+            .iter()
+            .map(|(name, item)| Ok((name.clone(), json_to_cbor(item)?)))
+            .collect::<Result<Vec<_>, String>>()?;
+    }
+    Ok(entry)
+}
+
+/// Current Unix timestamp in seconds.
+fn now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| {
+            i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
+        })
 }
 
 fn to_c_string(value: &JsonValue) -> Result<*mut c_char, String> {
