@@ -39,6 +39,8 @@ pub enum Error {
     UnknownCommit(String),
     /// `commit` was called while the working set equals HEAD.
     NoChanges,
+    /// A write was attempted on a packed, read-only distribution file.
+    ReadOnly(String),
     /// `init` was called on an already initialised repository.
     AlreadyInitialized(String),
     /// The directory does not contain an ODC repository.
@@ -104,6 +106,7 @@ impl Error {
             Self::UnknownCodec(_) => "ODC-E010",
             Self::UnknownCommit(_) => "ODC-E011",
             Self::NoChanges => "ODC-E012",
+            Self::ReadOnly(_) => "ODC-E031",
             Self::AlreadyInitialized(_) => "ODC-E013",
             Self::NotARepository(_) => "ODC-E014",
             Self::UnsupportedVersion { .. } => "ODC-E015",
@@ -144,6 +147,9 @@ impl fmt::Display for Error {
             Self::UnknownCodec(codec) => format!("unknown block codec {codec}"),
             Self::UnknownCommit(rev) => format!("unknown commit {rev}"),
             Self::NoChanges => "nothing to commit: working set is identical to HEAD".to_string(),
+            Self::ReadOnly(path) => {
+                format!("repository is read-only (packed distribution file): {path}")
+            }
             Self::AlreadyInitialized(path) => format!("repository already initialized at {path}"),
             Self::NotARepository(path) => format!("not an ODC repository: {path}"),
             Self::UnsupportedVersion { found, supported } => {

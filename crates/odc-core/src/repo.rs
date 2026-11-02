@@ -28,6 +28,7 @@ pub struct Repo {
     pub(crate) connection: Connection,
     dir: PathBuf,
     db_path: PathBuf,
+    read_only: bool,
 }
 
 /// Result of `import`.
@@ -66,6 +67,79 @@ impl Status {
     pub fn is_clean(&self) -> bool {
         self.added == 0 && self.modified == 0 && self.removed == 0
     }
+}
+
+/// Outcome of a single working-set write.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EntryWriteOutcome {
+    /// The key did not exist in HEAD; a new working-set row was written.
+    Added,
+    /// The key already existed in HEAD; its working-set row was replaced.
+    Modified,
+    /// The key was removed from the working set.
+    Deleted,
+    /// The key was not in the working set, so there was nothing to delete.
+    NotFound,
+}
+
+/// How one key differs between HEAD and the working set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChangeKind {
+    /// Present in the working set only.
+    Added,
+    /// Present on both sides with a different content hash.
+    Modified,
+    /// Present in HEAD only.
+    Deleted,
+}
+
+/// One row of [`Repo::working_changes`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChangeRow {
+    /// Normalised key.
+    pub key: String,
+    /// What happened to the key.
+    pub kind: ChangeKind,
+}
+
+/// Kind of change reported by [`Repo::entry_diff`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiffKind {
+    /// Present in the working set only.
+    Added,
+    /// Present on both sides, with at least one changed field.
+    Modified,
+    /// Present in HEAD only.
+    Deleted,
+    /// Present in neither HEAD nor the working set.
+    Absent,
+}
+
+/// One field of an [`EntryDiff`].
+///
+/// `before` and `after` are `None` when the field does not exist on that
+/// side, so an added definition shows `before: None` for every attribute.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FieldDiff {
+    /// Field name, e.g. `display`, `defs[0].sense` or `extra.source`.
+    pub field: String,
+    /// Value in HEAD, if the field exists there.
+    pub before: Option<Value>,
+    /// Value in the working set, if the field exists there.
+    pub after: Option<Value>,
+    /// Whether `before` and `after` differ.
+    pub changed: bool,
+}
+
+/// Field-level diff of one entry between HEAD and the working set.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EntryDiff {
+    /// Normalised key.
+    pub key: String,
+    /// What happened to the entry as a whole.
+    pub kind: DiffKind,
+    /// Every field present on either side, in a stable order.
+    pub fields: Vec<FieldDiff>,
 }
 
 /// A stored commit row.
@@ -269,6 +343,113 @@ pub(crate) fn mark_workset_dirty(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Text value for a field that is always present.
+fn text_value(text: &str) -> Value {
+    Value::Text(text.to_string())
+}
+
+/// Text value for a field that may be explicitly null (raw_html).
+fn nullable_text_value(text: Option<&str>) -> Value {
+    text.map_or(Value::Null, text_value)
+}
+
+/// Canonical CBOR array for a list of strings.
+fn text_array(values: &[String]) -> Value {
+    Value::Array(values.iter().cloned().map(Value::Text).collect())
+}
+
+/// Append one field to a diff, computing changed from the two sides.
+fn push_field(
+    fields: &mut Vec<FieldDiff>,
+    field: String,
+    before: Option<Value>,
+    after: Option<Value>,
+) {
+    let changed = before != after;
+    fields.push(FieldDiff {
+        field,
+        before,
+        after,
+        changed,
+    });
+}
+
+/// Flatten two entries into comparable fields, in a stable order.
+///
+/// defs is indexed by position so an inserted definition shows every
+/// attribute of the shifted ones as changed; a definition that exists on one
+/// side only yields None for every attribute on the other.
+fn diff_fields(before: Option<&Entry>, after: Option<&Entry>) -> Vec<FieldDiff> {
+    let mut fields = Vec::new();
+    push_field(
+        &mut fields,
+        "display".to_string(),
+        before.map(|entry| text_value(&entry.display)),
+        after.map(|entry| text_value(&entry.display)),
+    );
+    push_field(
+        &mut fields,
+        "phonetic".to_string(),
+        before.map(|entry| text_array(&entry.phonetic)),
+        after.map(|entry| text_array(&entry.phonetic)),
+    );
+    let defs_before = before.map_or(0, |entry| entry.defs.len());
+    let defs_after = after.map_or(0, |entry| entry.defs.len());
+    for index in 0..defs_before.max(defs_after) {
+        let old = before.and_then(|entry| entry.defs.get(index));
+        let new = after.and_then(|entry| entry.defs.get(index));
+        push_field(
+            &mut fields,
+            format!("defs[{index}].pos"),
+            old.map(|def| text_value(&def.pos)),
+            new.map(|def| text_value(&def.pos)),
+        );
+        push_field(
+            &mut fields,
+            format!("defs[{index}].sense"),
+            old.map(|def| text_value(&def.sense)),
+            new.map(|def| text_value(&def.sense)),
+        );
+        push_field(
+            &mut fields,
+            format!("defs[{index}].examples"),
+            old.map(|def| text_array(&def.examples)),
+            new.map(|def| text_array(&def.examples)),
+        );
+        push_field(
+            &mut fields,
+            format!("defs[{index}].labels"),
+            old.map(|def| text_array(&def.labels)),
+            new.map(|def| text_array(&def.labels)),
+        );
+    }
+    push_field(
+        &mut fields,
+        "raw_html".to_string(),
+        before.map(|entry| nullable_text_value(entry.raw_html.as_deref())),
+        after.map(|entry| nullable_text_value(entry.raw_html.as_deref())),
+    );
+    let mut names: Vec<&str> = Vec::new();
+    for entry in [before, after].into_iter().flatten() {
+        for (name, _) in &entry.extra {
+            if !names.contains(&name.as_str()) {
+                names.push(name.as_str());
+            }
+        }
+    }
+    names.sort_unstable();
+    for name in names {
+        let old = before
+            .and_then(|entry| entry.extra.iter().find(|(key, _)| key == name))
+            .map(|(_, value)| value.clone());
+        let new = after
+            .and_then(|entry| entry.extra.iter().find(|(key, _)| key == name))
+            .map(|(_, value)| value.clone());
+        push_field(&mut fields, format!("extra.{name}"), old, new);
+    }
+    fields
+}
+
 pub(crate) fn hash_from_blob(bytes: &[u8]) -> Result<[u8; 32]> {
     bytes
         .try_into()
@@ -298,6 +479,7 @@ impl Repo {
             connection,
             dir,
             db_path,
+            read_only: false,
         };
         repo.write_genesis()?;
         Ok(repo)
@@ -323,11 +505,22 @@ impl Repo {
         let version = store::schema_version(&connection)?;
         store::install_entry_view(&connection, version)?;
         store::ensure_resources_table(&connection)?;
+        // A pack is a single distribution file: writes would have nowhere to
+        // stage a new commit and must fail with an explicit error instead of
+        // an obscure I/O failure.
+        let read_only = dir.is_file();
         Ok(Self {
             connection,
             dir,
             db_path,
+            read_only,
         })
+    }
+
+    /// True when the repository was opened from a packed distribution file.
+    #[must_use]
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
     }
 
     /// Repository directory (or the exported file when opened from a pack).
@@ -437,6 +630,9 @@ impl Repo {
     /// Reading a v1 repository never touches the file; the first write is the
     /// point where the layout is upgraded and `meta.schema_version` becomes 2.
     pub(crate) fn ensure_writable(&mut self) -> Result<()> {
+        if self.read_only {
+            return Err(Error::ReadOnly(self.dir.display().to_string()));
+        }
         if store::upgrade_to_v2(&self.connection)? {
             // The rewrite leaves the old table pages on the free list; give the
             // space back once instead of carrying it for the life of the file.
@@ -807,7 +1003,9 @@ impl Repo {
 
     /// Compare the working set with HEAD.
     pub fn status(&self) -> Result<Status> {
-        if workset_is_clean(&self.connection)? {
+        // A packed file has no staging table state at all: its working set is
+        // HEAD by definition.
+        if self.read_only || workset_is_clean(&self.connection)? {
             let entries = self.entry_count()?;
             return Ok(Status {
                 total: entries,
@@ -1412,7 +1610,9 @@ impl Repo {
             )
             .optional()?;
         let Some((payload, content_hash)) = row else {
-            if !workset_is_clean(&self.connection)? {
+            // A packed file has no staging rows and no clean marker, but its
+            // working set is HEAD, so look through to the committed index.
+            if !self.read_only && !workset_is_clean(&self.connection)? {
                 return Ok(None);
             }
             // The working set was dropped after the last commit: a lookup for a
@@ -1446,6 +1646,191 @@ impl Repo {
         let mut entry = Entry::decode_payload(&payload)?;
         entry.word = key;
         Ok(Some(entry))
+    }
+
+    /// One page of working-set entries in ascending key order.
+    ///
+    /// Keys are normalised and sorted with SQLite's binary collation, the
+    /// same order [`Repo::commit`] writes blocks in. `after_key` is the last
+    /// key of the previous page (exclusive), so the caller walks the whole
+    /// dictionary by passing the previous page's last `Entry::word`.
+    pub fn entries_page(&self, after_key: Option<&str>, limit: usize) -> Result<Vec<Entry>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let after = after_key.map(normalize_key);
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        // The table name is chosen here, never from the caller; the page is
+        // read from the working set when it holds edits, from HEAD otherwise.
+        let source = if self.read_only || workset_is_clean(&self.connection)? {
+            "entries"
+        } else {
+            "staging"
+        };
+        let mut statement = self.connection.prepare(&format!(
+            "SELECT word FROM {source}
+             WHERE (?1 IS NULL OR word > ?1)
+             ORDER BY word ASC
+             LIMIT ?2"
+        ))?;
+        let mut rows = statement.query(params![after, limit])?;
+        let mut keys: Vec<String> = Vec::new();
+        while let Some(row) = rows.next()? {
+            keys.push(row.get(0)?);
+        }
+        drop(rows);
+        drop(statement);
+        let mut entries = Vec::with_capacity(keys.len());
+        for key in keys {
+            if let Some(entry) = self.working_entry(&key)? {
+                entries.push(entry);
+            }
+        }
+        Ok(entries)
+    }
+
+    /// Insert or replace one entry in the working set.
+    ///
+    /// The key is normalised with [`normalize_key`]. HEAD is not touched: the
+    /// change becomes part of the next [`Repo::commit`] and is visible to
+    /// [`Repo::status`], [`Repo::working_changes`] and
+    /// [`Repo::entry_diff`] immediately.
+    pub fn upsert_entry(&mut self, entry: &Entry) -> Result<EntryWriteOutcome> {
+        self.ensure_writable()?;
+        self.ensure_workset()?;
+        let key = normalize_key(&entry.word);
+        let existed = self
+            .connection
+            .query_row(
+                "SELECT 1 FROM entries WHERE word = ?1",
+                params![key],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        let transaction = self.connection.transaction()?;
+        transaction.execute(
+            "INSERT INTO staging(word, display, payload, content_hash) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(word) DO UPDATE SET display = excluded.display,
+                                             payload = excluded.payload,
+                                             content_hash = excluded.content_hash",
+            params![
+                key,
+                entry.display,
+                entry.encode_payload(),
+                entry.content_hash()[..store::DIGEST_PREFIX].to_vec()
+            ],
+        )?;
+        mark_workset_dirty(&transaction)?;
+        transaction.commit()?;
+        Ok(if existed {
+            EntryWriteOutcome::Modified
+        } else {
+            EntryWriteOutcome::Added
+        })
+    }
+
+    /// Remove one entry from the working set.
+    ///
+    /// Returns [`EntryWriteOutcome::NotFound`] when the key is not staged; a
+    /// key that only exists in HEAD is staged first, so deleting it counts as
+    /// a deletion against HEAD.
+    pub fn delete_entry(&mut self, key: &str) -> Result<EntryWriteOutcome> {
+        self.ensure_writable()?;
+        self.ensure_workset()?;
+        let key = normalize_key(key);
+        let transaction = self.connection.transaction()?;
+        let removed = transaction.execute("DELETE FROM staging WHERE word = ?1", params![key])?;
+        mark_workset_dirty(&transaction)?;
+        transaction.commit()?;
+        Ok(if removed == 0 {
+            EntryWriteOutcome::NotFound
+        } else {
+            EntryWriteOutcome::Deleted
+        })
+    }
+
+    /// Changed keys between HEAD and the working set, ascending.
+    ///
+    /// `after_key` is exclusive, like [`Repo::entries_page`]. A clean working
+    /// set returns an empty page without touching the staging table.
+    pub fn working_changes(&self, after_key: Option<&str>, limit: usize) -> Result<Vec<ChangeRow>> {
+        if limit == 0 || self.read_only || workset_is_clean(&self.connection)? {
+            return Ok(Vec::new());
+        }
+        let after = after_key.map(normalize_key);
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let mut statement = self.connection.prepare(
+            "SELECT key, kind FROM (
+                 SELECT s.word AS key,
+                        CASE WHEN e.word IS NULL THEN 'added' ELSE 'modified' END AS kind
+                   FROM staging s LEFT JOIN entries e ON e.word = s.word
+                  WHERE e.word IS NULL OR e.content_hash <> s.content_hash
+                 UNION ALL
+                 SELECT e.word AS key, 'deleted' AS kind
+                   FROM entries e LEFT JOIN staging s ON s.word = e.word
+                  WHERE s.word IS NULL
+             )
+             WHERE (?1 IS NULL OR key > ?1)
+             ORDER BY key ASC
+             LIMIT ?2",
+        )?;
+        let mut rows = statement.query(params![after, limit])?;
+        let mut changes = Vec::new();
+        while let Some(row) = rows.next()? {
+            let key: String = row.get(0)?;
+            let kind: String = row.get(1)?;
+            let kind = match kind.as_str() {
+                "added" => ChangeKind::Added,
+                "modified" => ChangeKind::Modified,
+                "deleted" => ChangeKind::Deleted,
+                other => {
+                    return Err(Error::Inconsistent(format!(
+                        "unexpected change kind {other}"
+                    )))
+                }
+            };
+            changes.push(ChangeRow { key, kind });
+        }
+        Ok(changes)
+    }
+
+    /// Field-level diff of one key between HEAD and the working set.
+    ///
+    /// A key that only exists in the working set is reported as
+    /// [`DiffKind::Added`] with `before: None` on every field; HEAD-only keys
+    /// are [`DiffKind::Deleted`] with `after: None`.
+    pub fn entry_diff(&self, key: &str) -> Result<EntryDiff> {
+        let key = normalize_key(key);
+        let before = self.show(&key)?;
+        let after = self.working_entry(&key)?;
+        let kind = match (&before, &after) {
+            (None, None) => DiffKind::Absent,
+            (None, Some(_)) => DiffKind::Added,
+            (Some(_), None) => DiffKind::Deleted,
+            (Some(_), Some(_)) => DiffKind::Modified,
+        };
+        Ok(EntryDiff {
+            key,
+            kind,
+            fields: diff_fields(before.as_ref(), after.as_ref()),
+        })
+    }
+
+    /// Throw away every working-set change and restore HEAD.
+    ///
+    /// History is untouched; only the staging table and its clean marker
+    /// change. Calling this on a clean working set is a no-op.
+    pub fn discard_working(&mut self) -> Result<()> {
+        self.ensure_writable()?;
+        if workset_is_clean(&self.connection)? {
+            return Ok(());
+        }
+        let transaction = self.connection.transaction()?;
+        transaction.execute("DELETE FROM staging", [])?;
+        store::set_meta(&transaction, store::META_WORKSET_CLEAN, b"1")?;
+        transaction.commit()?;
+        Ok(())
     }
 
     fn payload_from_index(&self, word: &str, content_hash: &[u8]) -> Result<Vec<u8>> {
