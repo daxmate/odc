@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-31T03:28:19Z",
-  "updated_at": "2026-10-31T06:59:38Z",
+  "updated_at": "2026-11-02T05:29:32Z",
   "files": {
     ".gitattributes": {
       "role": "index",
@@ -11,15 +11,15 @@
     },
     ".github/workflows/ci.yml": {
       "role": "index",
-      "sha256": "37af812a2815d716bb33dc42de1140409bf4abf35e8d791d110cd16fcec0342c",
-      "size": 1492,
-      "normalized_sha256": "37af812a2815d716bb33dc42de1140409bf4abf35e8d791d110cd16fcec0342c"
+      "sha256": "bb64994b08ec4bb6c557af5092d43b7225dd17fac70b28deeb11288c8d2a701f",
+      "size": 2100,
+      "normalized_sha256": "bb64994b08ec4bb6c557af5092d43b7225dd17fac70b28deeb11288c8d2a701f"
     },
     ".gitignore": {
       "role": "index",
-      "sha256": "f7bbdc1e725d8d8f402afcba9fa3e50b4d26b1fa806e300841d400f7655d80ea",
-      "size": 61,
-      "normalized_sha256": "f7bbdc1e725d8d8f402afcba9fa3e50b4d26b1fa806e300841d400f7655d80ea"
+      "sha256": "60603f01319ab0e170347dac0c6f5da421587bb5c0dd21a22cc1a9d2d48588a8",
+      "size": 330,
+      "normalized_sha256": "60603f01319ab0e170347dac0c6f5da421587bb5c0dd21a22cc1a9d2d48588a8"
     },
     "AGENTS.md": {
       "role": "index",
@@ -29,9 +29,9 @@
     },
     "CHANGELOG.md": {
       "role": "index",
-      "sha256": "6f6d658b43862afcb4c8616c8a2e7f218776d01f4c98f28c4a049da43e097b15",
-      "size": 3625,
-      "normalized_sha256": "6f6d658b43862afcb4c8616c8a2e7f218776d01f4c98f28c4a049da43e097b15"
+      "sha256": "42dcdfd0d7f78bd4b85d5b3ebc142ebf598d195da0323982f8ee62d1a7d601c9",
+      "size": 14875,
+      "normalized_sha256": "42dcdfd0d7f78bd4b85d5b3ebc142ebf598d195da0323982f8ee62d1a7d601c9"
     },
     "CONTRIBUTING.md": {
       "role": "index",
@@ -41,15 +41,15 @@
     },
     "Cargo.lock": {
       "role": "index",
-      "sha256": "36b121bc30efa2a27122b1855acdbd5a7650c046c16357ac2903076a494e280c",
-      "size": 28068,
-      "normalized_sha256": "36b121bc30efa2a27122b1855acdbd5a7650c046c16357ac2903076a494e280c"
+      "sha256": "1975ee255518780b2054df19933657ebfbe5ddf54701b008597934fbefa8dee3",
+      "size": 28203,
+      "normalized_sha256": "1975ee255518780b2054df19933657ebfbe5ddf54701b008597934fbefa8dee3"
     },
     "Cargo.toml": {
       "role": "index",
-      "sha256": "7921d39a697f30a4ec6ee3fa6f6648e90ff355c74215e7850be0b3575a220f7a",
-      "size": 631,
-      "normalized_sha256": "7921d39a697f30a4ec6ee3fa6f6648e90ff355c74215e7850be0b3575a220f7a"
+      "sha256": "3e4ec6da8a16360453bdff8392f3bd8d582f8507f1fa97964ba5053755329b9a",
+      "size": 668,
+      "normalized_sha256": "3e4ec6da8a16360453bdff8392f3bd8d582f8507f1fa97964ba5053755329b9a"
     },
     "LICENSE": {
       "role": "index",
@@ -59,9 +59,9 @@
     },
     "README.md": {
       "role": "index",
-      "sha256": "7910d0dd2cb98e98c90776549dbfcd5a930910d947abcba60bed0432438d415b",
-      "size": 7673,
-      "normalized_sha256": "7910d0dd2cb98e98c90776549dbfcd5a930910d947abcba60bed0432438d415b"
+      "sha256": "69f84627f8573a5b2fe557acdfb43e23ae3f2d3bff99eb44bed4c1ac8d09033f",
+      "size": 9400,
+      "normalized_sha256": "69f84627f8573a5b2fe557acdfb43e23ae3f2d3bff99eb44bed4c1ac8d09033f"
     },
     "SECURITY.md": {
       "role": "index",
@@ -71,9 +71,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "486506ee98fa6c9b39ba8ba6b0b635e3e0ec4131085b67c31f0abdbd9eaf0bcd",
-      "size": 15439,
-      "normalized_sha256": "486506ee98fa6c9b39ba8ba6b0b635e3e0ec4131085b67c31f0abdbd9eaf0bcd"
+      "sha256": "e69d434a94df3a86ca167b7c75aac534eb190e9ea683d213413a678c2e1dc911",
+      "size": 43268,
+      "normalized_sha256": "e69d434a94df3a86ca167b7c75aac534eb190e9ea683d213413a678c2e1dc911"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -87,17 +87,413 @@
       "size": 292,
       "normalized_sha256": "f83bd1d01ee6b58f83c35eddb517fa6e34e6042d668487f8b7d827bcc3f42a80"
     },
+    "apps/apple/ODict.xcodeproj/project.pbxproj": {
+      "role": "index",
+      "sha256": "f2f4755c3b3a66b0cc385e0604ae3a700bd28a1be311b46c840d5553cc0bf106",
+      "size": 16865,
+      "normalized_sha256": "f2f4755c3b3a66b0cc385e0604ae3a700bd28a1be311b46c840d5553cc0bf106"
+    },
+    "apps/apple/ODict.xcodeproj/project.xcworkspace/contents.xcworkspacedata": {
+      "role": "index",
+      "sha256": "7f3b00b5c3fdb45242d7b87e1e5c4e25d1fa8129a16c94295ecc4e8ea2235c5f",
+      "size": 135,
+      "normalized_sha256": "7f3b00b5c3fdb45242d7b87e1e5c4e25d1fa8129a16c94295ecc4e8ea2235c5f"
+    },
+    "apps/apple/ODict.xcodeproj/xcshareddata/xcschemes/ODict.xcscheme": {
+      "role": "index",
+      "sha256": "399473bfddc25479d980b990d33cd29516245c402d3e7b0d926bfe69fbef7aa1",
+      "size": 3322,
+      "normalized_sha256": "399473bfddc25479d980b990d33cd29516245c402d3e7b0d926bfe69fbef7aa1"
+    },
+    "apps/apple/ODict.xcodeproj/xcshareddata/xcschemes/ODictDesktop.xcscheme": {
+      "role": "index",
+      "sha256": "d7dbfc502dd371b6e855532b63286130dfd7a6ea036f6941569de58b2af0cdfa",
+      "size": 3378,
+      "normalized_sha256": "d7dbfc502dd371b6e855532b63286130dfd7a6ea036f6941569de58b2af0cdfa"
+    },
+    "apps/apple/ODict/Info.plist": {
+      "role": "index",
+      "sha256": "ee48d0bdd5195f7b5ad739644304dacd97993cfdd4303e75dffd2fb8c446beb4",
+      "size": 1893,
+      "normalized_sha256": "ee48d0bdd5195f7b5ad739644304dacd97993cfdd4303e75dffd2fb8c446beb4"
+    },
+    "apps/apple/ODict/ODictApp.swift": {
+      "role": "index",
+      "sha256": "d8f36e39e6daa3fdc654d0f05d97a2a78ee72f4fe8f7e5916aaf134d688f942f",
+      "size": 395,
+      "normalized_sha256": "d8f36e39e6daa3fdc654d0f05d97a2a78ee72f4fe8f7e5916aaf134d688f942f"
+    },
+    "apps/apple/ODictDesktop/Info.plist": {
+      "role": "index",
+      "sha256": "d1fa452dccc432c634a9960226635fffc2bd93c3cd4d836611298197087e12c0",
+      "size": 1670,
+      "normalized_sha256": "d1fa452dccc432c634a9960226635fffc2bd93c3cd4d836611298197087e12c0"
+    },
+    "apps/apple/ODictDesktop/ODictDesktop.entitlements": {
+      "role": "index",
+      "sha256": "ef334ae01ca4823f0c5f4aeb8b642e5e4b0cb0991925f937d15de4df5955b413",
+      "size": 525,
+      "normalized_sha256": "ef334ae01ca4823f0c5f4aeb8b642e5e4b0cb0991925f937d15de4df5955b413"
+    },
+    "apps/apple/ODictDesktop/ODictDesktopApp.swift": {
+      "role": "index",
+      "sha256": "b80293e4c59839412bfd6d91360d98776d1837e5e7b7ef7b752d52b9ef23854d",
+      "size": 2405,
+      "normalized_sha256": "b80293e4c59839412bfd6d91360d98776d1837e5e7b7ef7b752d52b9ef23854d"
+    },
+    "apps/apple/ODictKit/Package.swift": {
+      "role": "index",
+      "sha256": "30322f3acb1a83f91e15085032e53d6131a1d386453b48d06994851af0150ce0",
+      "size": 673,
+      "normalized_sha256": "30322f3acb1a83f91e15085032e53d6131a1d386453b48d06994851af0150ce0"
+    },
+    "apps/apple/ODictKit/Sources/ODictKit/DictionaryStore.swift": {
+      "role": "index",
+      "sha256": "418f04fc7518573194106990a33da126375f56734909fda53e2600e2aac537c8",
+      "size": 47986,
+      "normalized_sha256": "418f04fc7518573194106990a33da126375f56734909fda53e2600e2aac537c8"
+    },
+    "apps/apple/ODictKit/Sources/ODictKit/DocumentLibrary.swift": {
+      "role": "index",
+      "sha256": "51921a6671ac61d4d93a3eaecc59868064f1a716c4775e9e5ac149a7d64f73ad",
+      "size": 4086,
+      "normalized_sha256": "51921a6671ac61d4d93a3eaecc59868064f1a716c4775e9e5ac149a7d64f73ad"
+    },
+    "apps/apple/ODictKit/Sources/ODictKit/Editing/CSVImportModel.swift": {
+      "role": "index",
+      "sha256": "288679faf99132ef56527485353acb46fd98a86f5332d4e2ee59edc691c69982",
+      "size": 6414,
+      "normalized_sha256": "288679faf99132ef56527485353acb46fd98a86f5332d4e2ee59edc691c69982"
+    },
+    "apps/apple/ODictKit/Sources/ODictKit/Editing/CSVTable.swift": {
+      "role": "index",
+      "sha256": "392bf8ee568033e2a7dc8f40d35fc78799344610ef00d106685f3a104a0f74f8",
+      "size": 10720,
+      "normalized_sha256": "392bf8ee568033e2a7dc8f40d35fc78799344610ef00d106685f3a104a0f74f8"
+    },
+    "apps/apple/ODictKit/Sources/ODictKit/Editing/DictionaryEditorModel.swift": {
+      "role": "index",
+      "sha256": "0b2d5b12a189622015cb2f5027d7f2ed7058155b9f7bca59e593c017e521edf5",
+      "size": 15799,
+      "normalized_sha256": "0b2d5b12a189622015cb2f5027d7f2ed7058155b9f7bca59e593c017e521edf5"
+    },
+    "apps/apple/ODictKit/Sources/ODictKit/Editing/ODCEditing.swift": {
+      "role": "index",
+      "sha256": "4afddeef0060a67a932804dfd9a2a5a30c10443e4477fa2824a97dca415b744e",
+      "size": 882,
+      "normalized_sha256": "4afddeef0060a67a932804dfd9a2a5a30c10443e4477fa2824a97dca415b744e"
+    },
+    "apps/apple/ODictKit/Sources/ODictKit/EntryHTML.swift": {
+      "role": "index",
+      "sha256": "2a24dc0bf67f7259f8618990b304d79586061e5a43d627f9d8dd9b7335a12b5c",
+      "size": 28038,
+      "normalized_sha256": "2a24dc0bf67f7259f8618990b304d79586061e5a43d627f9d8dd9b7335a12b5c"
+    },
+    "apps/apple/ODictKit/Sources/ODictKit/LibraryStore.swift": {
+      "role": "index",
+      "sha256": "3708a202090746174e7fba96ceb8e6354100c0819e48e9eba310611e498a6140",
+      "size": 36238,
+      "normalized_sha256": "3708a202090746174e7fba96ceb8e6354100c0819e48e9eba310611e498a6140"
+    },
+    "apps/apple/ODictKit/Sources/ODictKit/MDXImport.swift": {
+      "role": "index",
+      "sha256": "17b75c0210381009af3a0e76a8c58af03944e9c796b9645810cf6bbef178848e",
+      "size": 28826,
+      "normalized_sha256": "17b75c0210381009af3a0e76a8c58af03944e9c796b9645810cf6bbef178848e"
+    },
+    "apps/apple/ODictKit/Sources/ODictKit/Models.swift": {
+      "role": "index",
+      "sha256": "95c375d6b0122d1d2f0b40f9ee736174efdf36d572d187d6bbf7cad1c28a79f2",
+      "size": 12643,
+      "normalized_sha256": "95c375d6b0122d1d2f0b40f9ee736174efdf36d572d187d6bbf7cad1c28a79f2"
+    },
+    "apps/apple/ODictKit/Sources/ODictKit/ODCFFI.swift": {
+      "role": "index",
+      "sha256": "05c5d54fd1d946212a96a06f1c8b645b6501b21512a8bf82f9a64bcacbad3654",
+      "size": 15527,
+      "normalized_sha256": "05c5d54fd1d946212a96a06f1c8b645b6501b21512a8bf82f9a64bcacbad3654"
+    },
+    "apps/apple/ODictKit/Sources/ODictKit/ODCResource.swift": {
+      "role": "index",
+      "sha256": "af07dc0b01d80a5f572048cca36b9b98ac761877f42384751c5cb9677f298ef0",
+      "size": 5187,
+      "normalized_sha256": "af07dc0b01d80a5f572048cca36b9b98ac761877f42384751c5cb9677f298ef0"
+    },
+    "apps/apple/ODictKit/Sources/ODictKit/ODictDocument.swift": {
+      "role": "index",
+      "sha256": "acd1b899bf739f549b17a4f7da86b2678a31187e2f1e6596b3fea495d0ad157a",
+      "size": 763,
+      "normalized_sha256": "acd1b899bf739f549b17a4f7da86b2678a31187e2f1e6596b3fea495d0ad157a"
+    },
+    "apps/apple/ODictKit/Sources/ODictKit/ReaderStore.swift": {
+      "role": "index",
+      "sha256": "23dd794770c598a0b963d45ee9a1636994661b1b1de963b0d8e27792bb797691",
+      "size": 6524,
+      "normalized_sha256": "23dd794770c598a0b963d45ee9a1636994661b1b1de963b0d8e27792bb797691"
+    },
+    "apps/apple/ODictKit/Sources/ODictKit/SearchHistoryStore.swift": {
+      "role": "index",
+      "sha256": "a3b073e10dae4f348905a96866c8db0e7a33595d751f1bf0a8ec94ead3a6b9aa",
+      "size": 2327,
+      "normalized_sha256": "a3b073e10dae4f348905a96866c8db0e7a33595d751f1bf0a8ec94ead3a6b9aa"
+    },
+    "apps/apple/ODictKit/Sources/ODictKit/Views/DictionaryRootView.swift": {
+      "role": "index",
+      "sha256": "62e20120b0f6203ac157dabed06ae5dff7169a3515e9ecf8b4aaaf063b82651d",
+      "size": 6875,
+      "normalized_sha256": "62e20120b0f6203ac157dabed06ae5dff7169a3515e9ecf8b4aaaf063b82651d"
+    },
+    "apps/apple/ODictKit/Sources/ODictKit/Views/Editor/CSVImportSheet.swift": {
+      "role": "index",
+      "sha256": "5e26d696aca8773a5aa56a8fdde5a7adf8445d10b6e01c6eaf54e4a8be65a844",
+      "size": 8456,
+      "normalized_sha256": "5e26d696aca8773a5aa56a8fdde5a7adf8445d10b6e01c6eaf54e4a8be65a844"
+    },
+    "apps/apple/ODictKit/Sources/ODictKit/Views/Editor/EditorWindowView.swift": {
+      "role": "index",
+      "sha256": "2b606035e2cf4d7e9b8d80d26bcf64cf3d9943d5c0a3823e2a4bcf482345467b",
+      "size": 19092,
+      "normalized_sha256": "2b606035e2cf4d7e9b8d80d26bcf64cf3d9943d5c0a3823e2a4bcf482345467b"
+    },
+    "apps/apple/ODictKit/Sources/ODictKit/Views/EmptyStateView.swift": {
+      "role": "index",
+      "sha256": "78da33beb6fa88ab654ff5e468a62beaddc8d0949de51ff06f537d8cad1a0f82",
+      "size": 2393,
+      "normalized_sha256": "78da33beb6fa88ab654ff5e468a62beaddc8d0949de51ff06f537d8cad1a0f82"
+    },
+    "apps/apple/ODictKit/Sources/ODictKit/Views/EntryDetailView.swift": {
+      "role": "index",
+      "sha256": "f4e2e717cb27d978aa6588ba3b870d8527965beef3b0357de81f64933b1393e2",
+      "size": 16472,
+      "normalized_sha256": "f4e2e717cb27d978aa6588ba3b870d8527965beef3b0357de81f64933b1393e2"
+    },
+    "apps/apple/ODictKit/Sources/ODictKit/Views/HTMLRenderView.swift": {
+      "role": "index",
+      "sha256": "c4fe9d6ba018fbedddb4e4f6a0cc354b2142aadb9eb277abd93ab68d0df3361e",
+      "size": 14058,
+      "normalized_sha256": "c4fe9d6ba018fbedddb4e4f6a0cc354b2142aadb9eb277abd93ab68d0df3361e"
+    },
+    "apps/apple/ODictKit/Sources/ODictKit/Views/ImportProgressView.swift": {
+      "role": "index",
+      "sha256": "99c6088329b8df109b42fe8afd65ec9c40c1c6fdc98b9bfaeeea0cde325f8a47",
+      "size": 2113,
+      "normalized_sha256": "99c6088329b8df109b42fe8afd65ec9c40c1c6fdc98b9bfaeeea0cde325f8a47"
+    },
+    "apps/apple/ODictKit/Sources/ODictKit/Views/ImportSummaryView.swift": {
+      "role": "index",
+      "sha256": "a3233a2660f8ba1db704e226dbbe0b4da000eb82a84a5d353b18840c2dfaa0a5",
+      "size": 1045,
+      "normalized_sha256": "a3233a2660f8ba1db704e226dbbe0b4da000eb82a84a5d353b18840c2dfaa0a5"
+    },
+    "apps/apple/ODictKit/Sources/ODictKit/Views/LibraryListView.swift": {
+      "role": "index",
+      "sha256": "1b30d338c7c5e8c07a6c10d078149819516b9d0009f4f3ff46c40c24469105d9",
+      "size": 7545,
+      "normalized_sha256": "1b30d338c7c5e8c07a6c10d078149819516b9d0009f4f3ff46c40c24469105d9"
+    },
+    "apps/apple/ODictKit/Sources/ODictKit/Views/OpenURLModifier.swift": {
+      "role": "index",
+      "sha256": "2494d178c17c8b4275536217867ebc22474530bceb901285701ae693672d7c80",
+      "size": 567,
+      "normalized_sha256": "2494d178c17c8b4275536217867ebc22474530bceb901285701ae693672d7c80"
+    },
+    "apps/apple/ODictKit/Sources/ODictKit/Views/SearchFieldReturn.swift": {
+      "role": "index",
+      "sha256": "e59d34790d89d6cb0907b6a3afef16f749de6c7a194fad967cb5b7abd04dff29",
+      "size": 2913,
+      "normalized_sha256": "e59d34790d89d6cb0907b6a3afef16f749de6c7a194fad967cb5b7abd04dff29"
+    },
+    "apps/apple/ODictKit/Sources/ODictKit/Views/SearchResultsView.swift": {
+      "role": "index",
+      "sha256": "fd70205c77c49b92b0fc943381e3b9c5eabb95326cedd654f987ff25aa9139f1",
+      "size": 7164,
+      "normalized_sha256": "fd70205c77c49b92b0fc943381e3b9c5eabb95326cedd654f987ff25aa9139f1"
+    },
+    "apps/apple/ODictKit/Sources/ODictKit/Views/WordbookView.swift": {
+      "role": "index",
+      "sha256": "46f7e726d29d140a24d01351c1f8fa580fc9854419e2955c4ce13fc1eeb1b3ad",
+      "size": 2912,
+      "normalized_sha256": "46f7e726d29d140a24d01351c1f8fa580fc9854419e2955c4ce13fc1eeb1b3ad"
+    },
+    "apps/apple/ODictKit/Tests/ODictKitTests/CSVImportTests.swift": {
+      "role": "index",
+      "sha256": "0bfe33fc77564e927cf4e2391138592956e435402e32894bac4828c40ace637b",
+      "size": 5076,
+      "normalized_sha256": "0bfe33fc77564e927cf4e2391138592956e435402e32894bac4828c40ace637b"
+    },
+    "apps/apple/ODictKit/Tests/ODictKitTests/DictionaryEditorModelTests.swift": {
+      "role": "index",
+      "sha256": "1467a97f938c1646a8b4f2da4a9a940e4f7e6a280e05250cc53d3b8985f7c0c8",
+      "size": 7751,
+      "normalized_sha256": "1467a97f938c1646a8b4f2da4a9a940e4f7e6a280e05250cc53d3b8985f7c0c8"
+    },
+    "apps/apple/ODictKit/Tests/ODictKitTests/DictionaryLibraryTests.swift": {
+      "role": "index",
+      "sha256": "7d500ba01ac4de359c17f4b45427a654adc394fd87544fe0b85211e78c9eda0e",
+      "size": 9730,
+      "normalized_sha256": "7d500ba01ac4de359c17f4b45427a654adc394fd87544fe0b85211e78c9eda0e"
+    },
+    "apps/apple/ODictKit/Tests/ODictKitTests/DictionaryStoreTests.swift": {
+      "role": "index",
+      "sha256": "84371ed6202d0cfc5addfdb44427bd11585511ab1fafa2f7e555bc7383e6eb2f",
+      "size": 10040,
+      "normalized_sha256": "84371ed6202d0cfc5addfdb44427bd11585511ab1fafa2f7e555bc7383e6eb2f"
+    },
+    "apps/apple/ODictKit/Tests/ODictKitTests/DocumentLibraryTests.swift": {
+      "role": "index",
+      "sha256": "2bc4d32e1a6f7deabda14dc9736fafc45a12edcb973a9ac18940fec512accab2",
+      "size": 3026,
+      "normalized_sha256": "2bc4d32e1a6f7deabda14dc9736fafc45a12edcb973a9ac18940fec512accab2"
+    },
+    "apps/apple/ODictKit/Tests/ODictKitTests/EditingTestSupport.swift": {
+      "role": "index",
+      "sha256": "513e56b09302ce7f13e9665ff8260c0c652d4f41eb7e9728759135e80bfbca75",
+      "size": 5381,
+      "normalized_sha256": "513e56b09302ce7f13e9665ff8260c0c652d4f41eb7e9728759135e80bfbca75"
+    },
+    "apps/apple/ODictKit/Tests/ODictKitTests/EditingTests.swift": {
+      "role": "index",
+      "sha256": "38105853740031861f7ce181ec562644f6361fedd67af52785431af95ceb0c86",
+      "size": 3239,
+      "normalized_sha256": "38105853740031861f7ce181ec562644f6361fedd67af52785431af95ceb0c86"
+    },
+    "apps/apple/ODictKit/Tests/ODictKitTests/EditorIntegrationTests.swift": {
+      "role": "index",
+      "sha256": "127bccc14f9d492fee107fa06b017e901cf5623bfd9d2241b5fb2c480845d891",
+      "size": 2361,
+      "normalized_sha256": "127bccc14f9d492fee107fa06b017e901cf5623bfd9d2241b5fb2c480845d891"
+    },
+    "apps/apple/ODictKit/Tests/ODictKitTests/EntryHTMLTests.swift": {
+      "role": "index",
+      "sha256": "33523840ef957c25224dc2c8a23d5be9255eea75a0be773e1784943c7ba34a14",
+      "size": 24123,
+      "normalized_sha256": "33523840ef957c25224dc2c8a23d5be9255eea75a0be773e1784943c7ba34a14"
+    },
+    "apps/apple/ODictKit/Tests/ODictKitTests/Fixture.swift": {
+      "role": "index",
+      "sha256": "754f9c720782290882365e9117485049d00dc4130585934e552f0592b0d5a338",
+      "size": 712,
+      "normalized_sha256": "754f9c720782290882365e9117485049d00dc4130585934e552f0592b0d5a338"
+    },
+    "apps/apple/ODictKit/Tests/ODictKitTests/HTMLRenderTests.swift": {
+      "role": "index",
+      "sha256": "06abad36175e424f8e5a5defa7a206b543491eae2ee9dba6c748f0708da64b2a",
+      "size": 16130,
+      "normalized_sha256": "06abad36175e424f8e5a5defa7a206b543491eae2ee9dba6c748f0708da64b2a"
+    },
+    "apps/apple/ODictKit/Tests/ODictKitTests/LibraryMigrationTests.swift": {
+      "role": "index",
+      "sha256": "eb0cdfbb15efcbdafae6f8ba7702f1a4b1c84ec243be4b3b09c84bcc5b4aa43b",
+      "size": 11407,
+      "normalized_sha256": "eb0cdfbb15efcbdafae6f8ba7702f1a4b1c84ec243be4b3b09c84bcc5b4aa43b"
+    },
+    "apps/apple/ODictKit/Tests/ODictKitTests/LibraryStoreTests.swift": {
+      "role": "index",
+      "sha256": "0bd6902b34532a5d85f9f9d4b3631157cbec4edcc26ba24f88d9035910a830dd",
+      "size": 12860,
+      "normalized_sha256": "0bd6902b34532a5d85f9f9d4b3631157cbec4edcc26ba24f88d9035910a830dd"
+    },
+    "apps/apple/ODictKit/Tests/ODictKitTests/MDXImportTests.swift": {
+      "role": "index",
+      "sha256": "82f12aac93972b3ae3c5ceb0c1c2efc2c998fb1d9e6544041e9bab70ad49e9bb",
+      "size": 16057,
+      "normalized_sha256": "82f12aac93972b3ae3c5ceb0c1c2efc2c998fb1d9e6544041e9bab70ad49e9bb"
+    },
+    "apps/apple/ODictKit/Tests/ODictKitTests/ModelsTests.swift": {
+      "role": "index",
+      "sha256": "751c7bd67592affb676afb9d2207b6fcc6b51a37b2608b7b29fd47701b175d16",
+      "size": 3387,
+      "normalized_sha256": "751c7bd67592affb676afb9d2207b6fcc6b51a37b2608b7b29fd47701b175d16"
+    },
+    "apps/apple/ODictKit/Tests/ODictKitTests/MultiDictionaryTests.swift": {
+      "role": "index",
+      "sha256": "063c861f57d1096e0a74c77e16148a410668091bf2776b247f414d54367154d8",
+      "size": 18202,
+      "normalized_sha256": "063c861f57d1096e0a74c77e16148a410668091bf2776b247f414d54367154d8"
+    },
+    "apps/apple/ODictKit/Tests/ODictKitTests/ODCResourceTests.swift": {
+      "role": "index",
+      "sha256": "4714f644b99351760dcd22939c691e740fcea9b440c65af3e7b9d7d90cfcd7d7",
+      "size": 5045,
+      "normalized_sha256": "4714f644b99351760dcd22939c691e740fcea9b440c65af3e7b9d7d90cfcd7d7"
+    },
+    "apps/apple/ODictKit/Tests/ODictKitTests/OdcDictionaryTests.swift": {
+      "role": "index",
+      "sha256": "a3d06bfb8ebbf2c32bad13d449d8ce303b4b3a3ae5cb963ce3fbaf2f7bce64c5",
+      "size": 3508,
+      "normalized_sha256": "a3d06bfb8ebbf2c32bad13d449d8ce303b4b3a3ae5cb963ce3fbaf2f7bce64c5"
+    },
+    "apps/apple/ODictKit/Tests/ODictKitTests/ReaderMemoryTests.swift": {
+      "role": "index",
+      "sha256": "4700e0d651285b3c8dd671f102a3a5232ac9a2f8831625a3318bcb4afafa04cd",
+      "size": 5157,
+      "normalized_sha256": "4700e0d651285b3c8dd671f102a3a5232ac9a2f8831625a3318bcb4afafa04cd"
+    },
+    "apps/apple/ODictKit/Tests/ODictKitTests/ReaderStoreTests.swift": {
+      "role": "index",
+      "sha256": "d9b436f6c307aafeb35993ee81197146d7ea282d22a027092ac0e0f26a817e4e",
+      "size": 4976,
+      "normalized_sha256": "d9b436f6c307aafeb35993ee81197146d7ea282d22a027092ac0e0f26a817e4e"
+    },
+    "apps/apple/ODictKit/Tests/ODictKitTests/SearchFieldReturnTests.swift": {
+      "role": "index",
+      "sha256": "2642d007694eefdcc8fa534f27105d566224dc623df1a445a0cc1e286bf9da0b",
+      "size": 2668,
+      "normalized_sha256": "2642d007694eefdcc8fa534f27105d566224dc623df1a445a0cc1e286bf9da0b"
+    },
+    "apps/apple/ODictKit/Tests/ODictKitTests/SearchHistoryStoreTests.swift": {
+      "role": "index",
+      "sha256": "570979c7fb350c21134884780d0d9317e63c28f0c543794f5128ed03706122c3",
+      "size": 3992,
+      "normalized_sha256": "570979c7fb350c21134884780d0d9317e63c28f0c543794f5128ed03706122c3"
+    },
+    "apps/apple/README.md": {
+      "role": "index",
+      "sha256": "fbb825683956995cfb02a7a5ab2c2d72712e8e4a8bfca1387f51e737d1e0d907",
+      "size": 6534,
+      "normalized_sha256": "fbb825683956995cfb02a7a5ab2c2d72712e8e4a8bfca1387f51e737d1e0d907"
+    },
+    "apps/apple/Shared/Assets.xcassets/AppIcon.appiconset/Contents.json": {
+      "role": "index",
+      "sha256": "9cf2928dad89427abd581b6852db081352417f400afb65e60c479228cdc4f4da",
+      "size": 216,
+      "normalized_sha256": "9cf2928dad89427abd581b6852db081352417f400afb65e60c479228cdc4f4da"
+    },
+    "apps/apple/Shared/Assets.xcassets/AppIconDesktop.appiconset/Contents.json": {
+      "role": "index",
+      "sha256": "11f48b527c846492d903589931454d10a7368b3077005c361e29124f849aece4",
+      "size": 1251,
+      "normalized_sha256": "11f48b527c846492d903589931454d10a7368b3077005c361e29124f849aece4"
+    },
+    "apps/apple/Shared/Assets.xcassets/Contents.json": {
+      "role": "index",
+      "sha256": "0fd49ba3c3585c709678e0046a821c3c60685ec7063720d30d3a3448be3a208b",
+      "size": 63,
+      "normalized_sha256": "0fd49ba3c3585c709678e0046a821c3c60685ec7063720d30d3a3448be3a208b"
+    },
+    "apps/apple/project.yml": {
+      "role": "index",
+      "sha256": "e32ad0112791c261c6ee82af137cf349fb61d4e64356dfbeccd77fc7676bc573",
+      "size": 3059,
+      "normalized_sha256": "e32ad0112791c261c6ee82af137cf349fb61d4e64356dfbeccd77fc7676bc573"
+    },
+    "build-app.sh": {
+      "role": "index",
+      "sha256": "8bf1601fa96c24ae6abdd507a146427c8700b17a266c6e25093fb0071ccd7fd9",
+      "size": 265,
+      "normalized_sha256": "8bf1601fa96c24ae6abdd507a146427c8700b17a266c6e25093fb0071ccd7fd9"
+    },
     "crates/odc-cli/Cargo.toml": {
       "role": "index",
-      "sha256": "e2a5aeaf6dc70b8768a5e5785cc18b3c37c33f065418841d42ed05536a5ab9c4",
+      "sha256": "0802d454c8d251d4176181b294ba6c414dd132d8a741b5de591dbb4d29a35839",
       "size": 738,
-      "normalized_sha256": "e2a5aeaf6dc70b8768a5e5785cc18b3c37c33f065418841d42ed05536a5ab9c4"
+      "normalized_sha256": "0802d454c8d251d4176181b294ba6c414dd132d8a741b5de591dbb4d29a35839"
     },
     "crates/odc-cli/src/main.rs": {
       "role": "index",
-      "sha256": "58d8ce43bc58e80a8e982e4648a6a2f407e7147f0235542a65029c7ee57742de",
-      "size": 44632,
-      "normalized_sha256": "58d8ce43bc58e80a8e982e4648a6a2f407e7147f0235542a65029c7ee57742de"
+      "sha256": "ecf2e44c1ef6bbee43502d6178a781bb77e147c29c7730c48c29405846514c23",
+      "size": 51880,
+      "normalized_sha256": "ecf2e44c1ef6bbee43502d6178a781bb77e147c29c7730c48c29405846514c23"
     },
     "crates/odc-cli/tests/cli.rs": {
       "role": "observe",
@@ -113,15 +509,21 @@
     },
     "crates/odc-cli/tests/cli_mdx.rs": {
       "role": "observe",
-      "sha256": "29e3321e22d0b07adba3fa464653d1f4ab326d4c9a9e303077e0cb558fae5aec",
-      "size": 7106,
-      "normalized_sha256": "29e3321e22d0b07adba3fa464653d1f4ab326d4c9a9e303077e0cb558fae5aec"
+      "sha256": "0771bc988cd0ee0e3c251199e67dedb507ce52d7b1e1f68cb231ee83d43b123a",
+      "size": 10557,
+      "normalized_sha256": "0771bc988cd0ee0e3c251199e67dedb507ce52d7b1e1f68cb231ee83d43b123a"
     },
     "crates/odc-cli/tests/cli_merge.rs": {
       "role": "observe",
-      "sha256": "49b58a881dc3ece6262ffd9f25ecbad859367b601170484c5ef1c9aa10661969",
-      "size": 11248,
-      "normalized_sha256": "49b58a881dc3ece6262ffd9f25ecbad859367b601170484c5ef1c9aa10661969"
+      "sha256": "c6ff949133b92182b6a83f85d0c23d9c9c44556696dc8fbc413aff9204efda18",
+      "size": 11600,
+      "normalized_sha256": "c6ff949133b92182b6a83f85d0c23d9c9c44556696dc8fbc413aff9204efda18"
+    },
+    "crates/odc-cli/tests/cli_pack.rs": {
+      "role": "observe",
+      "sha256": "8e1e2876bd1f061ba6f7ef98730a47b734a0e6bd7f8c681c0ddda11e0c65439b",
+      "size": 6101,
+      "normalized_sha256": "8e1e2876bd1f061ba6f7ef98730a47b734a0e6bd7f8c681c0ddda11e0c65439b"
     },
     "crates/odc-cli/tests/cli_patch.rs": {
       "role": "observe",
@@ -131,9 +533,9 @@
     },
     "crates/odc-core/Cargo.toml": {
       "role": "index",
-      "sha256": "91cbee8afecd0bd38b5d112c2ff9bc5bb7c087c057c171b630e677e2e3b1473b",
-      "size": 713,
-      "normalized_sha256": "91cbee8afecd0bd38b5d112c2ff9bc5bb7c087c057c171b630e677e2e3b1473b"
+      "sha256": "05ad1b0894ea85156927a967aab6f5ec1ab92a180ebcb0ec86284304fcd73e50",
+      "size": 730,
+      "normalized_sha256": "05ad1b0894ea85156927a967aab6f5ec1ab92a180ebcb0ec86284304fcd73e50"
     },
     "crates/odc-core/examples/gen_testvectors.rs": {
       "role": "index",
@@ -155,15 +557,15 @@
     },
     "crates/odc-core/src/cbor.rs": {
       "role": "index",
-      "sha256": "e9fe4c04c23a6b796fbc91d903caed0cd502f15b941b0f63bcd9fb3e9c2d6aee",
-      "size": 12872,
-      "normalized_sha256": "e9fe4c04c23a6b796fbc91d903caed0cd502f15b941b0f63bcd9fb3e9c2d6aee"
+      "sha256": "c18553228f91b81ee6cdbf0b39ad8b16d68aa5161b97fa96001b17ca4da79890",
+      "size": 12993,
+      "normalized_sha256": "c18553228f91b81ee6cdbf0b39ad8b16d68aa5161b97fa96001b17ca4da79890"
     },
     "crates/odc-core/src/cdc.rs": {
       "role": "index",
-      "sha256": "f03810c1c4d4ee6d1f1f70472d3b2b5520108acc34c06008c4a99c500ec7aed3",
-      "size": 7908,
-      "normalized_sha256": "f03810c1c4d4ee6d1f1f70472d3b2b5520108acc34c06008c4a99c500ec7aed3"
+      "sha256": "327bd7a6d966950daba1b57bcfb8f1a8264039975845a9dcc4063cd9195118b8",
+      "size": 8195,
+      "normalized_sha256": "327bd7a6d966950daba1b57bcfb8f1a8264039975845a9dcc4063cd9195118b8"
     },
     "crates/odc-core/src/entry.rs": {
       "role": "index",
@@ -173,9 +575,9 @@
     },
     "crates/odc-core/src/error.rs": {
       "role": "index",
-      "sha256": "4726792802d7200afa5074c646032360aed96b35938ba27c04a7c9d4fe57f088",
-      "size": 8552,
-      "normalized_sha256": "4726792802d7200afa5074c646032360aed96b35938ba27c04a7c9d4fe57f088"
+      "sha256": "e07b0fa03be03ad6a044aec622966bc56bc67348c95e892ec9f630347af18666",
+      "size": 8829,
+      "normalized_sha256": "e07b0fa03be03ad6a044aec622966bc56bc67348c95e892ec9f630347af18666"
     },
     "crates/odc-core/src/hash.rs": {
       "role": "index",
@@ -183,11 +585,29 @@
       "size": 5107,
       "normalized_sha256": "2ef26dfad411f2e87ffb1aae318dbe2e7fa0b475143bb04edda45addce118c92"
     },
+    "crates/odc-core/src/index.rs": {
+      "role": "index",
+      "sha256": "3953306f655ab82cf657daa71343ec85c33510c86906a3dd5039e77c7fe755a7",
+      "size": 5040,
+      "normalized_sha256": "3953306f655ab82cf657daa71343ec85c33510c86906a3dd5039e77c7fe755a7"
+    },
     "crates/odc-core/src/lib.rs": {
       "role": "index",
-      "sha256": "2704faef2a6da7bae7e57f58b53a3aabd5da9ed6836dfa2e320f565072cd60a4",
-      "size": 1385,
-      "normalized_sha256": "2704faef2a6da7bae7e57f58b53a3aabd5da9ed6836dfa2e320f565072cd60a4"
+      "sha256": "6d912768c50eb85a0f7187a570039660911c6eff9a133278d88d93a69b02484f",
+      "size": 1679,
+      "normalized_sha256": "6d912768c50eb85a0f7187a570039660911c6eff9a133278d88d93a69b02484f"
+    },
+    "crates/odc-core/src/link.rs": {
+      "role": "index",
+      "sha256": "93bdebfcc856c704d4a97e6e0f70c5c1627a71e395a4db4ac294526ae2679d6e",
+      "size": 4505,
+      "normalized_sha256": "93bdebfcc856c704d4a97e6e0f70c5c1627a71e395a4db4ac294526ae2679d6e"
+    },
+    "crates/odc-core/src/mdd_import.rs": {
+      "role": "index",
+      "sha256": "c82f4e191a2d2ec766ab179b9417f4ade36f752bca78a92ef0c06107971801b8",
+      "size": 9900,
+      "normalized_sha256": "c82f4e191a2d2ec766ab179b9417f4ade36f752bca78a92ef0c06107971801b8"
     },
     "crates/odc-core/src/mdx.rs": {
       "role": "index",
@@ -195,35 +615,59 @@
       "size": 6248,
       "normalized_sha256": "43dcc8baec5fa97e31d505753b9570572663447718f3ca3e6c8d0db14568446a"
     },
+    "crates/odc-core/src/mdx_import.rs": {
+      "role": "index",
+      "sha256": "44da806d6e9375b75990927fcbc2fcd2281b5e9006f730ac892fe75174648e1a",
+      "size": 16419,
+      "normalized_sha256": "44da806d6e9375b75990927fcbc2fcd2281b5e9006f730ac892fe75174648e1a"
+    },
+    "crates/odc-core/src/mdx_scan.rs": {
+      "role": "index",
+      "sha256": "fee0dc2c590a9b4c652a024db0174030a7a4d4100f4944206d7df42049f9dc68",
+      "size": 23615,
+      "normalized_sha256": "fee0dc2c590a9b4c652a024db0174030a7a4d4100f4944206d7df42049f9dc68"
+    },
     "crates/odc-core/src/merge.rs": {
       "role": "index",
-      "sha256": "a9d5c5208ab7cae77878e2064c9ef7fa2162ff64b3b9f27fa4801a5564d04998",
-      "size": 43488,
-      "normalized_sha256": "a9d5c5208ab7cae77878e2064c9ef7fa2162ff64b3b9f27fa4801a5564d04998"
+      "sha256": "52d3f16f612e22391dc0dad870d3299de928ca8d5656b188d33fdd49fcc97342",
+      "size": 43492,
+      "normalized_sha256": "52d3f16f612e22391dc0dad870d3299de928ca8d5656b188d33fdd49fcc97342"
+    },
+    "crates/odc-core/src/pack.rs": {
+      "role": "index",
+      "sha256": "841a2b19e2d213da067cc7e963d9f1b76650146354ced9488a6dc9814707a97a",
+      "size": 12229,
+      "normalized_sha256": "841a2b19e2d213da067cc7e963d9f1b76650146354ced9488a6dc9814707a97a"
     },
     "crates/odc-core/src/patch.rs": {
       "role": "index",
-      "sha256": "b34f2da8e7bafb2944f4e39ff00a2f7e3d5702ada26cafefc0a153c24ad1c78a",
-      "size": 29858,
-      "normalized_sha256": "b34f2da8e7bafb2944f4e39ff00a2f7e3d5702ada26cafefc0a153c24ad1c78a"
+      "sha256": "67f5f258fe04460731bd73ba13541a90e77a221798a733c372937916141614f7",
+      "size": 29980,
+      "normalized_sha256": "67f5f258fe04460731bd73ba13541a90e77a221798a733c372937916141614f7"
     },
     "crates/odc-core/src/repo.rs": {
       "role": "index",
-      "sha256": "ff31545f1269a25b66689d4be4ded0946dc1fb8eecaddb1a40ad508170e8fb29",
-      "size": 74987,
-      "normalized_sha256": "ff31545f1269a25b66689d4be4ded0946dc1fb8eecaddb1a40ad508170e8fb29"
+      "sha256": "154f24cd29497dee098bdf3209d84c3f64177fedccdc6dd49cc568a0a31cf711",
+      "size": 130848,
+      "normalized_sha256": "154f24cd29497dee098bdf3209d84c3f64177fedccdc6dd49cc568a0a31cf711"
     },
     "crates/odc-core/src/snapshot.rs": {
       "role": "index",
-      "sha256": "1c9617c9a4bc9aaf1a6a9451ab8aaac9e05a315fb9860d2daca0985826e71de8",
-      "size": 6203,
-      "normalized_sha256": "1c9617c9a4bc9aaf1a6a9451ab8aaac9e05a315fb9860d2daca0985826e71de8"
+      "sha256": "b20c17915997cf9ccc530bb372fcd8b2ec0bdf12390e01a8e121036604f66ee9",
+      "size": 21851,
+      "normalized_sha256": "b20c17915997cf9ccc530bb372fcd8b2ec0bdf12390e01a8e121036604f66ee9"
     },
     "crates/odc-core/src/store.rs": {
       "role": "index",
-      "sha256": "f959a4535f3b63ff4fd4176594c184c4c5084ac3f819c7f3655c00232dfa4e1d",
-      "size": 4231,
-      "normalized_sha256": "f959a4535f3b63ff4fd4176594c184c4c5084ac3f819c7f3655c00232dfa4e1d"
+      "sha256": "6beffd7772d085d0050a1570aab00a6534a5d5b4833f9c84af7160c103146b61",
+      "size": 13651,
+      "normalized_sha256": "6beffd7772d085d0050a1570aab00a6534a5d5b4833f9c84af7160c103146b61"
+    },
+    "crates/odc-core/src/stylesheets.rs": {
+      "role": "index",
+      "sha256": "3e120e3b930d9ce34d646aaf2ee0d27236d36394c1f2703f01521020da50a0bd",
+      "size": 3714,
+      "normalized_sha256": "3e120e3b930d9ce34d646aaf2ee0d27236d36394c1f2703f01521020da50a0bd"
     },
     "crates/odc-core/src/varint.rs": {
       "role": "index",
@@ -233,9 +677,9 @@
     },
     "crates/odc-core/tests/cdc.rs": {
       "role": "observe",
-      "sha256": "c0acb4ab42835583889bb8b291a355c789fc5976f0a8289ecbee494438cffa40",
-      "size": 2931,
-      "normalized_sha256": "c0acb4ab42835583889bb8b291a355c789fc5976f0a8289ecbee494438cffa40"
+      "sha256": "5c6669487a9c28eb6e0abcb166d586cbaad5f1b96187ebc081bf4d8e08ef37d8",
+      "size": 3354,
+      "normalized_sha256": "5c6669487a9c28eb6e0abcb166d586cbaad5f1b96187ebc081bf4d8e08ef37d8"
     },
     "crates/odc-core/tests/codec.rs": {
       "role": "observe",
@@ -243,11 +687,29 @@
       "size": 5988,
       "normalized_sha256": "fd55d2df7f11881a2daa2de3a7e690ddf98a3fe3ada5349ecb916d36ac8a0218"
     },
+    "crates/odc-core/tests/commit_index.rs": {
+      "role": "observe",
+      "sha256": "911cef906bdf818db8b0ba5c8202e8c41b1a9ae611b3559d8805ea96fd734226",
+      "size": 10669,
+      "normalized_sha256": "911cef906bdf818db8b0ba5c8202e8c41b1a9ae611b3559d8805ea96fd734226"
+    },
     "crates/odc-core/tests/determinism.rs": {
       "role": "observe",
       "sha256": "bb99855292cae1efcd71e9b522de14aada67c89038c87f64d1fc764d8ba69290",
       "size": 5018,
       "normalized_sha256": "bb99855292cae1efcd71e9b522de14aada67c89038c87f64d1fc764d8ba69290"
+    },
+    "crates/odc-core/tests/editing.rs": {
+      "role": "observe",
+      "sha256": "e3e095924c010333433a0674f5d89e241359ca77a4fb4d0f089a9d4645501a66",
+      "size": 8429,
+      "normalized_sha256": "e3e095924c010333433a0674f5d89e241359ca77a4fb4d0f089a9d4645501a66"
+    },
+    "crates/odc-core/tests/format_v2.rs": {
+      "role": "observe",
+      "sha256": "03d4e9fd61a2785e8ff914b44b7ceda06364fe4633a911ff2f9ca2f9c18dd124",
+      "size": 9106,
+      "normalized_sha256": "03d4e9fd61a2785e8ff914b44b7ceda06364fe4633a911ff2f9ca2f9c18dd124"
     },
     "crates/odc-core/tests/gc.rs": {
       "role": "observe",
@@ -255,17 +717,41 @@
       "size": 5290,
       "normalized_sha256": "a4af8d6e2ed579be7f5dc9708035af25ff0a3e94a51b03aa4745e341e5538fbe"
     },
+    "crates/odc-core/tests/link.rs": {
+      "role": "observe",
+      "sha256": "74324f08ddb3e5724d0356bcd0dd29568ca9eeb8938c6b28d2f57f47cc4b2642",
+      "size": 4409,
+      "normalized_sha256": "74324f08ddb3e5724d0356bcd0dd29568ca9eeb8938c6b28d2f57f47cc4b2642"
+    },
+    "crates/odc-core/tests/mdd_import.rs": {
+      "role": "observe",
+      "sha256": "107fa00c6792b8d2e5ddfb78a30357d0386f0e2a1931b0854ccd04c97dc661ff",
+      "size": 12576,
+      "normalized_sha256": "107fa00c6792b8d2e5ddfb78a30357d0386f0e2a1931b0854ccd04c97dc661ff"
+    },
     "crates/odc-core/tests/mdx.rs": {
       "role": "observe",
       "sha256": "969e31a0de77ded39d69984f805473a992d3420de53e07dc86212ff48d6dd42f",
       "size": 5899,
       "normalized_sha256": "969e31a0de77ded39d69984f805473a992d3420de53e07dc86212ff48d6dd42f"
     },
+    "crates/odc-core/tests/mdx_import.rs": {
+      "role": "observe",
+      "sha256": "bdc49fd97cc17be315e6080f0625ef6dde16eccea05e7bfe92021c55148e9762",
+      "size": 10705,
+      "normalized_sha256": "bdc49fd97cc17be315e6080f0625ef6dde16eccea05e7bfe92021c55148e9762"
+    },
+    "crates/odc-core/tests/mdx_scan.rs": {
+      "role": "observe",
+      "sha256": "8ef56216724b9808f13a354e7d1901c7aed86b619aaba957f694e0163bcfed6b",
+      "size": 8028,
+      "normalized_sha256": "8ef56216724b9808f13a354e7d1901c7aed86b619aaba957f694e0163bcfed6b"
+    },
     "crates/odc-core/tests/merge.rs": {
       "role": "observe",
-      "sha256": "89ab36dabe8d10211853217a24970140d11c63d0b691bb5b098f41352081a9f7",
-      "size": 19161,
-      "normalized_sha256": "89ab36dabe8d10211853217a24970140d11c63d0b691bb5b098f41352081a9f7"
+      "sha256": "cfa64487e60e420aa8c1bfe2759472753016901f1ea023dca7e121050f41c51a",
+      "size": 19513,
+      "normalized_sha256": "cfa64487e60e420aa8c1bfe2759472753016901f1ea023dca7e121050f41c51a"
     },
     "crates/odc-core/tests/negative.rs": {
       "role": "observe",
@@ -273,11 +759,17 @@
       "size": 8028,
       "normalized_sha256": "405547705a4697ba5b8b8bc750541f6495e5d2e9354af47b6164214938883f44"
     },
+    "crates/odc-core/tests/pack.rs": {
+      "role": "observe",
+      "sha256": "0f98059f7842dfd3c3ab989c28e09384c9cf6a2e3e4c4083f521976a49534f38",
+      "size": 6260,
+      "normalized_sha256": "0f98059f7842dfd3c3ab989c28e09384c9cf6a2e3e4c4083f521976a49534f38"
+    },
     "crates/odc-core/tests/patch.rs": {
       "role": "observe",
-      "sha256": "26ca78cbb3368b18bc5ffccd138074bcfd1ac533af65b08b02487b76ba53efd9",
-      "size": 9707,
-      "normalized_sha256": "26ca78cbb3368b18bc5ffccd138074bcfd1ac533af65b08b02487b76ba53efd9"
+      "sha256": "2aa919a669db2fe6f5dfaf8032cab3e510416803dc3f83133c057e1d85a25e10",
+      "size": 9746,
+      "normalized_sha256": "2aa919a669db2fe6f5dfaf8032cab3e510416803dc3f83133c057e1d85a25e10"
     },
     "crates/odc-core/tests/properties.rs": {
       "role": "observe",
@@ -293,15 +785,21 @@
     },
     "crates/odc-core/tests/repo_stream.rs": {
       "role": "observe",
-      "sha256": "f5ea414154f5294ef83f1bf403e827c958f1484486c49eac92a9157abba9d453",
-      "size": 3690,
-      "normalized_sha256": "f5ea414154f5294ef83f1bf403e827c958f1484486c49eac92a9157abba9d453"
+      "sha256": "0a2a1c7968a76f230568236d1f9c731885ffc4d8ed09e4d6123bf3ff31b58c35",
+      "size": 6409,
+      "normalized_sha256": "0a2a1c7968a76f230568236d1f9c731885ffc4d8ed09e4d6123bf3ff31b58c35"
+    },
+    "crates/odc-core/tests/staging_payload.rs": {
+      "role": "observe",
+      "sha256": "00561dcf0f9b7118e4769a9f6fa2bf97b8613b3bb0eff6f46599852223523e49",
+      "size": 11920,
+      "normalized_sha256": "00561dcf0f9b7118e4769a9f6fa2bf97b8613b3bb0eff6f46599852223523e49"
     },
     "crates/odc-core/tests/streaming.rs": {
       "role": "observe",
-      "sha256": "512f4667cd0a7d84856eb398af507ad7c3a8a1eda5d171d0f7635562b105d781",
-      "size": 9186,
-      "normalized_sha256": "512f4667cd0a7d84856eb398af507ad7c3a8a1eda5d171d0f7635562b105d781"
+      "sha256": "d4e43dfa5af441879034aa2b38846dc77a98bc682c591d361b27043c3063abd8",
+      "size": 11126,
+      "normalized_sha256": "d4e43dfa5af441879034aa2b38846dc77a98bc682c591d361b27043c3063abd8"
     },
     "crates/odc-core/tests/vectors.rs": {
       "role": "observe",
@@ -314,6 +812,42 @@
       "sha256": "74a54993cad387695db8e10f924c5e391e019026b8acdc89eb348b279b3a9afd",
       "size": 2944,
       "normalized_sha256": "74a54993cad387695db8e10f924c5e391e019026b8acdc89eb348b279b3a9afd"
+    },
+    "crates/odc-ffi/Cargo.toml": {
+      "role": "index",
+      "sha256": "fc1d8a8cd69cf65fb83892d0973634a99fe96ec0d862b6c4c244b4e92cf62210",
+      "size": 719,
+      "normalized_sha256": "fc1d8a8cd69cf65fb83892d0973634a99fe96ec0d862b6c4c244b4e92cf62210"
+    },
+    "crates/odc-ffi/README.md": {
+      "role": "index",
+      "sha256": "582d5c3302dfd21bdddc4baee6c5dc74ca0fd0506ac377e62cc59703666b7962",
+      "size": 4632,
+      "normalized_sha256": "582d5c3302dfd21bdddc4baee6c5dc74ca0fd0506ac377e62cc59703666b7962"
+    },
+    "crates/odc-ffi/include/module.modulemap": {
+      "role": "index",
+      "sha256": "0fd4f7e8036c3b9e1068ef6e38afab40542b32537a584ec5acb4e77f081f85b8",
+      "size": 85,
+      "normalized_sha256": "0fd4f7e8036c3b9e1068ef6e38afab40542b32537a584ec5acb4e77f081f85b8"
+    },
+    "crates/odc-ffi/include/odc.h": {
+      "role": "index",
+      "sha256": "3440b716a32e74e1b856d8612c188ad771a9074e33b19f1831ae293f33f8b784",
+      "size": 10454,
+      "normalized_sha256": "3440b716a32e74e1b856d8612c188ad771a9074e33b19f1831ae293f33f8b784"
+    },
+    "crates/odc-ffi/src/lib.rs": {
+      "role": "index",
+      "sha256": "7c72d083e633562dc7bc3afb930e17217451baf88030b5a8fb7765288e4939a4",
+      "size": 49623,
+      "normalized_sha256": "7c72d083e633562dc7bc3afb930e17217451baf88030b5a8fb7765288e4939a4"
+    },
+    "crates/odc-ffi/tests/ffi.rs": {
+      "role": "observe",
+      "sha256": "8fbad8f3c6101ff041c74f8be2a1e09778cb60b3e21d0ed249338921e556eed3",
+      "size": 36354,
+      "normalized_sha256": "8fbad8f3c6101ff041c74f8be2a1e09778cb60b3e21d0ed249338921e556eed3"
     },
     "crates/odc-testkit/Cargo.toml": {
       "role": "index",
@@ -335,9 +869,9 @@
     },
     "crates/odc-testkit/src/lib.rs": {
       "role": "index",
-      "sha256": "7d8f235d7351d22c944dc13db62e9f1bbbcf97ab0c7456063a0abe29109a82bf",
-      "size": 6603,
-      "normalized_sha256": "7d8f235d7351d22c944dc13db62e9f1bbbcf97ab0c7456063a0abe29109a82bf"
+      "sha256": "b7d81692c4b73e4b2d7bf3934fe5c6a358d3bedefcbf17e4a98aa286eff0027d",
+      "size": 7377,
+      "normalized_sha256": "b7d81692c4b73e4b2d7bf3934fe5c6a358d3bedefcbf17e4a98aa286eff0027d"
     },
     "deny.toml": {
       "role": "index",
@@ -347,15 +881,15 @@
     },
     "docs/design-rationale.md": {
       "role": "index",
-      "sha256": "607a062af9fec609b664d38376cdf63ca1b37f714977b5f3f7d710038ca6061f",
-      "size": 4350,
-      "normalized_sha256": "607a062af9fec609b664d38376cdf63ca1b37f714977b5f3f7d710038ca6061f"
+      "sha256": "96dc1ad8b1084322928363f92742ab27fabf7781b04da3ccfff8824259206b60",
+      "size": 10408,
+      "normalized_sha256": "96dc1ad8b1084322928363f92742ab27fabf7781b04da3ccfff8824259206b60"
     },
     "docs/mdx-compat.md": {
       "role": "index",
-      "sha256": "1a6a1b2ecbd529e06dfc92a87cc8567dd7925fe8248b1601d7fa2652db34a642",
-      "size": 3928,
-      "normalized_sha256": "1a6a1b2ecbd529e06dfc92a87cc8567dd7925fe8248b1601d7fa2652db34a642"
+      "sha256": "2aa7ef52ae184f7549fd6bd7889ac044697cf1db4d841f517e6ef2ce82a2557a",
+      "size": 10468,
+      "normalized_sha256": "2aa7ef52ae184f7549fd6bd7889ac044697cf1db4d841f517e6ef2ce82a2557a"
     },
     "docs/merge.md": {
       "role": "index",
@@ -365,15 +899,21 @@
     },
     "docs/odc-spec.md": {
       "role": "index",
-      "sha256": "f143fd3c851dae77f7121823d06ff38c79f8df5e55adae46558a23d7d4eb7825",
-      "size": 18327,
-      "normalized_sha256": "f143fd3c851dae77f7121823d06ff38c79f8df5e55adae46558a23d7d4eb7825"
+      "sha256": "0add9ef0b49077a19c5e1246a33fa5e3a2d27f9a38b01471469cab5654964257",
+      "size": 23231,
+      "normalized_sha256": "0add9ef0b49077a19c5e1246a33fa5e3a2d27f9a38b01471469cab5654964257"
     },
     "docs/patch.md": {
       "role": "index",
       "sha256": "4ccd6452c2e611891037c261861c069b17e3e352309c2829676ba2be5d7cfa6c",
       "size": 5917,
       "normalized_sha256": "4ccd6452c2e611891037c261861c069b17e3e352309c2829676ba2be5d7cfa6c"
+    },
+    "docs/shallow.md": {
+      "role": "index",
+      "sha256": "49e57271f4c01eee37ce0d75e69f8c16dacc2b2aff4bb5fcd50c0b38ee56a604",
+      "size": 4697,
+      "normalized_sha256": "49e57271f4c01eee37ce0d75e69f8c16dacc2b2aff4bb5fcd50c0b38ee56a604"
     },
     "rust-toolchain.toml": {
       "role": "index",
@@ -393,11 +933,35 @@
       "size": 2891,
       "normalized_sha256": "9141d28852dbe824cbbb34822dba6414b4b57f5e1e83093c157448595961cd5f"
     },
+    "scripts/bench-shallow.sh": {
+      "role": "index",
+      "sha256": "0b059c9dc1ad8ceca2d384c4d47eb90f6693ac6f2282f3db1ec58fd1600a4bbd",
+      "size": 6812,
+      "normalized_sha256": "0b059c9dc1ad8ceca2d384c4d47eb90f6693ac6f2282f3db1ec58fd1600a4bbd"
+    },
+    "scripts/build-app.sh": {
+      "role": "index",
+      "sha256": "9cb715093b12109c6abf34426be4787abf3c4ea4965da2423bfc7d33f0ccb4cb",
+      "size": 2909,
+      "normalized_sha256": "9cb715093b12109c6abf34426be4787abf3c4ea4965da2423bfc7d33f0ccb4cb"
+    },
+    "scripts/build-apple.sh": {
+      "role": "index",
+      "sha256": "1cf2b3423781c7c8a70c495c5dbb1f3c1a1d8dd59911fa03aecb925dcdb028d4",
+      "size": 175,
+      "normalized_sha256": "1cf2b3423781c7c8a70c495c5dbb1f3c1a1d8dd59911fa03aecb925dcdb028d4"
+    },
+    "scripts/build-odc-xcframework.sh": {
+      "role": "index",
+      "sha256": "9865097787d9ba20c67ca01fdc47b354887244fb74bdc27404dc52f78f3c9cb2",
+      "size": 6018,
+      "normalized_sha256": "9865097787d9ba20c67ca01fdc47b354887244fb74bdc27404dc52f78f3c9cb2"
+    },
     "scripts/e2e.sh": {
       "role": "index",
-      "sha256": "6047c560cd04337e9c1df4968eff64b5f0c63436e11a724687b9e9a74c61624d",
-      "size": 10955,
-      "normalized_sha256": "6047c560cd04337e9c1df4968eff64b5f0c63436e11a724687b9e9a74c61624d"
+      "sha256": "e447492f9a309016d818a3a16b3d97d7d4c72290ac15ce6706a25055b0531ab0",
+      "size": 11222,
+      "normalized_sha256": "e447492f9a309016d818a3a16b3d97d7d4c72290ac15ce6706a25055b0531ab0"
     },
     "spec/testvectors/block_encoding.json": {
       "role": "index",
