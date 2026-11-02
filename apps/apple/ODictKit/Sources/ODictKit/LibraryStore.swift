@@ -21,6 +21,9 @@ public struct LibraryItem: Codable, Identifiable, Sendable, Equatable {
     public var sourceBytes: Int64
     /// SHA-256 over the first `LibraryFileFingerprint.prefixBytes` of the source.
     public var sourceHash: String?
+    /// Whether the reader picked a repository directory (editable) rather than
+    /// a single-file `.odc` pack (read-only). `nil` for older records.
+    public var sourceIsDirectory: Bool?
     /// When the copy was registered.
     public var importedAt: Date
 
@@ -31,6 +34,7 @@ public struct LibraryItem: Codable, Identifiable, Sendable, Equatable {
         sourceName: String,
         sourceBytes: Int64,
         sourceHash: String? = nil,
+        sourceIsDirectory: Bool? = nil,
         importedAt: Date = Date()
     ) {
         self.id = id
@@ -39,6 +43,7 @@ public struct LibraryItem: Codable, Identifiable, Sendable, Equatable {
         self.sourceName = sourceName
         self.sourceBytes = sourceBytes
         self.sourceHash = sourceHash
+        self.sourceIsDirectory = sourceIsDirectory
         self.importedAt = importedAt
     }
 }
@@ -210,6 +215,9 @@ public enum LibraryStore {
         existing.sourceName = item.sourceName
         existing.sourceBytes = item.sourceBytes
         existing.sourceHash = item.sourceHash
+        if let sourceIsDirectory = item.sourceIsDirectory {
+            existing.sourceIsDirectory = sourceIsDirectory
+        }
         state.items[index] = existing
     }
 
@@ -795,6 +803,23 @@ public enum LibraryFileFingerprint {
             bytes: Int64(values.fileSize ?? 0),
             contentHash: try contentHash(of: url)
         )
+    }
+
+    /// Whether `url` points at a repository directory rather than a file.
+    ///
+    /// Mirrors the resource lookup used by `descriptor(for:)` so the library
+    /// can remember that a pick was a directory (editable) or a pack (read-only).
+    public static func isDirectorySource(
+        _ url: URL,
+        accessingSecurityScope: Bool = false
+    ) throws -> Bool {
+        let scoped = accessingSecurityScope ? url.startAccessingSecurityScopedResource() : false
+        defer {
+            if scoped {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+        return try url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true
     }
 
     /// SHA-256 over the first `limit` bytes of `url`, hex encoded.

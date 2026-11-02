@@ -152,6 +152,42 @@ public final class DictionaryStore {
     /// True when `id` is the dictionary the detail column follows.
     public func isActive(_ id: UUID) -> Bool { activeDictionaryID == id }
 
+    // MARK: - Editing
+
+    /// Directory-backed dictionaries are editable; single-file packs are not.
+    ///
+    /// Records imported before `sourceIsDirectory` existed have no flag; treat
+    /// those as directories so editing keeps working for existing libraries.
+    public var isEditingAvailable: Bool {
+        guard let id = activeDictionaryID, handles[id] != nil,
+              let item = library.item(id: id) else { return false }
+        return item.sourceIsDirectory ?? true
+    }
+
+    /// A fresh editor bound to the active dictionary, or `nil` when none is open.
+    public func makeEditorModel() -> DictionaryEditorModel? {
+        guard let id = activeDictionaryID, let handle = handles[id] else { return nil }
+        return DictionaryEditorModel(editing: handle) { [weak self] in
+            self?.refreshAfterEditing()
+        }
+    }
+
+    /// A CSV importer that writes into the active dictionary's working set.
+    public func makeCSVImportModel() -> CSVImportModel? {
+        guard let handle = activeHandle else { return nil }
+        return CSVImportModel(editing: handle)
+    }
+
+    /// Re-run the reader's query after the editor changed the working set.
+    public func refreshAfterEditing() {
+        if query.isEmpty {
+            searchGroups = []
+        } else {
+            setQuery(query)
+        }
+        refreshEntrySections()
+    }
+
     // MARK: - Opening and closing
 
     /// Import `url` into the sandbox and open the copy.
@@ -326,6 +362,9 @@ public final class DictionaryStore {
         do {
             let directory = try libraryDirectoryURL()
             let descriptor = try await sourceDescriptor(for: url, override: source)
+            let isDirectory = (try? await Task.detached(priority: .userInitiated) {
+                try LibraryFileFingerprint.isDirectorySource(url, accessingSecurityScope: true)
+            }.value) ?? false
             if Task.isCancelled {
                 return
             }
@@ -387,7 +426,8 @@ public final class DictionaryStore {
                 storedName: copy.lastPathComponent,
                 sourceName: descriptor.name,
                 sourceBytes: descriptor.bytes,
-                sourceHash: descriptor.contentHash
+                sourceHash: descriptor.contentHash,
+                sourceIsDirectory: isDirectory
             )
             do {
                 // Register only once the copy opens, and drop the copy again if
