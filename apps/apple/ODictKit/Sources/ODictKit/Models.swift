@@ -196,6 +196,7 @@ public enum JSONValue: Codable, Equatable, Hashable, Sendable {
     }
 
     /// A short single-line rendering used by the detail view.
+
     public var displayText: String {
         switch self {
         case .null:
@@ -215,5 +216,171 @@ public enum JSONValue: Codable, Equatable, Hashable, Sendable {
             let body = values.keys.sorted().map { "\($0): \(values[$0]?.displayText ?? "")" }
             return "{" + body.joined(separator: ", ") + "}"
         }
+    }
+}
+
+/// Outcome of a single working-set write (`odc_repo_entry_put_json` /
+/// `odc_repo_entry_delete_json`).
+public enum EntryWriteOutcome: String, Codable, Equatable, Sendable {
+    case added
+    case modified
+    case deleted
+    case notFound = "not_found"
+}
+
+/// Result of writing or deleting one working-set entry.
+public struct EntryWriteResult: Codable, Equatable, Sendable {
+    public let key: String
+    public let outcome: EntryWriteOutcome
+
+    public init(key: String, outcome: EntryWriteOutcome) {
+        self.key = key
+        self.outcome = outcome
+    }
+}
+
+/// Working set relative to HEAD (`odc_repo_working_status_json`).
+public struct WorkingStatus: Codable, Equatable, Sendable {
+    /// Keys present only in the working set.
+    public let added: Int
+    /// Keys whose content hash differs from HEAD.
+    public let modified: Int
+    /// Keys present in HEAD but deleted from the working set.
+    public let removed: Int
+    /// Working-set size.
+    public let total: Int
+    /// Entries materialised in the committed index.
+    public let entries: Int
+    /// Blocks stored by the repository.
+    public let blocks: Int
+    /// Current HEAD hash, absent before the first commit.
+    public let head: String?
+
+    public var isClean: Bool { added == 0 && modified == 0 && removed == 0 }
+
+    public init(
+        added: Int, modified: Int, removed: Int, total: Int,
+        entries: Int, blocks: Int, head: String?
+    ) {
+        self.added = added
+        self.modified = modified
+        self.removed = removed
+        self.total = total
+        self.entries = entries
+        self.blocks = blocks
+        self.head = head
+    }
+}
+
+/// What happened to one key between HEAD and the working set.
+public enum ChangeKind: String, Codable, Equatable, Sendable {
+    case added
+    case modified
+    case deleted
+}
+
+/// One row of `odc_repo_working_changes_json`.
+public struct ChangeRow: Codable, Equatable, Sendable, Identifiable {
+    public let key: String
+    public let kind: ChangeKind
+
+    public var id: String { key }
+
+    public init(key: String, kind: ChangeKind) {
+        self.key = key
+        self.kind = kind
+    }
+}
+
+/// How an entry differs overall (`odc_repo_entry_diff_json`).
+public enum EntryDiffKind: String, Codable, Equatable, Sendable {
+    case added
+    case modified
+    case deleted
+    case absent
+}
+
+/// One field of an `EntryDiff`.
+///
+/// `before` and `after` are `nil` when the field does not exist on that
+/// side, so an added definition has no `before` for any of its attributes.
+public struct FieldDiff: Codable, Equatable, Sendable {
+    /// Field name, e.g. `display`, `defs[0].sense` or `extra.source`.
+    public let field: String
+    /// Value in HEAD, if the field exists there.
+    public let before: JSONValue?
+    /// Value in the working set, if the field exists there.
+    public let after: JSONValue?
+    /// Whether the two sides differ.
+    public let changed: Bool
+
+    public init(field: String, before: JSONValue?, after: JSONValue?, changed: Bool) {
+        self.field = field
+        self.before = before
+        self.after = after
+        self.changed = changed
+    }
+}
+
+/// Field-level diff of one entry between HEAD and the working set.
+public struct EntryDiff: Codable, Equatable, Sendable {
+    public let key: String
+    public let kind: EntryDiffKind
+    public let fields: [FieldDiff]
+
+    public var changedFields: [FieldDiff] { fields.filter(\.changed) }
+
+    public init(key: String, kind: EntryDiffKind, fields: [FieldDiff]) {
+        self.key = key
+        self.kind = kind
+        self.fields = fields
+    }
+}
+
+/// Result of `odc_repo_commit_json`.
+public struct CommitResult: Codable, Equatable, Sendable {
+    /// New commit hash, hex encoded.
+    public let hash: String
+    /// Entries in the committed snapshot.
+    public let entryCount: Int
+    /// Commit timestamp, seconds since the Unix epoch.
+    public let ts: Int64
+    public let author: String
+    public let message: String
+    /// Blocks written by this commit.
+    public let newBlocks: Int
+    /// Blocks reused from earlier commits.
+    public let reusedBlocks: Int
+    /// Entries in the snapshot (same value as `entryCount`).
+    public let entries: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case hash, ts, author, message, entries
+        case entryCount = "entry_count"
+        case newBlocks = "new_blocks"
+        case reusedBlocks = "reused_blocks"
+    }
+
+    public init(
+        hash: String, entryCount: Int, ts: Int64, author: String, message: String,
+        newBlocks: Int, reusedBlocks: Int, entries: Int
+    ) {
+        self.hash = hash
+        self.entryCount = entryCount
+        self.ts = ts
+        self.author = author
+        self.message = message
+        self.newBlocks = newBlocks
+        self.reusedBlocks = reusedBlocks
+        self.entries = entries
+    }
+}
+
+/// Result of `odc_repo_discard_json`.
+public struct DiscardResult: Codable, Equatable, Sendable {
+    public let discarded: Bool
+
+    public init(discarded: Bool) {
+        self.discarded = discarded
     }
 }

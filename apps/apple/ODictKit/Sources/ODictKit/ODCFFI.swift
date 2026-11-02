@@ -9,10 +9,14 @@ public enum OdcError: LocalizedError, Equatable {
     case searchFailed(String)
     /// `odc_repo_entry_json` failed (including "entry not found").
     case entryFailed(String)
+    /// An editing call (`put`, `delete`, `commit`, `diff`, `discard`) failed.
+    case editFailed(String)
     /// `odc_repo_resource_len` / `odc_repo_resource_copy` failed.
     case resourceFailed(String)
     /// `limit` was outside the range the C ABI accepts.
     case invalidLimit(Int)
+    /// `limit` was outside 1…500 for a paged editing call.
+    case invalidPageLimit(Int)
     /// The dictionary was already closed.
     case closed
     /// The core returned JSON this client could not decode.
@@ -28,8 +32,12 @@ public enum OdcError: LocalizedError, Equatable {
             return "读取资源失败：\(detail)"
         case .entryFailed(let detail):
             return "读取词条失败：\(detail)"
+        case .editFailed(let detail):
+            return "编辑词条失败：\(detail)"
         case .invalidLimit(let limit):
             return "搜索数量 \(limit) 超出 1…200 的范围。"
+        case .invalidPageLimit(let limit):
+            return "分页数量 \(limit) 超出 1…500 的范围。"
         case .closed:
             return "词典已关闭。"
         case .invalidResponse(let detail):
@@ -263,6 +271,127 @@ public final class OdcDictionary {
             throw OdcError.resourceFailed(Self.take(error) ?? "无法读取资源：\(key)")
         }
         return Data(bytes.prefix(copied))
+    }
+    // MARK: - Editing
+
+    /// One page of working-set entries in ascending key order.
+    ///
+    /// `limit` must be within 1…500. Pass the last entry's `key` as `after`
+    /// to read the next page.
+    public func entriesPage(after key: String? = nil, limit: Int = 200) throws -> [DictionaryEntry] {
+        guard (1...500).contains(limit) else {
+            throw OdcError.invalidPageLimit(limit)
+        }
+        let handle = try requireHandle()
+        var error: UnsafeMutablePointer<CChar>?
+        let result: UnsafeMutablePointer<CChar>?
+        if let key {
+            result = key.withCString { key in
+                odc_repo_entries_page_json(handle, key, Int32(limit), &error)
+            }
+        } else {
+            result = odc_repo_entries_page_json(handle, nil, Int32(limit), &error)
+        }
+        return try decode(result, error: error, context: "读取词条分页失败")
+    }
+
+    /// Insert or replace one entry in the working set.
+    public func upsert(_ entry: DictionaryEntry) throws -> EntryWriteResult {
+        let handle = try requireHandle()
+        let data = try JSONEncoder().encode(entry)
+        guard let text = String(data: data, encoding: .utf8) else {
+            throw OdcError.editFailed("词条无法编码为 UTF-8")
+        }
+        var error: UnsafeMutablePointer<CChar>?
+        let result = text.withCString { text in
+            odc_repo_entry_put_json(handle, text, &error)
+        }
+        return try decode(result, error: error, context: "保存词条失败")
+    }
+
+    /// Remove one entry from the working set.
+    public func deleteEntry(_ key: String) throws -> EntryWriteResult {
+        let handle = try requireHandle()
+        var error: UnsafeMutablePointer<CChar>?
+        let result = key.withCString { key in
+            odc_repo_entry_delete_json(handle, key, &error)
+        }
+        return try decode(result, error: error, context: "删除词条失败")
+    }
+
+    /// Working set relative to HEAD.
+    public func workingStatus() throws -> WorkingStatus {
+        let handle = try requireHandle()
+        var error: UnsafeMutablePointer<CChar>?
+        let result = odc_repo_working_status_json(handle, &error)
+        return try decode(result, error: error, context: "读取编辑状态失败")
+    }
+
+    /// Changed keys against HEAD, in ascending key order.
+    public func workingChanges(after key: String? = nil, limit: Int = 200) throws -> [ChangeRow] {
+        guard (1...500).contains(limit) else {
+            throw OdcError.invalidPageLimit(limit)
+        }
+        let handle = try requireHandle()
+        var error: UnsafeMutablePointer<CChar>?
+        let result: UnsafeMutablePointer<CChar>?
+        if let key {
+            result = key.withCString { key in
+                odc_repo_working_changes_json(handle, key, Int32(limit), &error)
+            }
+        } else {
+            result = odc_repo_working_changes_json(handle, nil, Int32(limit), &error)
+        }
+        return try decode(result, error: error, context: "读取变更列表失败")
+    }
+
+    /// Field-level diff of one key between HEAD and the working set.
+    public func entryDiff(_ key: String) throws -> EntryDiff {
+        let handle = try requireHandle()
+        var error: UnsafeMutablePointer<CChar>?
+        let result = key.withCString { key in
+            odc_repo_entry_diff_json(handle, key, &error)
+        }
+        return try decode(result, error: error, context: "读取词条差异失败")
+    }
+
+    /// Commit the working set with the current wall-clock timestamp.
+    public func commit(message: String, author: String) throws -> CommitResult {
+        let handle = try requireHandle()
+        var error: UnsafeMutablePointer<CChar>?
+        let result = message.withCString { message in
+            author.withCString { author in
+                odc_repo_commit_json(handle, message, author, &error)
+            }
+        }
+        return try decode(result, error: error, context: "提交失败")
+    }
+
+    /// Discard every working-set change; history is untouched.
+    public func discardWorking() throws -> DiscardResult {
+        let handle = try requireHandle()
+        var error: UnsafeMutablePointer<CChar>?
+        let result = odc_repo_discard_json(handle, &error)
+        return try decode(result, error: error, context: "丢弃改动失败")
+    }
+
+    /// Decode a JSON result, releasing the C string and raising the core's
+    /// diagnostic on failure.
+    private func decode<T: Decodable>(
+        _ pointer: UnsafeMutablePointer<CChar>?,
+        error: UnsafeMutablePointer<CChar>?,
+        context: String
+    ) throws -> T {
+        guard let pointer else {
+            throw OdcError.editFailed(Self.take(error) ?? context)
+        }
+        defer { odc_string_free(pointer) }
+        let data = Data(bytes: pointer, count: strlen(pointer))
+        do {
+            return try decoder.decode(T.self, from: data)
+        } catch {
+            throw OdcError.invalidResponse(String(describing: error))
+        }
     }
     private func requireHandle() throws -> OpaquePointer {
         guard let repo else { throw OdcError.closed }
