@@ -6,7 +6,20 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ## [Unreleased]
 
-## [0.5.2] - 2026-11-02
+## [0.6.0] - 2026-11-02
+
+### Added
+
+* macOS: dictionary editor with per-entry forms, working-set status and diff,
+  commit/discard, and a CSV import sheet with column mapping.
+* Core: editing is guarded by the pack/workset marker, so a dictionary copied
+  from a single-file pack can be edited without losing its committed index.
+
+### Fixed
+
+* Core: a packed library copy no longer reports every committed entry as
+  deleted; committing an empty working set over a populated HEAD is refused
+  instead of writing an empty index and erasing the dictionary.
 
 ### Added
 

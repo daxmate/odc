@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-31T03:28:19Z",
-  "updated_at": "2026-11-02T05:29:32Z",
+  "updated_at": "2026-11-02T05:32:15Z",
   "files": {
     ".gitattributes": {
       "role": "index",
@@ -29,9 +29,9 @@
     },
     "CHANGELOG.md": {
       "role": "index",
-      "sha256": "42dcdfd0d7f78bd4b85d5b3ebc142ebf598d195da0323982f8ee62d1a7d601c9",
-      "size": 14875,
-      "normalized_sha256": "42dcdfd0d7f78bd4b85d5b3ebc142ebf598d195da0323982f8ee62d1a7d601c9"
+      "sha256": "ebf6bf6eb14c2706f2415c629977df62e4eef516fc84fa565e302ca33333282a",
+      "size": 15406,
+      "normalized_sha256": "ebf6bf6eb14c2706f2415c629977df62e4eef516fc84fa565e302ca33333282a"
     },
     "CONTRIBUTING.md": {
       "role": "index",
@@ -41,15 +41,15 @@
     },
     "Cargo.lock": {
       "role": "index",
-      "sha256": "1975ee255518780b2054df19933657ebfbe5ddf54701b008597934fbefa8dee3",
+      "sha256": "19fccfe9a8c7d8162863677d25dc8284b40685d03e5c9b31e99a788040083383",
       "size": 28203,
-      "normalized_sha256": "1975ee255518780b2054df19933657ebfbe5ddf54701b008597934fbefa8dee3"
+      "normalized_sha256": "19fccfe9a8c7d8162863677d25dc8284b40685d03e5c9b31e99a788040083383"
     },
     "Cargo.toml": {
       "role": "index",
-      "sha256": "3e4ec6da8a16360453bdff8392f3bd8d582f8507f1fa97964ba5053755329b9a",
+      "sha256": "e541e48923acce4e2e5f236c79d623d8f2c135e69db9e1a6d06e9e4fc9e4385f",
       "size": 668,
-      "normalized_sha256": "3e4ec6da8a16360453bdff8392f3bd8d582f8507f1fa97964ba5053755329b9a"
+      "normalized_sha256": "e541e48923acce4e2e5f236c79d623d8f2c135e69db9e1a6d06e9e4fc9e4385f"
     },
     "LICENSE": {
       "role": "index",
@@ -71,9 +71,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "e69d434a94df3a86ca167b7c75aac534eb190e9ea683d213413a678c2e1dc911",
+      "sha256": "7083dee432f61b5b62c25329a6617f633e37b48716e4de62abba0bfcf70da20e",
       "size": 43268,
-      "normalized_sha256": "e69d434a94df3a86ca167b7c75aac534eb190e9ea683d213413a678c2e1dc911"
+      "normalized_sha256": "7083dee432f61b5b62c25329a6617f633e37b48716e4de62abba0bfcf70da20e"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -113,9 +113,9 @@
     },
     "apps/apple/ODict/Info.plist": {
       "role": "index",
-      "sha256": "ee48d0bdd5195f7b5ad739644304dacd97993cfdd4303e75dffd2fb8c446beb4",
+      "sha256": "98d2b8bf7a4de565c52de70010aef7612dacc39763ef7a769f1ce4913ea049ee",
       "size": 1893,
-      "normalized_sha256": "ee48d0bdd5195f7b5ad739644304dacd97993cfdd4303e75dffd2fb8c446beb4"
+      "normalized_sha256": "98d2b8bf7a4de565c52de70010aef7612dacc39763ef7a769f1ce4913ea049ee"
     },
     "apps/apple/ODict/ODictApp.swift": {
       "role": "index",
@@ -125,9 +125,9 @@
     },
     "apps/apple/ODictDesktop/Info.plist": {
       "role": "index",
-      "sha256": "d1fa452dccc432c634a9960226635fffc2bd93c3cd4d836611298197087e12c0",
+      "sha256": "8eb0e31ab1f863ce59ba99c6f2476204e7a6ed1ebf4f311573dbaf4a66d8fcf8",
       "size": 1670,
-      "normalized_sha256": "d1fa452dccc432c634a9960226635fffc2bd93c3cd4d836611298197087e12c0"
+      "normalized_sha256": "8eb0e31ab1f863ce59ba99c6f2476204e7a6ed1ebf4f311573dbaf4a66d8fcf8"
     },
     "apps/apple/ODictDesktop/ODictDesktop.entitlements": {
       "role": "index",
@@ -473,9 +473,9 @@
     },
     "apps/apple/project.yml": {
       "role": "index",
-      "sha256": "e32ad0112791c261c6ee82af137cf349fb61d4e64356dfbeccd77fc7676bc573",
+      "sha256": "c3921c5438504dc0bad2cbb4ceb633a440e88faad33476634717058bb5f24c4a",
       "size": 3059,
-      "normalized_sha256": "e32ad0112791c261c6ee82af137cf349fb61d4e64356dfbeccd77fc7676bc573"
+      "normalized_sha256": "c3921c5438504dc0bad2cbb4ceb633a440e88faad33476634717058bb5f24c4a"
     },
     "build-app.sh": {
       "role": "index",
@@ -485,9 +485,9 @@
     },
     "crates/odc-cli/Cargo.toml": {
       "role": "index",
-      "sha256": "0802d454c8d251d4176181b294ba6c414dd132d8a741b5de591dbb4d29a35839",
+      "sha256": "ded0403de802eddac227b6452f7442e7fcf4cfb893629b87f62f4a4b66e14434",
       "size": 738,
-      "normalized_sha256": "0802d454c8d251d4176181b294ba6c414dd132d8a741b5de591dbb4d29a35839"
+      "normalized_sha256": "ded0403de802eddac227b6452f7442e7fcf4cfb893629b87f62f4a4b66e14434"
     },
     "crates/odc-cli/src/main.rs": {
       "role": "index",
