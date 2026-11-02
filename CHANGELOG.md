@@ -6,6 +6,13 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-11-02
+
+### Added
+
+* Apple: the sidebar shows recent searches when the query is empty; up to ten
+  entries are persisted locally and tapping one restores the query.
+
 ## [0.5.1] - 2026-11-02
 
 ### Fixed
