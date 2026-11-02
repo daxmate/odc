@@ -10,6 +10,10 @@ public struct WordbookView: View {
     private let store: DictionaryStore
     @Environment(\.dismiss) private var dismiss
 
+    @AppStorage("odict.wordbook.sort") private var sortRawValue = WordbookSort.recent.rawValue
+    @AppStorage("odict.wordbook.filter") private var filterRawValue = WordbookFilter.all.storageValue
+    @AppStorage("odict.wordbook.dictionary") private var dictionaryRawValue = ""
+
     public init(store: DictionaryStore) {
         self.store = store
     }
@@ -17,21 +21,40 @@ public struct WordbookView: View {
     public var body: some View {
         NavigationStack {
             List {
-                Section("收藏") {
-                    if store.bookmarkedEntries.isEmpty {
-                        hint("还没有收藏")
+                Section {
+                    Picker("排序", selection: $sortRawValue) {
+                        ForEach(WordbookSort.allCases) { sort in
+                            Text(sort.title).tag(sort.rawValue)
+                        }
                     }
-                    ForEach(store.bookmarkedEntries) { ref in
-                        entryRow(for: ref)
+                    .pickerStyle(.segmented)
+
+                    Picker("筛选", selection: $filterRawValue) {
+                        ForEach([WordbookFilter.all, .bookmarks, .history]) { filter in
+                            Text(filter.title).tag(filter.storageValue)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
+                    if !store.library.items.isEmpty {
+                        Picker("词典", selection: $dictionaryRawValue) {
+                            Text("全部词典").tag("")
+                            ForEach(store.library.items) { item in
+                                Text(item.displayName).tag(item.id.uuidString)
+                            }
+                        }
                     }
                 }
-                Section("最近") {
-                    if store.recentEntries.isEmpty {
-                        hint("还没有查询记录")
+
+                Section {
+                    if presentation.isEmpty {
+                        hint(presentation.emptyMessage)
                     }
-                    ForEach(store.recentEntries) { ref in
-                        entryRow(for: ref)
+                    ForEach(presentation.entries) { entry in
+                        entryRow(for: entry)
                     }
+                } header: {
+                    Text("共 \(presentation.count) 条")
                 }
             }
             .navigationTitle("生词本")
@@ -46,35 +69,44 @@ public struct WordbookView: View {
         #endif
     }
 
+    private var presentation: WordbookPresentation {
+        WordbookPresentation(
+            bookmarks: store.bookmarkedEntries,
+            history: store.recentEntries,
+            filter: WordbookFilter(storageValue: filterRawValue) ?? .all,
+            dictionaryID: UUID(uuidString: dictionaryRawValue),
+            sort: WordbookSort(rawValue: sortRawValue) ?? .recent,
+            dictionaryNames: dictionaryNames
+        )
+    }
+
+    private var dictionaryNames: [UUID: String] {
+        Dictionary(uniqueKeysWithValues: store.library.items.map { ($0.id, $0.displayName) })
+    }
+
     /// A bookmarked or remembered entry: the headword with its dictionary
     /// named underneath.
     ///
     /// `openEntry` reports failure through the store's messages rather than a
     /// return value, so the sheet always closes; a dictionary that has gone
     /// missing explains itself in the root view.
-    private func entryRow(for ref: EntryRef) -> some View {
+    private func entryRow(for entry: WordbookEntry) -> some View {
         Button {
             Task {
-                await store.openEntry(ref)
+                await store.openEntry(entry.ref)
                 dismiss()
             }
         } label: {
             VStack(alignment: .leading, spacing: 2) {
-                Text(ref.headword)
-                Text(dictionaryName(for: ref))
+                Text(entry.ref.headword)
+                Text(entry.dictionaryName)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
     }
 
-    /// Name of the dictionary a remembered entry belongs to.
-    private func dictionaryName(for ref: EntryRef) -> String {
-        guard let id = UUID(uuidString: ref.dictionaryID) else { return ref.dictionaryID }
-        return store.library.item(id: id)?.displayName ?? "已移除的词典"
-    }
-
-    /// One grey line standing in for a section that has nothing in it yet.
+    /// One grey line standing in for a list that has nothing in it yet.
     private func hint(_ text: String) -> some View {
         Text(text)
             .font(.callout)
