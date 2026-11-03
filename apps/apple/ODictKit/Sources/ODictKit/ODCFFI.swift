@@ -29,6 +29,8 @@ public enum OdcError: LocalizedError, Equatable {
     case trustFailed(String)
     /// `odc_verify_release` could not read or parse the release directory.
     case verifyFailed(String)
+    /// `odc_patch_apply_signed` refused the patch or its signature.
+    case patchFailed(String)
 
     public var errorDescription: String? {
         switch self {
@@ -54,6 +56,8 @@ public enum OdcError: LocalizedError, Equatable {
             return "信任管理失败：\(detail)"
         case .verifyFailed(let detail):
             return "校验发布包失败：\(detail)"
+        case .patchFailed(let detail):
+            return "应用更新失败：\(detail)"
         case .closed:
             return "词典已关闭。"
         case .invalidResponse(let detail):

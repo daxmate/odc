@@ -208,6 +208,113 @@ public enum ODCPublishing {
         return try decode(json, context: "校验结果")
     }
 
+    /// Sign `path` with a PKCS#8 PEM private key and return the sidecar JSON.
+    ///
+    /// The app normally publishes through `publish`; this entry point exists so
+    /// tests and the release wizard can create a signature for a single file.
+    public static func signFile(path: String, keyPEM: String, signer: String? = nil) throws -> String {
+        let trimmedPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPath.isEmpty else {
+            throw OdcError.keyFailed("请选择要签名的文件。")
+        }
+        var json: UnsafeMutablePointer<CChar>?
+        var error: UnsafeMutablePointer<CChar>?
+        let status = trimmedPath.withCString { pathPointer in
+            keyPEM.withCString { keyPointer in
+                withOptionalCString(signer) { signerPointer in
+                    odc_sign_file(pathPointer, keyPointer, signerPointer, &json, &error)
+                }
+            }
+        }
+        guard status == 0 else {
+            throw OdcError.keyFailed(take(error) ?? "无法签名该文件。")
+        }
+        guard let sidecar = take(json) else {
+            throw OdcError.invalidResponse("签名结果：内核没有返回数据")
+        }
+        return sidecar
+    }
+
+    /// Verify `path` against the sidecar text stored at `sigPath`.
+    ///
+    /// An invalid signature is a report with `valid == false`, not an error;
+    /// only an unreadable sidecar or a broken FFI call throws.
+    public static func verifySignatureFile(
+        path: String,
+        sigPath: String,
+        expectedPublicKeyHex: String? = nil
+    ) throws -> SignatureVerification {
+        let trimmedPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPath.isEmpty else {
+            throw OdcError.verifyFailed("请选择要校验的文件。")
+        }
+        let signatureText: String
+        do {
+            signatureText = try String(contentsOfFile: sigPath, encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        } catch {
+            throw OdcError.verifyFailed("无法读取签名文件：\(error.localizedDescription)")
+        }
+        guard !signatureText.isEmpty else {
+            throw OdcError.verifyFailed("签名文件为空。")
+        }
+        var expected: String?
+        if let expectedPublicKeyHex {
+            expected = try validatedPublicKey(expectedPublicKeyHex)
+        }
+        var json: UnsafeMutablePointer<CChar>?
+        var error: UnsafeMutablePointer<CChar>?
+        let status = trimmedPath.withCString { pathPointer in
+            signatureText.withCString { sigPointer in
+                withOptionalCString(expected) { keyPointer in
+                    odc_verify_signature_file(pathPointer, sigPointer, keyPointer, &json, &error)
+                }
+            }
+        }
+        guard status == 0 else {
+            throw OdcError.verifyFailed(take(error) ?? "无法校验签名。")
+        }
+        return try decode(json, context: "签名校验结果")
+    }
+
+    /// Verify the signature of `patchPath` and apply it to the repository.
+    ///
+    /// Verification runs before any mutation inside the core, so a rejected
+    /// signature leaves the repository untouched. Conflicts are recorded in the
+    /// repository and only counted in the report; they are never resolved here.
+    public static func applySignedPatch(
+        repoPath: String,
+        patchPath: String,
+        sigPath: String,
+        allowTrustNew: Bool = false
+    ) throws -> PatchApplyReport {
+        let trimmedPatch = patchPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedSignature = sigPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPatch.isEmpty, !trimmedSignature.isEmpty else {
+            throw OdcError.patchFailed("请选择更新包及其签名文件。")
+        }
+        return try withRepo(repoPath) { handle in
+            var json: UnsafeMutablePointer<CChar>?
+            var error: UnsafeMutablePointer<CChar>?
+            let status = trimmedPatch.withCString { patchPointer in
+                trimmedSignature.withCString { sigPointer in
+                    odc_patch_apply_signed(
+                        handle,
+                        patchPointer,
+                        sigPointer,
+                        allowTrustNew ? 1 : 0,
+                        &json,
+                        &error
+                    )
+                }
+            }
+            guard status == 0 else {
+                throw OdcError.patchFailed(take(error) ?? "无法应用更新。")
+            }
+            return try decode(json, context: "更新结果")
+        }
+    }
+
     // MARK: - Plumbing
 
     private struct PublishersPayload: Decodable {
