@@ -22,7 +22,11 @@ public struct EditorWindowView: View {
                     description: Text("先在主窗口打开一个词典目录，再进入编辑模式。")
                 )
             } else if let model {
-                EditorView(model: model) {
+                EditorView(
+                    model: model,
+                    repoPath: store.documentURL?.path,
+                    libraryKey: store.activeDictionaryID?.uuidString ?? ""
+                ) {
                     dismissWindow(id: "editor")
                 }
             } else {
@@ -43,12 +47,21 @@ public struct EditorWindowView: View {
 
 struct EditorView: View {
     @Bindable var model: DictionaryEditorModel
+    /// Repository directory of the active dictionary.
+    let repoPath: String?
+    /// Stable identifier used for the per-library publish record.
+    let libraryKey: String
     let onCommitted: () -> Void
 
     @State private var isCommitPresented = false
     @State private var isImportPresented = false
     @State private var isDiscardPresented = false
     @State private var importer: CSVImportModel?
+    @State private var isPublishPresented = false
+    @State private var isTrustPresented = false
+    @State private var isSettingsPresented = false
+    @State private var openSettingsAfterPublish = false
+    @State private var publishModel: PublishModel?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -78,6 +91,22 @@ struct EditorView: View {
                 }
                 .keyboardShortcut("s", modifiers: .command)
                 .disabled(model.form == nil)
+
+                Button {
+                    presentPublish()
+                } label: {
+                    Label("发布…", systemImage: "shippingbox")
+                }
+                .help("把 HEAD 打包成已签名发布")
+                .disabled(repoPath == nil)
+
+                Button {
+                    isTrustPresented = true
+                } label: {
+                    Label("信任…", systemImage: "checkmark.seal")
+                }
+                .help("管理这个词典信任的发布者")
+                .disabled(repoPath == nil)
             }
         }
         .sheet(isPresented: $isCommitPresented) {
@@ -94,6 +123,29 @@ struct EditorView: View {
                     model.reload()
                 }
             }
+        }
+        .sheet(isPresented: $isPublishPresented, onDismiss: {
+            // Presenting one sheet while another dismisses is unreliable on
+            // macOS, so the settings sheet waits for this one to close.
+            if openSettingsAfterPublish {
+                openSettingsAfterPublish = false
+                isSettingsPresented = true
+            }
+        }) {
+            if let publishModel {
+                PublishSheet(model: publishModel) {
+                    openSettingsAfterPublish = true
+                }
+            }
+        }
+        .sheet(isPresented: $isTrustPresented) {
+            if let repoPath {
+                TrustListView(repoPath: repoPath)
+            }
+        }
+        .sheet(isPresented: $isSettingsPresented) {
+            PublisherSettingsView()
+                .frame(minWidth: 480, minHeight: 440)
         }
         .confirmationDialog(
             "丢弃工作区改动？",
@@ -118,6 +170,19 @@ struct EditorView: View {
         } message: {
             Text(model.alertMessage ?? "")
         }
+    }
+
+    // MARK: - Publishing
+
+    /// Build a fresh publish model for the active repository.
+    private func presentPublish() {
+        guard let repoPath else { return }
+        publishModel = PublishModel(
+            repoPath: repoPath,
+            libraryKey: libraryKey,
+            libraryName: (repoPath as NSString).lastPathComponent
+        )
+        isPublishPresented = true
     }
 
     // MARK: - Entry list

@@ -154,3 +154,11 @@ keeps its previous behaviour.
   by memory.
 * Directory traversal is rejected, but a manifest can still point at any plain
   file name inside the release directory.
+
+## App 发布向导（macOS）
+
+`ODict Desktop` 把 P2 的签名发布功能封装成图形界面：钥匙串保存 Ed25519 身份，编辑器工具栏的
+「发布…」调用 `odc_publish`（可选 base..HEAD 增量包），「信任…」管理当前库的
+publishers。步骤、限制与增量包的记录方式见
+[`apps/apple/README.md`](../apps/apple/README.md)。
+

@@ -158,3 +158,39 @@ int32_t odc_copy_pack_to_repo(
 existing-target and missing-source paths; `crates/odc-core/tests/mdx_repo_import.rs`
 covers the editable import and the pack copy. The `imports_a_real_mdx_file` test
 is opt-in through `ODC_MDX_SMOKE=<path to .mdx>` and `-- --ignored`.
+
+## 发布（macOS）
+
+Publishing is desktop-only: the iOS reader never signs anything.
+
+1. **生成或导入发布者身份.** Open *Settings* (Cmd+,) or the editor toolbar
+   -> 发布… -> 打开发布者设置. 生成新密钥 creates an Ed25519 keypair through
+   ODCFFI; 导入私钥 accepts a PKCS#8 `.pem` / `.key` file. The private key
+   only ever lives in the keychain (service `com.daxmate.odict.publisher`), and
+   the UI shows just the name, fingerprint and public key. 移除密钥 asks for
+   confirmation and leaves published artifacts untouched.
+2. **发布…** in the editor toolbar (a writable directory repository is
+   required). Fill in the version label (defaults to today, `yyyy.MM.dd`),
+   optional release notes and the output directory. The wizard calls
+   `odc_publish`; existing files are never overwritten, so a collision keeps the
+   sheet open with the ODC-E0xx error.
+3. **增量包.** After a successful publish the app remembers
+   `lastPublishedHead`, the label and the time per library in UserDefaults.
+   The next time 同时生成增量包 becomes available and uses that head as
+   `--base`, so readers can update with the patch instead of the full pack.
+4. **信任管理.** 信任… lists the repository's publishers (name, fingerprint,
+   source manual/tofu, added time) and lets you add a 64-hex public key by hand
+   or remove one after confirmation. The first signed import asks for trust
+   (TOFU); the list is empty until then.
+
+Limits:
+
+* There is no verify-release screen in the app yet (P4); use
+  `odc verify-release` or the CLI for now.
+* The publish sheet always signs with the stored keychain identity; signer
+  names are not prompted, so manifests carry no signer string.
+* Keychain items are per-app and per-user; moving to another Mac means
+  exporting the key and importing it again.
+* Removing a key does not rewrite history: existing releases stay valid for
+  anyone who already trusts that key.
+

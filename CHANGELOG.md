@@ -42,7 +42,11 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   rules and limits; the spec gains section 17.6 and the new error codes.
 * Tests: core, CLI and FFI coverage for publish / verify-release / trust and
   for signed patch application, plus an end-to-end publish smoke in
-  `scripts/e2e.sh`.
+* Apple: publish wizard (macOS). Publisher identities are Ed25519 keypairs
+  kept in the keychain; the wizard calls `odc_publish` with an optional
+  base..HEAD patch, remembers the last published head per library and shows a
+  trust sheet (list / add / remove) for the current repository. The desktop
+  app gains a Settings scene for the identity; the iOS reader stays read-only.
 
 ## [0.9.0] - 2026-11-03
 
