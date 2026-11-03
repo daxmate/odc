@@ -99,6 +99,9 @@ odc --repo ./demo export --format jsonl -o dump.jsonl
 | `odc conflicts [--json]` | 列出未完成合并的冲突 |
 | `odc resolve <word> --ours\|--theirs\|--union\|--file FILE [--json]` | 记录一个冲突的解决方式 |
 | `odc merge --continue [--json]` | 冲突全部解决后写入合并提交 |
+| `odc keygen [--out DIR] [--name NAME] [--force]` | 生成 Ed25519 私钥（0600）与公钥文件（0644） |
+| `odc sign FILE [--key PATH] [--signer NAME] [--out PATH] [--force]` | 生成旁挂签名 `<FILE>.sig` |
+| `odc verify-signature FILE [--sig PATH] [--pub PATH \| --pubkey HEX] [--json]` | 验签；无效退出码 1，用法/IO 错误退出码 2 |
 
 全局参数 `--repo DIR` 指定仓库目录（默认当前目录，库文件 `odc.db`）。
 

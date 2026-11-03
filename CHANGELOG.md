@@ -6,6 +6,22 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ## [Unreleased]
 
+### Added
+
+* Core: `signing` module with Ed25519 detached signatures (sidecar format v1).
+  A signature covers a 43-byte message (domain prefix `ODC-SIG-V1` + NUL +
+  BLAKE3-256 of the target) and verification always recomputes the digest and
+  size, so a sidecar cannot be replayed onto different bytes. New error codes
+  `ODC-E032` .. `ODC-E035`.
+* CLI: `odc keygen`, `odc sign` and `odc verify-signature`; `verify-signature`
+  exits 1 for an invalid signature and 2 for usage / I/O errors, and honours
+  `--pub` / `--pubkey` key pinning.
+* Docs: `docs/signing.md`; spec section 17 freezes the sidecar layout, the
+  domain-separated message and the error codes.
+* Tests: fixed Ed25519 vector in `spec/testvectors/signature_ed25519.json`
+  (cross-checked with OpenSSL 3 `pkeyutl`), plus core and CLI integration
+  coverage.
+
 ## [0.9.0] - 2026-11-03
 
 ### Added

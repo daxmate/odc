@@ -9,6 +9,7 @@ use odc_core::link::LinkResolution;
 use odc_core::merge::{self, Choice, MergeKind, MergeOutcome, Strategy};
 use odc_core::patch;
 use odc_core::repo::Repo;
+use odc_core::signing;
 use serde_json::json;
 use std::io::Write;
 use std::path::PathBuf;
@@ -207,6 +208,52 @@ enum Command {
         /// Write the result instead of only reporting it.
         #[arg(long)]
         apply: bool,
+        /// Print a JSON report.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Generate an Ed25519 signing keypair.
+    Keygen {
+        /// Output directory (default $ODC_KEY_DIR or ~/.config/odc/keys).
+        #[arg(long, value_name = "DIR")]
+        out: Option<PathBuf>,
+        /// Key name (default `default`).
+        #[arg(long, value_name = "NAME")]
+        name: Option<String>,
+        /// Overwrite existing key files.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Sign a file, writing a detached `<FILE>.sig` sidecar.
+    Sign {
+        /// File to sign.
+        file: PathBuf,
+        /// Private key (default `<key dir>/default.key`).
+        #[arg(long, value_name = "PATH")]
+        key: Option<PathBuf>,
+        /// Signer name recorded in the sidecar.
+        #[arg(long, value_name = "NAME")]
+        signer: Option<String>,
+        /// Signature output path (default `<FILE>.sig`).
+        #[arg(long, value_name = "PATH")]
+        out: Option<PathBuf>,
+        /// Overwrite an existing signature file.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Verify a detached signature against a file.
+    VerifySignature {
+        /// File to check.
+        file: PathBuf,
+        /// Signature file (default `<FILE>.sig`).
+        #[arg(long, value_name = "PATH")]
+        sig: Option<PathBuf>,
+        /// Public key file written by `odc keygen`.
+        #[arg(long = "pub", value_name = "PATH")]
+        pub_file: Option<PathBuf>,
+        /// Public key as 64 hex characters.
+        #[arg(long, value_name = "HEX")]
+        pubkey: Option<String>,
         /// Print a JSON report.
         #[arg(long)]
         json: bool,
@@ -639,6 +686,33 @@ fn run() -> odc_core::Result<ExitCode> {
             check_html(&cli.repo, path.as_deref(), json, limit)
         }
         Command::Normalize { apply, json } => normalize_html(&cli.repo, apply, json),
+        Command::Keygen { out, name, force } => run_keygen(out, name, force),
+        Command::Sign {
+            file,
+            key,
+            signer,
+            out,
+            force,
+        } => run_sign(
+            &file,
+            key.as_deref(),
+            signer.as_deref(),
+            out.as_deref(),
+            force,
+        ),
+        Command::VerifySignature {
+            file,
+            sig,
+            pub_file,
+            pubkey,
+            json,
+        } => run_verify_signature(
+            &file,
+            sig.as_deref(),
+            pub_file.as_deref(),
+            pubkey.as_deref(),
+            json,
+        ),
         Command::Patch { command } => match run_patch(&cli.repo, command) {
             Ok(code) => Ok(code),
             Err(error) => {
@@ -1721,4 +1795,235 @@ fn print_conflicts(conflicts: &[merge::Conflict], json: bool) {
             println!("    resolved with {}", resolution.as_str());
         }
     }
+}
+
+fn key_dir() -> odc_core::Result<PathBuf> {
+    if let Some(dir) = std::env::var_os("ODC_KEY_DIR") {
+        if !dir.is_empty() {
+            return Ok(PathBuf::from(dir));
+        }
+    }
+    let home = std::env::var_os("HOME").ok_or_else(|| {
+        odc_core::Error::InvalidArgument("neither ODC_KEY_DIR nor HOME is set".to_string())
+    })?;
+    Ok(PathBuf::from(home).join(".config").join("odc").join("keys"))
+}
+
+fn run_keygen(
+    out: Option<PathBuf>,
+    name: Option<String>,
+    force: bool,
+) -> odc_core::Result<ExitCode> {
+    let dir = match out {
+        Some(dir) => dir,
+        None => key_dir()?,
+    };
+    if !dir.exists() {
+        std::fs::create_dir_all(&dir)?;
+        set_file_mode(&dir, 0o700)?;
+    }
+    let name = name.unwrap_or_else(|| "default".to_string());
+    if name.is_empty()
+        || name
+            .chars()
+            .any(|ch| ch == '/' || ch == '\\' || ch.is_whitespace())
+    {
+        return Err(odc_core::Error::InvalidArgument(format!(
+            "invalid key name {name:?}"
+        )));
+    }
+    let key_path = dir.join(format!("{name}.key"));
+    let public_path = dir.join(format!("{name}.pub"));
+    if !force && (key_path.exists() || public_path.exists()) {
+        return Err(odc_core::Error::InvalidArgument(format!(
+            "{} already exists; use --force to overwrite",
+            key_path.display()
+        )));
+    }
+    let keypair = signing::generate_keypair()?;
+    write_private_key(&key_path, &keypair.private_key_pem)?;
+    let public_text = signing::public_key_file_text(&keypair.public_key_hex, Some(&name))?;
+    std::fs::write(&public_path, public_text)?;
+    set_file_mode(&public_path, 0o644)?;
+    println!("private key: {}", key_path.display());
+    println!("public key: {}", public_path.display());
+    println!("public key hex: {}", keypair.public_key_hex);
+    Ok(ExitCode::SUCCESS)
+}
+
+fn run_sign(
+    file: &std::path::Path,
+    key: Option<&std::path::Path>,
+    signer: Option<&str>,
+    out: Option<&std::path::Path>,
+    force: bool,
+) -> odc_core::Result<ExitCode> {
+    let key_path = match key {
+        Some(path) => path.to_path_buf(),
+        None => key_dir()?.join("default.key"),
+    };
+    let out_path = out.map_or_else(
+        || signing::signature_path(file),
+        std::path::Path::to_path_buf,
+    );
+    if !force && out_path.exists() {
+        return Err(odc_core::Error::InvalidArgument(format!(
+            "{} already exists; use --force to overwrite",
+            out_path.display()
+        )));
+    }
+    let key_pem = std::fs::read_to_string(&key_path)?;
+    let signature = signing::sign_file(file, &key_pem, signer)?;
+    signing::write_signature_file(&out_path, &signature)?;
+    let mut report = json!({
+        "version": signature.version,
+        "algorithm": signature.algorithm,
+        "public_key": signature.public_key,
+        "signature": signature.signature,
+        "target": {
+            "hash_algorithm": signature.target.hash_algorithm,
+            "hash": signature.target.hash,
+            "size": signature.target.size,
+        },
+    });
+    if let Some(signer) = &signature.signer {
+        report["signer"] = json!(signer);
+    }
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&report).unwrap_or_default()
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
+fn run_verify_signature(
+    file: &std::path::Path,
+    sig: Option<&std::path::Path>,
+    pub_file: Option<&std::path::Path>,
+    pubkey: Option<&str>,
+    json: bool,
+) -> odc_core::Result<ExitCode> {
+    if pub_file.is_some() && pubkey.is_some() {
+        eprintln!("error: --pub and --pubkey are mutually exclusive");
+        return Ok(ExitCode::from(2));
+    }
+    let expected = match (pub_file, pubkey) {
+        (Some(path), None) => match std::fs::read_to_string(path) {
+            Ok(text) => match signing::parse_public_key_file(&text) {
+                Ok(key) => Some(key),
+                Err(error) => {
+                    eprintln!("error: {}: {error}", path.display());
+                    return Ok(ExitCode::from(2));
+                }
+            },
+            Err(error) => {
+                eprintln!("error: cannot read {}: {error}", path.display());
+                return Ok(ExitCode::from(2));
+            }
+        },
+        (None, Some(hex)) => match signing::hex_bytes::<32>(hex, "public_key") {
+            Ok(key) => Some(key),
+            Err(error) => {
+                eprintln!("error: {error}");
+                return Ok(ExitCode::from(2));
+            }
+        },
+        (None, None) => None,
+        (Some(_), Some(_)) => unreachable!("checked above"),
+    };
+
+    let data = match std::fs::read(file) {
+        Ok(data) => data,
+        Err(error) => {
+            eprintln!("error: cannot read {}: {error}", file.display());
+            return Ok(ExitCode::from(2));
+        }
+    };
+    let sig_path = sig.map_or_else(
+        || signing::signature_path(file),
+        std::path::Path::to_path_buf,
+    );
+    let sig_text = match std::fs::read_to_string(&sig_path) {
+        Ok(text) => text,
+        Err(error) => {
+            eprintln!("error: cannot read {}: {error}", sig_path.display());
+            return Ok(ExitCode::from(2));
+        }
+    };
+    let signature = match signing::SignatureV1::from_json(&sig_text) {
+        Ok(signature) => signature,
+        Err(error) => return Ok(report_invalid(&error, json)),
+    };
+    match signing::verify_bytes_with_key(&data, &signature, expected.as_ref()) {
+        Ok(verified) => {
+            if json {
+                let mut report = json!({
+                    "valid": true,
+                    "public_key": hash::to_hex(&verified.public_key),
+                    "created_at": verified.created_at,
+                    "hash": hash::to_hex(&verified.hash),
+                    "size": verified.size,
+                });
+                if let Some(signer) = &verified.signer {
+                    report["signer"] = json!(signer);
+                }
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&report).unwrap_or_default()
+                );
+            } else {
+                let signer = verified
+                    .signer
+                    .as_deref()
+                    .map_or_else(String::new, |name| format!(" by {name}"));
+                println!(
+                    "verify-signature: OK ({}): {} bytes, hash {}, key {}{}, signed {}",
+                    file.display(),
+                    verified.size,
+                    hash::to_hex(&verified.hash),
+                    &hash::to_hex(&verified.public_key)[..16],
+                    signer,
+                    verified.created_at
+                );
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(error) => Ok(report_invalid(&error, json)),
+    }
+}
+
+fn report_invalid(error: &odc_core::Error, json: bool) -> ExitCode {
+    if json {
+        let report = json!({
+            "valid": false,
+            "error_code": error.code(),
+            "error": error.to_string(),
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).unwrap_or_default()
+        );
+    } else {
+        println!("verify-signature: INVALID ({error})");
+    }
+    ExitCode::from(1)
+}
+
+fn write_private_key(path: &std::path::Path, contents: &str) -> odc_core::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    file.write_all(contents.as_bytes())?;
+    set_file_mode(path, 0o600)?;
+    Ok(())
+}
+
+fn set_file_mode(path: &std::path::Path, mode: u32) -> odc_core::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))?;
+    Ok(())
 }

@@ -366,6 +366,10 @@ index_entry = varint(len(word)) | word | content_hash:32B
 | ODC-E029 | 合并仍有未解决的冲突 |
 | ODC-E030 | 没有进行中的合并 |
 | ODC-E031 | 仓库只读（单文件 pack 分发件，不可原地写入） |
+| ODC-E032 | 签名文件格式错误 / 字段非法（§17） |
+| ODC-E033 | 目标文件哈希或大小与签名记录不符（§17） |
+| ODC-E034 | Ed25519 验签失败，或签名公钥与钉选公钥不一致（§17） |
+| ODC-E035 | 私钥格式错误（非 PKCS#8 Ed25519 PEM，§17） |
 
 ## 13. 版本兼容
 
@@ -386,6 +390,7 @@ index_entry = varint(len(word)) | word | content_hash:32B
 | `cdc_boundaries.json` | 确定性生成的 record 集 → 每个块的 record 区间与字节数 |
 | `commit_hash.json` | 各分量 → commit_hash（含 parent 场景） |
 | `genesis.json` | 空库 genesis commit 哈希 |
+| `signature_ed25519.json` | 固定 seed / 目标字节 → 公钥、BLAKE3 摘要、Ed25519 签名（§17） |
 
 生成方式：`cargo run -p odc-core --example gen_testvectors`（算法由本规范完全确定，任何独立实现都可复算并比对）。测试 `crates/odc-core/tests/vectors.rs` 会读取并断言。
 
@@ -417,3 +422,81 @@ index_entry = varint(len(word)) | word | content_hash:32B
   `export` 只读取已提交索引。
 
 兼容范围、实测数据与已知缺口见 [mdx-compat.md](mdx-compat.md)。
+
+## 17. 旁挂签名（Signature sidecar v1）
+
+v0.10 起发布件可在**不改动容器格式**的前提下携带分离签名：签名存放在目标文件同目录的
+`<file>.sig`（例：`dict.odc.sig`）。本节冻结 v1 的字节布局，TOFU、发布向导与 FFI
+属后续阶段，不属于本节。
+
+### 17.1 签名文件
+
+* 编码：UTF-8 JSON，2 空格缩进，末尾**恰好一个换行**。
+* 字段顺序按下表；`signer` 缺省时**整个字段省略**（不得写 `null`）。
+
+| 字段 | 类型 | 约束 |
+| --- | --- | --- |
+| `version` | 整数 | 必须为 `1` |
+| `algorithm` | 字符串 | 必须为 `"ed25519"` |
+| `public_key` | 字符串 | 32 字节**小写** hex（64 字符） |
+| `signature` | 字符串 | 64 字节**小写** hex（128 字符） |
+| `target.hash_algorithm` | 字符串 | 必须为 `"blake3"` |
+| `target.hash` | 字符串 | 目标文件 BLAKE3-256，32 字节小写 hex |
+| `target.size` | 整数 | 目标文件字节数（u64） |
+| `created_at` | 字符串 | RFC 3339 UTC，整秒，例 `2026-11-03T12:00:00Z` |
+| `signer` | 字符串 | 可选的人类可读签名者名 |
+
+示例：
+
+```json
+{
+  "version": 1,
+  "algorithm": "ed25519",
+  "public_key": "<64 hex>",
+  "signature": "<128 hex>",
+  "target": {
+    "hash_algorithm": "blake3",
+    "hash": "<64 hex>",
+    "size": 12345
+  },
+  "created_at": "2026-11-03T12:00:00Z",
+  "signer": "alice"
+}
+```
+
+### 17.2 被签名消息
+
+Ed25519 签名输入固定为 **43 字节**：
+
+```
+M = "ODC-SIG-V1" || 0x00 || BLAKE3-256(target bytes)
+    \______ 11 字节 ______/   \_____ 32 字节 ____/
+```
+
+域分隔前缀（ASCII，后接一个 NUL 字节）防止签名在其他协议中被复用。
+Ed25519 签名是确定性的：同一私钥与同一目标必然得到同一 `signature`。
+
+### 17.3 验签流程
+
+1. 解析并校验 §17.1 全部字段（失败 → `ODC-E032`）。
+2. 重算目标文件 BLAKE3 与字节数，任一与 `target` 不符即失败（`ODC-E033`）。
+3. 用 `public_key` 对 §17.2 的消息验签（失败 → `ODC-E034`）；
+   若调用方钉选了可信公钥，`public_key` 与其不一致同样失败（`ODC-E034`）。
+4. 通过后返回 `public_key` / `signer` / `created_at` / `hash` / `size`。
+
+注意：JSON 结构本身不参与签名，`created_at` 与 `signer` **不是**已认证信息。
+
+### 17.4 私钥与公钥文件
+
+* 私钥：PKCS#8 PEM（`-----BEGIN PRIVATE KEY-----`），文件权限 `0600`。
+* 公钥文件：单行文本 `odc-ed25519 <64 hex> <name>` 加换行，权限 `0644`；
+  `<name>` 可省略，解析时最多允许一个名字令牌。
+
+### 17.5 错误码
+
+| 码 | 含义 |
+| --- | --- |
+| ODC-E032 | 签名文件格式错误 / 字段非法（版本、算法、hex 长度或大小写） |
+| ODC-E033 | 目标文件哈希或大小与签名记录不符 |
+| ODC-E034 | Ed25519 验签失败，或签名公钥与钉选公钥不一致 |
+| ODC-E035 | 私钥不是合法的 PKCS#8 Ed25519 PEM |
