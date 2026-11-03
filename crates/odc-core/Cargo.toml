@@ -13,7 +13,7 @@ categories.workspace = true
 blake3 = "1.8.7"
 flate2 = "1.1.5"
 html5ever = "0.35"
-lightningcss = "1.0.0-alpha.72"
+lightningcss = { version = "1.0.0-alpha.72", default-features = false }
 markup5ever_rcdom = "0.35"
 markup_fmt = "0.27.6"
 mdictlib = { version = "0.2.8", features = ["lzo"] }
