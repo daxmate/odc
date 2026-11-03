@@ -6,6 +6,10 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ## [Unreleased]
 
+_暂无。_
+
+## [0.11.0] - 2026-11-03
+
 ### Added
 
 * CLI: `odc fetch --from <repo> --depth N` deepens a shallow export from another
