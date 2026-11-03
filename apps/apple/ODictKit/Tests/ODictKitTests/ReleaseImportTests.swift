@@ -290,9 +290,9 @@ final class ReleaseImportTests: XCTestCase {
             "both targets must declare 0.11.0"
         )
         XCTAssertEqual(
-            project.components(separatedBy: "CFBundleVersion: \"12\"").count - 1,
+            project.components(separatedBy: "CFBundleVersion: \"13\"").count - 1,
             2,
-            "both targets must declare build 12"
+            "both targets must declare build 13"
         )
 
         for name in ["ODict", "ODictDesktop"] {
