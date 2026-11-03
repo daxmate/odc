@@ -29,9 +29,10 @@ pub const DB_FILE: &str = "odc.db";
 /// Version 1 is the format shipped before 0.2: 32-byte digests in
 /// `entries`, block references by hash, one full index snapshot per commit.
 /// Version 2 stores block ids, 8-byte digest prefixes and delta snapshots.
-/// The `format_version` string does not change: both layouts describe the same
-/// block/commit model, and v1 repositories stay readable.
-pub const SCHEMA_VERSION: i64 = 2;
+/// Version 3 adds the `publishers` trust store (signature sidecars v1).
+/// The `format_version` string does not change: every layout describes the
+/// same block/commit model, and older repositories stay readable.
+pub const SCHEMA_VERSION: i64 = 3;
 
 /// Meta key holding the SQLite layout version.
 pub const META_SCHEMA_VERSION: &str = "schema_version";
@@ -95,6 +96,12 @@ CREATE TABLE staging(
     display TEXT NOT NULL,
     payload BLOB,
     content_hash BLOB NOT NULL
+);
+CREATE TABLE publishers(
+    public_key TEXT PRIMARY KEY,
+    name TEXT NOT NULL DEFAULT '',
+    added_at INTEGER NOT NULL,
+    source TEXT NOT NULL
 );
 ";
 
@@ -176,13 +183,50 @@ pub fn ensure_resources_table(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Statement that adds the publisher trust store (v0.10).
+pub const PUBLISHERS_SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS publishers(
+    public_key TEXT PRIMARY KEY,
+    name TEXT NOT NULL DEFAULT '',
+    added_at INTEGER NOT NULL,
+    source TEXT NOT NULL
+);";
+
+/// Add the `publishers` table to databases written before v0.10.
+///
+/// The table is created on every open, so version 1 and 2 repositories gain a
+/// writable trust store without a destructive rewrite. The layout version is
+/// bumped once the table exists, which keeps `schema_version` monotonic.
+pub fn has_publishers_table(connection: &Connection) -> Result<bool> {
+    let exists: Option<i64> = connection
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'publishers'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(exists.is_some())
+}
+
+pub fn ensure_publishers_table(connection: &Connection) -> Result<()> {
+    connection.execute_batch(PUBLISHERS_SCHEMA)?;
+    if schema_version(connection)? < SCHEMA_VERSION {
+        set_meta(
+            connection,
+            META_SCHEMA_VERSION,
+            SCHEMA_VERSION.to_string().as_bytes(),
+        )?;
+    }
+    Ok(())
+}
+
 /// Rewrite a version 1 database into the current layout.
 ///
 /// Makes the file writable as v2 and returns `true` when a rewrite happened.
 /// The content-addressed payload (blocks, commits, refs) is untouched: only
 /// the index columns move to block ids and digest prefixes.
 pub fn upgrade_to_v2(connection: &Connection) -> Result<bool> {
-    if schema_version(connection)? >= SCHEMA_VERSION {
+    if schema_version(connection)? >= 2 {
         return Ok(false);
     }
     // The connection-local view references `entries`; drop it before the tables

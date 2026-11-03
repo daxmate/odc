@@ -10,7 +10,8 @@
 //!   (module `repo`),
 //! * an MDX (MDict) import adapter (module `mdx`),
 //! * `ODP1` patch creation and application (module `patch`),
-//! * detached Ed25519 signatures for release artifacts (module `signing`).
+//! * detached Ed25519 signatures for release artifacts (module `signing`),
+//! * signed release bundles with a TOFU publisher store (module `release`).
 //!
 //! The normative description lives in `docs/odc-spec.md`.
 
@@ -31,6 +32,7 @@ pub mod mdx_scan;
 pub mod merge;
 pub mod pack;
 pub mod patch;
+pub mod release;
 pub mod repo;
 pub mod signing;
 pub mod snapshot;

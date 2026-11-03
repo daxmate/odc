@@ -530,6 +530,55 @@ pub(crate) fn hash_from_blob(bytes: &[u8]) -> Result<[u8; 32]> {
         .map_err(|_| Error::Inconsistent("hash column is not 32 bytes".to_string()))
 }
 
+/// A publisher recorded in the local trust store.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Publisher {
+    /// Lower-case hex Ed25519 public key (32 bytes).
+    pub public_key: String,
+    /// Human-readable name; empty when unnamed.
+    pub name: String,
+    /// Unix seconds when the key was recorded.
+    pub added_at: i64,
+    /// How the key got here: `manual` or `tofu`.
+    pub source: String,
+}
+
+/// Result of `trust_publisher`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TrustOutcome {
+    /// The key was not present and is now recorded.
+    Added(Publisher),
+    /// The key was already recorded; nothing changed.
+    AlreadyTrusted(Publisher),
+    /// Another key already uses the requested name.
+    NameConflict { existing: Publisher },
+}
+
+/// Source recorded for a key first seen through `--trust-new`.
+pub const TRUST_SOURCE_TOFU: &str = "tofu";
+/// Source recorded for `odc trust add`.
+pub const TRUST_SOURCE_MANUAL: &str = "manual";
+
+fn publisher_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Publisher> {
+    Ok(Publisher {
+        public_key: row.get(0)?,
+        name: row.get(1)?,
+        added_at: row.get(2)?,
+        source: row.get(3)?,
+    })
+}
+
+/// Validate a publisher key and return its canonical lower-case hex form.
+pub(crate) fn canonical_public_key(value: &str) -> Result<String> {
+    let trimmed = value.trim();
+    let key = crate::signing::hex_bytes::<32>(trimmed, "public_key").map_err(|_| {
+        Error::PublisherUntrusted(format!(
+            "publisher key {trimmed:?} is not 64 hex characters"
+        ))
+    })?;
+    Ok(crate::signing::hex_encode(&key))
+}
+
 impl Repo {
     /// Create a new repository in `dir` and write the genesis commit.
     pub fn init(dir: impl AsRef<Path>) -> Result<Self> {
@@ -699,6 +748,118 @@ impl Repo {
         value.map(|bytes| hash_from_blob(&bytes)).transpose()
     }
 
+    /// Every trusted publisher, ordered by public key.
+    pub fn publishers(&self) -> Result<Vec<Publisher>> {
+        if !store::has_publishers_table(&self.connection)? {
+            return Ok(Vec::new());
+        }
+        let mut statement = self.connection.prepare(
+            "SELECT public_key, name, added_at, source FROM publishers ORDER BY public_key",
+        )?;
+        let rows = statement.query_map([], publisher_from_row)?;
+        let mut publishers = Vec::new();
+        for row in rows {
+            publishers.push(row?);
+        }
+        Ok(publishers)
+    }
+
+    /// One trusted publisher, or None when the key is unknown.
+    pub fn publisher(&self, public_key: &str) -> Result<Option<Publisher>> {
+        let key = canonical_public_key(public_key)?;
+        if !store::has_publishers_table(&self.connection)? {
+            return Ok(None);
+        }
+        self.connection
+            .query_row(
+                "SELECT public_key, name, added_at, source FROM publishers WHERE public_key = ?1",
+                [key],
+                publisher_from_row,
+            )
+            .optional()
+            .map_err(Error::from)
+    }
+
+    /// The publisher using this name, if any.
+    pub fn publisher_by_name(&self, name: &str) -> Result<Option<Publisher>> {
+        if !store::has_publishers_table(&self.connection)? {
+            return Ok(None);
+        }
+        if name.is_empty() {
+            return Ok(None);
+        }
+        self.connection
+            .query_row(
+                "SELECT public_key, name, added_at, source FROM publishers WHERE name = ?1",
+                [name],
+                publisher_from_row,
+            )
+            .optional()
+            .map_err(Error::from)
+    }
+
+    /// Whether the key is trusted.
+    pub fn is_trusted(&self, public_key: &str) -> Result<bool> {
+        Ok(self.publisher(public_key)?.is_some())
+    }
+
+    /// Whether the trust store has no publishers at all.
+    pub fn trust_store_is_empty(&self) -> Result<bool> {
+        if !store::has_publishers_table(&self.connection)? {
+            return Ok(true);
+        }
+        let count: i64 =
+            self.connection
+                .query_row("SELECT COUNT(*) FROM publishers", [], |row| row.get(0))?;
+        Ok(count == 0)
+    }
+
+    /// Record a publisher. Re-adding the same key is idempotent.
+    ///
+    /// A name that belongs to a different key is reported as
+    /// NameConflict; callers surface it as ODC-E036.
+    pub fn trust_publisher(
+        &mut self,
+        public_key: &str,
+        name: &str,
+        source: &str,
+    ) -> Result<TrustOutcome> {
+        self.ensure_writable()?;
+        let key = canonical_public_key(public_key)?;
+        if source != TRUST_SOURCE_MANUAL && source != TRUST_SOURCE_TOFU {
+            return Err(Error::InvalidArgument(format!(
+                "unknown trust source {source:?}"
+            )));
+        }
+        if let Some(existing) = self.publisher(&key)? {
+            return Ok(TrustOutcome::AlreadyTrusted(existing));
+        }
+        if let Some(existing) = self.publisher_by_name(name)? {
+            return Ok(TrustOutcome::NameConflict { existing });
+        }
+        let added_at = chrono_free_now();
+        self.connection.execute(
+            "INSERT INTO publishers(public_key, name, added_at, source) VALUES (?1, ?2, ?3, ?4)",
+            params![key, name, added_at, source],
+        )?;
+        Ok(TrustOutcome::Added(Publisher {
+            public_key: key,
+            name: name.to_string(),
+            added_at,
+            source: source.to_string(),
+        }))
+    }
+
+    /// Forget a publisher. Returns true when a row was removed.
+    pub fn remove_publisher(&mut self, public_key: &str) -> Result<bool> {
+        self.ensure_writable()?;
+        let key = canonical_public_key(public_key)?;
+        let removed = self
+            .connection
+            .execute("DELETE FROM publishers WHERE public_key = ?1", [key])?;
+        Ok(removed > 0)
+    }
+
     /// Rewrite a version 1 database into the current layout before writing.
     ///
     /// Reading a v1 repository never touches the file; the first write is the
@@ -709,6 +870,7 @@ impl Repo {
             // space back once instead of carrying it for the life of the file.
             self.connection.execute_batch("VACUUM")?;
         }
+        store::ensure_publishers_table(&self.connection)?;
         Ok(())
     }
 

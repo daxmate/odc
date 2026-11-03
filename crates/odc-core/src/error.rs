@@ -95,6 +95,13 @@ pub enum Error {
     SignatureInvalid(String),
     /// A private or public key is not in the expected PKCS#8 / hex form.
     KeyFormat(String),
+    /// A publisher key is missing from the trust store (or conflicts with an
+    /// existing name).
+    PublisherUntrusted(String),
+    /// A release manifest is malformed or its signature does not match.
+    ReleaseManifestInvalid(String),
+    /// A release artifact is missing or does not match the manifest.
+    ReleaseArtifactMismatch(String),
 }
 
 impl Error {
@@ -137,6 +144,9 @@ impl Error {
             Self::SignatureTargetMismatch(_) => "ODC-E033",
             Self::SignatureInvalid(_) => "ODC-E034",
             Self::KeyFormat(_) => "ODC-E035",
+            Self::PublisherUntrusted(_) => "ODC-E036",
+            Self::ReleaseManifestInvalid(_) => "ODC-E037",
+            Self::ReleaseArtifactMismatch(_) => "ODC-E038",
         }
     }
 }
@@ -198,6 +208,11 @@ impl fmt::Display for Error {
             }
             Self::SignatureInvalid(detail) => format!("signature verification failed: {detail}"),
             Self::KeyFormat(detail) => format!("invalid key material: {detail}"),
+            Self::PublisherUntrusted(detail) => format!("publisher is not trusted: {detail}"),
+            Self::ReleaseManifestInvalid(detail) => format!("invalid release manifest: {detail}"),
+            Self::ReleaseArtifactMismatch(detail) => {
+                format!("release artifact does not match the manifest: {detail}")
+            }
         };
         write!(f, "{}: {message}", self.code())
     }

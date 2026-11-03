@@ -58,7 +58,7 @@ fn column_len(dir: &Path, table: &str, column: &str) -> i64 {
 }
 
 #[test]
-fn new_repositories_declare_layout_two() {
+fn new_repositories_declare_the_current_layout() {
     let dir = temp_dir("layout");
     seed(&dir, &[("alpha", "first"), ("beta", "second")]);
     let connection = Connection::open(dir.join(DB_FILE)).expect("open sqlite");
@@ -69,7 +69,7 @@ fn new_repositories_declare_layout_two() {
             |row| row.get(0),
         )
         .expect("schema version");
-    assert_eq!(String::from_utf8_lossy(&version), "2");
+    assert_eq!(String::from_utf8_lossy(&version), "3");
 
     let block_columns: Vec<String> = connection
         .prepare("SELECT name FROM pragma_table_info('entries')")
@@ -251,7 +251,7 @@ fn version_one_databases_stay_readable_and_upgrade_on_commit() {
             |row| row.get(0),
         )
         .expect("schema version");
-    assert_eq!(String::from_utf8_lossy(&version), "2");
+    assert_eq!(String::from_utf8_lossy(&version), "3");
     drop(connection);
 
     let repo = Repo::open(&dir).expect("open");
