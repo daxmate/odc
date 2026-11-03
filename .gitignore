@@ -6,6 +6,9 @@
 *.db-shm
 /odc-e2e
 
+# Build artifacts (unified layout: <root>/build/)
+build/
+
 # Apple build artifacts
 apps/apple/ODictKit/Frameworks/
 apps/apple/build/

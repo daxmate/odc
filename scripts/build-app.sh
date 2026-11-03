@@ -11,6 +11,11 @@
 #   --no-ffi        reuse existing ODCFFI.xcframework
 #   --open          open the Xcode project afterwards
 #   --help          显示本帮助
+#
+# Build artifacts:
+#   intermediates: build/DerivedData
+#   products:      build/Products/<sdk>/<Config>/<App>.app
+#   (both overridable via DERIVED_DATA / PRODUCTS_DIR)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -79,7 +84,41 @@ fi
 echo "== xcodegen"
 (cd apps/apple && xcodegen generate)
 
-DERIVED_DATA="$ROOT/apps/apple/build/DerivedData"
+# Build artifacts stay inside the working tree: <root>/build/.
+# Overridable through the environment so CI or one-off runs can relocate them.
+DERIVED_DATA="${DERIVED_DATA:-$ROOT/build/DerivedData}"
+PRODUCTS_DIR="${PRODUCTS_DIR:-$ROOT/build/Products}"
+PRODUCT_PATHS=()
+
+# copy_product <sdk> <bundle name> <source bundle>
+# Copies the freshly built bundle to build/Products/<sdk>/<Config>/.
+copy_product() {
+  local sdk="$1" bundle="$2" src="$3"
+  local dest_dir="$PRODUCTS_DIR/$sdk/$CONFIG"
+  local dest="$dest_dir/$bundle.app"
+
+  if [[ ! -d "$src" ]]; then
+    echo "build-app.sh: expected product not found: $src" >&2
+    exit 1
+  fi
+
+  # Refuse obviously unsafe destinations (empty, relative, or not an .app).
+  case "$dest" in
+    /*/*.app) ;;
+    *)
+      echo "build-app.sh: refusing unsafe product destination: $dest" >&2
+      exit 1
+      ;;
+  esac
+
+  mkdir -p "$dest_dir"
+  if [[ -e "$dest" ]]; then
+    rm -rf "$dest"
+  fi
+  ditto "$src" "$dest"
+  PRODUCT_PATHS+=("$dest")
+  echo "== product: $dest"
+}
 
 build_ios() {
   echo "== iOS simulator build"
@@ -87,6 +126,8 @@ build_ios() {
     -configuration "$CONFIG" \
     -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
     -derivedDataPath "$DERIVED_DATA" CODE_SIGNING_ALLOWED=NO build
+  copy_product iphonesimulator "ODict" \
+    "$DERIVED_DATA/Build/Products/$CONFIG-iphonesimulator/ODict.app"
 }
 
 build_macos() {
@@ -95,6 +136,8 @@ build_macos() {
     -configuration "$CONFIG" \
     -destination 'platform=macOS' \
     -derivedDataPath "$DERIVED_DATA" CODE_SIGNING_ALLOWED=NO build
+  copy_product macosx "ODict Desktop" \
+    "$DERIVED_DATA/Build/Products/$CONFIG/ODict Desktop.app"
 }
 
 case "$TARGET" in
@@ -108,6 +151,13 @@ esac
 
 if (( OPEN_PROJECT )); then
   open apps/apple/ODict.xcodeproj
+fi
+
+if (( ${#PRODUCT_PATHS[@]} > 0 )); then
+  echo "== products"
+  for product in "${PRODUCT_PATHS[@]}"; do
+    echo "$product"
+  done
 fi
 
 echo "== done"
