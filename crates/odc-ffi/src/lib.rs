@@ -29,9 +29,12 @@ use std::ptr;
 use odc_core::cbor::Value as CborValue;
 use odc_core::link::LinkResolution;
 use odc_core::pack::PackOptions;
+use odc_core::release::{self, PublishOptions};
 use odc_core::repo::{
-    ChangeKind, DiffKind, EntryDiff, EntryWriteOutcome, FieldDiff, Status, WorkingResolution,
+    ChangeKind, DiffKind, EntryDiff, EntryWriteOutcome, FieldDiff, Publisher, Status, TrustOutcome,
+    WorkingResolution, TRUST_SOURCE_MANUAL,
 };
+use odc_core::signing::{self, SignatureV1};
 use odc_core::{import_mdx, Def, Entry, ImportProgress, MdxImportOptions, MdxImportReport, Repo};
 use serde_json::{json, Map, Value as JsonValue};
 
@@ -1513,6 +1516,443 @@ fn entry_to_json(entry: &Entry) -> JsonValue {
 /// Text-keyed maps become objects; any other map becomes an array of
 /// `[key, value]` pairs. Byte strings become arrays of integers, since JSON
 /// has no byte type.
+fn publisher_to_json(publisher: &Publisher) -> JsonValue {
+    json!({
+        "public_key": publisher.public_key,
+        "name": publisher.name,
+        "added_at": publisher.added_at,
+        "source": publisher.source,
+    })
+}
+
+fn core_error(error: odc_core::Error) -> String {
+    format!("{}: {error}", error.code())
+}
+
+fn store_text(slot: *mut *mut c_char, value: &str) -> Result<(), String> {
+    let text = CString::new(value).map_err(|_| "string contains a NUL byte".to_string())?;
+    if slot.is_null() {
+        return Ok(());
+    }
+    // SAFETY: the contract requires writable storage for one char *.
+    unsafe { *slot = text.into_raw() };
+    Ok(())
+}
+
+/// Generate a fresh Ed25519 keypair.
+///
+/// Writes the PKCS#8 PEM private key to out_pem and the lower-case hex public
+/// key to out_public_hex; both must be released with odc_string_free. Returns
+/// 0 on success and -1 on failure.
+///
+/// # Safety
+///
+/// The output slots and error_message must be NULL or point to writable
+/// storage for one char *.
+#[no_mangle]
+pub unsafe extern "C" fn odc_keypair_generate(
+    out_pem: *mut *mut c_char,
+    out_public_hex: *mut *mut c_char,
+    error_message: *mut *mut c_char,
+) -> i32 {
+    clear_error(out_pem);
+    clear_error(out_public_hex);
+    guarded(error_message, -1, || {
+        let pair = signing::generate_keypair().map_err(|error| error.to_string())?;
+        store_text(out_pem, &pair.private_key_pem)?;
+        store_text(out_public_hex, &pair.public_key_hex)?;
+        Ok(0)
+    })
+}
+
+/// Sign a file and return the sidecar JSON.
+///
+/// The signature object is stored in out_json (release it with
+/// odc_string_free). No file is written. Returns 0 on success and -1 on
+/// failure.
+///
+/// # Safety
+///
+/// String arguments must be NUL-terminated UTF-8; output slots must be NULL or
+/// writable.
+#[no_mangle]
+pub unsafe extern "C" fn odc_sign_file(
+    path_utf8: *const c_char,
+    key_pem: *const c_char,
+    signer_or_null: *const c_char,
+    out_json: *mut *mut c_char,
+    error_message: *mut *mut c_char,
+) -> i32 {
+    clear_error(out_json);
+    guarded(error_message, -1, || {
+        // SAFETY: the pointers follow the contract documented above.
+        let path = unsafe { text_arg(path_utf8, "path") }?;
+        let key_pem = unsafe { text_arg(key_pem, "key_pem") }?;
+        let signer = unsafe { optional_text_arg(signer_or_null, "signer") }?;
+        let signature = signing::sign_file(Path::new(&path), &key_pem, signer.as_deref())
+            .map_err(|error| error.to_string())?;
+        let payload = serde_json::to_value(&signature).map_err(|error| error.to_string())?;
+        store_json(out_json, &payload)?;
+        Ok(0)
+    })
+}
+
+/// Verify a file against a sidecar JSON and an optional pinned key.
+///
+/// Cryptographic failures are business results: the call returns 0 and out_json
+/// holds valid:false plus error_code and error. Only transport failures
+/// (unreadable file, bad arguments) return -1.
+///
+/// # Safety
+///
+/// String arguments must be NUL-terminated UTF-8; output slots must be NULL or
+/// writable.
+#[no_mangle]
+pub unsafe extern "C" fn odc_verify_signature_file(
+    path_utf8: *const c_char,
+    sig_json: *const c_char,
+    expected_pub_hex_or_null: *const c_char,
+    out_json: *mut *mut c_char,
+    error_message: *mut *mut c_char,
+) -> i32 {
+    clear_error(out_json);
+    guarded(error_message, -1, || {
+        // SAFETY: the pointers follow the contract documented above.
+        let path = unsafe { text_arg(path_utf8, "path") }?;
+        let sig_text = unsafe { text_arg(sig_json, "sig_json") }?;
+        let expected_hex =
+            unsafe { optional_text_arg(expected_pub_hex_or_null, "expected_public_key_hex") }?;
+        let expected = match expected_hex {
+            Some(hex) => Some(
+                signing::hex_bytes::<32>(hex.trim(), "expected_public_key_hex")
+                    .map_err(|error| error.to_string())?,
+            ),
+            None => None,
+        };
+        let signature = SignatureV1::from_json(&sig_text).map_err(|error| error.to_string())?;
+        let data = std::fs::read(&path).map_err(|error| format!("cannot read {path}: {error}"))?;
+        let payload = match signing::verify_bytes_with_key(&data, &signature, expected.as_ref()) {
+            Ok(verified) => json!({
+                "valid": true,
+                "public_key": signing::hex_encode(&verified.public_key),
+                "created_at": verified.created_at,
+                "signer": verified.signer,
+                "hash": odc_core::hash::to_hex(&verified.hash),
+                "size": verified.size,
+            }),
+            Err(error) => json!({
+                "valid": false,
+                "error_code": error.code(),
+                "error": error.to_string(),
+            }),
+        };
+        store_json(out_json, &payload)?;
+        Ok(0)
+    })
+}
+
+/// List trusted publishers as a JSON object with a publishers array.
+///
+/// # Safety
+///
+/// repo must be a live handle; out_json and error_message must be NULL or
+/// writable.
+#[no_mangle]
+pub unsafe extern "C" fn odc_publishers_json(
+    repo: *const OdcRepo,
+    out_json: *mut *mut c_char,
+    error_message: *mut *mut c_char,
+) -> i32 {
+    clear_error(out_json);
+    guarded(error_message, -1, || {
+        let repo = unsafe { repo_ref(repo) }?;
+        let publishers = repo.repo.publishers().map_err(|error| error.to_string())?;
+        let items: Vec<JsonValue> = publishers.iter().map(publisher_to_json).collect();
+        store_json(out_json, &json!({ "publishers": items }))?;
+        Ok(0)
+    })
+}
+/// Trust a publisher key and return the stored record.
+///
+/// Re-adding the same key is idempotent. A name that belongs to another key
+/// fails with ODC-E036.
+///
+/// # Safety
+///
+/// repo must be a live handle; string arguments must be NUL-terminated UTF-8;
+/// out_json and error_message must be NULL or writable.
+#[no_mangle]
+pub unsafe extern "C" fn odc_trust_add(
+    repo: *mut OdcRepo,
+    public_key_hex: *const c_char,
+    name_or_null: *const c_char,
+    out_json: *mut *mut c_char,
+    error_message: *mut *mut c_char,
+) -> i32 {
+    clear_error(out_json);
+    guarded(error_message, -1, || {
+        let repo = unsafe { repo_mut(repo) }?;
+        let public_key = unsafe { text_arg(public_key_hex, "public_key_hex") }?;
+        let name = unsafe { optional_text_arg(name_or_null, "name") }?;
+        let name = name.unwrap_or_default();
+        match repo
+            .repo
+            .trust_publisher(&public_key, &name, TRUST_SOURCE_MANUAL)
+            .map_err(core_error)?
+        {
+            TrustOutcome::Added(publisher) => {
+                store_json(
+                    out_json,
+                    &json!({ "outcome": "added", "publisher": publisher_to_json(&publisher) }),
+                )?;
+            }
+            TrustOutcome::AlreadyTrusted(publisher) => {
+                store_json(
+                    out_json,
+                    &json!({
+                        "outcome": "already_trusted",
+                        "publisher": publisher_to_json(&publisher),
+                    }),
+                )?;
+            }
+            TrustOutcome::NameConflict { existing } => {
+                return Err(core_error(odc_core::Error::PublisherUntrusted(format!(
+                    "name {:?} is already trusted for {}",
+                    existing.name, existing.public_key
+                ))));
+            }
+        }
+        Ok(0)
+    })
+}
+
+/// Forget a publisher key.
+///
+/// out_json holds removed:true or removed:false. Returns 0 on success and -1
+/// on failure.
+///
+/// # Safety
+///
+/// repo must be a live handle; string arguments must be NUL-terminated UTF-8;
+/// out_json and error_message must be NULL or writable.
+#[no_mangle]
+pub unsafe extern "C" fn odc_trust_remove(
+    repo: *mut OdcRepo,
+    public_key_hex: *const c_char,
+    out_json: *mut *mut c_char,
+    error_message: *mut *mut c_char,
+) -> i32 {
+    clear_error(out_json);
+    guarded(error_message, -1, || {
+        let repo = unsafe { repo_mut(repo) }?;
+        let public_key = unsafe { text_arg(public_key_hex, "public_key_hex") }?;
+        let removed = repo
+            .repo
+            .remove_publisher(&public_key)
+            .map_err(|error| error.to_string())?;
+        store_json(
+            out_json,
+            &json!({ "public_key": public_key, "removed": removed }),
+        )?;
+        Ok(0)
+    })
+}
+
+/// Publish a signed release bundle.
+///
+/// Existing files are never overwritten: publish into a fresh directory.
+/// out_json holds out_dir, manifest, head, base, artifacts and publisher.
+///
+/// # Safety
+///
+/// repo must be a live handle; string arguments must be NUL-terminated UTF-8;
+/// out_json and error_message must be NULL or writable.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn odc_publish(
+    repo: *const OdcRepo,
+    out_dir_utf8: *const c_char,
+    name_utf8: *const c_char,
+    label_utf8: *const c_char,
+    base_or_null: *const c_char,
+    key_pem: *const c_char,
+    signer_or_null: *const c_char,
+    notes_or_null: *const c_char,
+    out_json: *mut *mut c_char,
+    error_message: *mut *mut c_char,
+) -> i32 {
+    clear_error(out_json);
+    guarded(error_message, -1, || {
+        let repo = unsafe { repo_ref(repo) }?;
+        let out_dir = unsafe { text_arg(out_dir_utf8, "out_dir") }?;
+        let name = unsafe { text_arg(name_utf8, "name") }?;
+        let label = unsafe { text_arg(label_utf8, "label") }?;
+        let base = unsafe { optional_text_arg(base_or_null, "base") }?;
+        let key_pem_arg = unsafe { text_arg(key_pem, "key_pem") }?;
+        let signer = unsafe { optional_text_arg(signer_or_null, "signer") }?;
+        let notes = unsafe { optional_text_arg(notes_or_null, "notes") }?;
+        let options = PublishOptions {
+            name,
+            label,
+            base,
+            key_pem: key_pem_arg,
+            signer,
+            notes,
+            force: false,
+        };
+        let report =
+            release::publish(&repo.repo, Path::new(&out_dir), &options).map_err(core_error)?;
+        let artifacts: Vec<JsonValue> = report
+            .artifacts
+            .iter()
+            .map(|artifact| {
+                json!({
+                    "kind": artifact.kind,
+                    "path": artifact.path,
+                    "size": artifact.size,
+                    "blake3": artifact.blake3,
+                })
+            })
+            .collect();
+        let payload = json!({
+            "out_dir": report.out_dir.display().to_string(),
+            "manifest": report.manifest_path.display().to_string(),
+            "head": report.head,
+            "base": report.base,
+            "artifacts": artifacts,
+            "publisher": { "public_key": report.public_key },
+        });
+        store_json(out_json, &payload)?;
+        Ok(0)
+    })
+}
+
+/// Verify a release directory.
+///
+/// Cryptographic failures are business results: the call returns 0 and out_json
+/// holds valid:false plus error_code and error.
+///
+/// # Safety
+///
+/// String arguments must be NUL-terminated UTF-8; out_json and error_message
+/// must be NULL or writable.
+#[no_mangle]
+pub unsafe extern "C" fn odc_verify_release(
+    dir_utf8: *const c_char,
+    expected_pub_hex_or_null: *const c_char,
+    out_json: *mut *mut c_char,
+    error_message: *mut *mut c_char,
+) -> i32 {
+    clear_error(out_json);
+    guarded(error_message, -1, || {
+        let dir = unsafe { text_arg(dir_utf8, "dir") }?;
+        let expected_hex =
+            unsafe { optional_text_arg(expected_pub_hex_or_null, "expected_public_key_hex") }?;
+        let expected = match expected_hex {
+            Some(hex) => Some(
+                signing::hex_bytes::<32>(hex.trim(), "expected_public_key_hex")
+                    .map_err(|error| error.to_string())?,
+            ),
+            None => None,
+        };
+        let payload = match release::verify_release(Path::new(&dir), expected.as_ref()) {
+            Ok(report) => {
+                let artifacts: Vec<JsonValue> = report
+                    .artifacts
+                    .iter()
+                    .map(|artifact| {
+                        json!({
+                            "kind": artifact.kind,
+                            "path": artifact.path,
+                            "size": artifact.size,
+                            "blake3": artifact.blake3,
+                        })
+                    })
+                    .collect();
+                json!({
+                    "valid": true,
+                    "dir": report.dir.display().to_string(),
+                    "name": report.name,
+                    "label": report.label,
+                    "head": report.head,
+                    "base": report.base,
+                    "created_at": report.created_at,
+                    "publisher": {
+                        "public_key": report.publisher_key,
+                        "name": report.publisher_name,
+                    },
+                    "artifacts": artifacts,
+                })
+            }
+            Err(error) => json!({
+                "valid": false,
+                "error_code": error.code(),
+                "error": error.to_string(),
+            }),
+        };
+        store_json(out_json, &payload)?;
+        Ok(0)
+    })
+}
+/// Verify a signed patch and apply it.
+///
+/// Verification runs before any repository mutation; an invalid signature or
+/// an untrusted publisher leaves HEAD and the working set untouched.
+///
+/// # Safety
+///
+/// repo must be a live handle; string arguments must be NUL-terminated UTF-8;
+/// out_json and error_message must be NULL or writable.
+#[no_mangle]
+pub unsafe extern "C" fn odc_patch_apply_signed(
+    repo: *mut OdcRepo,
+    patch_path_utf8: *const c_char,
+    sig_path_utf8: *const c_char,
+    allow_trust_new: i32,
+    out_json: *mut *mut c_char,
+    error_message: *mut *mut c_char,
+) -> i32 {
+    clear_error(out_json);
+    guarded(error_message, -1, || {
+        let repo = unsafe { repo_mut(repo) }?;
+        let patch_path = unsafe { text_arg(patch_path_utf8, "patch_path") }?;
+        let sig_path = unsafe { text_arg(sig_path_utf8, "sig_path") }?;
+        release::verify_patch_signature(
+            &mut repo.repo,
+            Path::new(&patch_path),
+            Path::new(&sig_path),
+            allow_trust_new != 0,
+        )
+        .map_err(core_error)?;
+        let bytes = std::fs::read(&patch_path)
+            .map_err(|error| format!("cannot read {patch_path}: {error}"))?;
+        let outcome = odc_core::patch::apply(&mut repo.repo, &bytes).map_err(core_error)?;
+        let payload = match outcome {
+            odc_core::patch::ApplyOutcome::Applied(outcome) => json!({
+                "applied": true,
+                "merged": false,
+                "target": odc_core::hash::to_hex(&outcome.target),
+                "base_blocks": outcome.base_blocks,
+                "new_blocks": outcome.new_blocks,
+                "index_changes": outcome.index_changes,
+                "bytes": outcome.bytes,
+            }),
+            odc_core::patch::ApplyOutcome::Merged { patch, merge } => json!({
+                "applied": true,
+                "merged": true,
+                "target": odc_core::hash::to_hex(&patch.target),
+                "base_blocks": patch.base_blocks,
+                "new_blocks": patch.new_blocks,
+                "index_changes": patch.index_changes,
+                "bytes": patch.bytes,
+                "conflicts": merge.conflicts.len(),
+            }),
+        };
+        store_json(out_json, &payload)?;
+        Ok(0)
+    })
+}
+
 fn cbor_to_json(value: &CborValue) -> JsonValue {
     match value {
         CborValue::Null => JsonValue::Null,

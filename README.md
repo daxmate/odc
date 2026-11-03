@@ -94,7 +94,7 @@ odc --repo ./demo export --format jsonl -o dump.jsonl
 | `odc verify` | 全量校验块、索引与提交 |
 | `odc patch create A B -o FILE [--json]` | 生成增量包（只含目标新增块与索引增量） |
 | `odc patch verify FILE [--json]` | 校验增量包与本地基线 |
-| `odc patch apply FILE [--json]` | 应用增量包；精确 base 直接前进，后代 HEAD 转三方合并，失败退出码 4 |
+| `odc patch apply FILE [--sig PATH] [--trust-new] [--json]` | 应用增量包；给了 `--sig` 时先验签与信任校验（失败不动仓库），精确 base 直接前进，后代 HEAD 转三方合并，失败退出码 4 |
 | `odc merge <A> <B> [--strategy auto\|ours\|theirs\|union] [--json]` | 三方合并（A 必须是 HEAD）：快进 / 自动合并 / 冲突退出码 5 |
 | `odc conflicts [--json]` | 列出未完成合并的冲突 |
 | `odc resolve <word> --ours\|--theirs\|--union\|--file FILE [--json]` | 记录一个冲突的解决方式 |
@@ -102,6 +102,11 @@ odc --repo ./demo export --format jsonl -o dump.jsonl
 | `odc keygen [--out DIR] [--name NAME] [--force]` | 生成 Ed25519 私钥（0600）与公钥文件（0644） |
 | `odc sign FILE [--key PATH] [--signer NAME] [--out PATH] [--force]` | 生成旁挂签名 `<FILE>.sig` |
 | `odc verify-signature FILE [--sig PATH] [--pub PATH \| --pubkey HEX] [--json]` | 验签；无效退出码 1，用法/IO 错误退出码 2 |
+| `odc publish --out DIR --label LABEL [--name NAME] [--base COMMIT] [--key PATH] [--signer NAME] [--notes TEXT] [--force] [--json]` | 生成签名发布目录（pack + 可选 patch + `release.json`，见 `docs/release.md`） |
+| `odc verify-release DIR [--pub PATH \| --pubkey HEX] [--json]` | 校验清单、工件大小 / BLAKE3 与全部签名；无效退出码 1，用法/IO 错误退出码 2 |
+| `odc trust add --pub PATH \| --pubkey HEX [--name NAME] [--json]` | 把发布者公钥写入仓库信任库（`manual`） |
+| `odc trust list [--json]` | 列出信任库中的发布者 |
+| `odc trust remove PUBLIC_KEY_HEX [--json]` | 从信任库移除发布者 |
 
 全局参数 `--repo DIR` 指定仓库目录（默认当前目录，库文件 `odc.db`）。
 

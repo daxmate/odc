@@ -370,6 +370,9 @@ index_entry = varint(len(word)) | word | content_hash:32B
 | ODC-E033 | 目标文件哈希或大小与签名记录不符（§17） |
 | ODC-E034 | Ed25519 验签失败，或签名公钥与钉选公钥不一致（§17） |
 | ODC-E035 | 私钥格式错误（非 PKCS#8 Ed25519 PEM，§17） |
+| ODC-E036 | 发布者公钥不在信任库中，或签名者名字已被另一把钥匙占用（§17.6） |
+| ODC-E037 | 发布清单 `release.json` 非法或其签名不匹配（§17.6） |
+| ODC-E038 | 发布清单中的工件缺失，或其大小 / BLAKE3 / 内联签名不符（§17.6） |
 
 ## 13. 版本兼容
 
@@ -500,3 +503,63 @@ Ed25519 签名是确定性的：同一私钥与同一目标必然得到同一 `s
 | ODC-E033 | 目标文件哈希或大小与签名记录不符 |
 | ODC-E034 | Ed25519 验签失败，或签名公钥与钉选公钥不一致 |
 | ODC-E035 | 私钥不是合法的 PKCS#8 Ed25519 PEM |
+
+### 17.6 信任库与发布清单（v0.10 P2）
+
+签名本身不携带信任：验签只证明「某把钥匙签了这份字节」。信任由仓库本地的
+发布者信任库（`publishers` 表：公钥 hex、名字、加入时间、来源 `manual` /
+`tofu`）裁决。
+
+* **已信任**：公钥在库中 → 接受。
+* **TOFU**：库为空且调用方显式允许（`--trust-new`）→ 以 `source = tofu`
+  记录后接受；每个仓库只会发生一次。
+* **拒绝**：其余情况一律 `ODC-E036`，必须手动 `odc trust add`。
+* **名字冲突**：同名不同钥匙同样 `ODC-E036`。
+
+发布目录的规范文件是 `release.json`（清单 v1）与其旁挂签名
+`release.json.sig`，另有 `<name>-<label>.odc`（完整 pack）和可选的
+`<name>-<label>.odp`（增量 patch），每个文件各有 `<file>.sig`。清单字段见
+`docs/release.md`；本节只冻结语义：
+
+* `format` 固定为 `odc-release`，`version` 固定为 `1`；
+* `artifacts` 必须恰好包含一个 `pack`，至多一个 `patch`；
+* `path` 只能是发布目录内的纯文件名，不得含路径分隔符；
+* 每个 `artifacts[].signature` 必须由 `publisher.public_key` 签发，且
+  `target.hash` / `target.size` 与同条目的 `blake3` / `size` 一致；
+* 清单按 UTF-8、两空格缩进、末尾换行序列化后**逐字节**签名。
+
+验签流程固定为：解析并校验清单 → 校验 `release.json.sig`（必要时钉选公钥，
+不一致 `ODC-E036`）→ 对每个工件重算大小与 BLAKE3（不符 `ODC-E038`）→ 用
+发布者公钥校验内联签名（不符 `ODC-E038`）→ 未钉选时要求发布者已在信任库中
+（否则 `ODC-E036`）。清单本身非法或签名不匹配一律 `ODC-E037`。
+
+
+### 17.6 信任库与发布清单（v0.10 P2）
+
+签名本身不携带信任：验签只证明「某把钥匙签了这份字节」。信任由仓库本地的
+发布者信任库（`publishers` 表：公钥 hex、名字、加入时间、来源 `manual` /
+`tofu`）裁决。
+
+* **已信任**：公钥在库中 → 接受。
+* **TOFU**：库为空且调用方显式允许（`--trust-new`）→ 以 `source = tofu`
+  记录后接受；每个仓库只会发生一次。
+* **拒绝**：其余情况一律 `ODC-E036`，必须手动 `odc trust add`。
+* **名字冲突**：同名不同钥匙同样 `ODC-E036`。
+
+发布目录的规范文件是 `release.json`（清单 v1）与其旁挂签名
+`release.json.sig`，另有 `<name>-<label>.odc`（完整 pack）和可选的
+`<name>-<label>.odp`（增量 patch），每个文件各有 `<file>.sig`。清单字段见
+`docs/release.md`；本节只冻结语义：
+
+* `format` 固定为 `odc-release`，`version` 固定为 `1`；
+* `artifacts` 必须恰好包含一个 `pack`，至多一个 `patch`；
+* `path` 只能是发布目录内的纯文件名，不得含路径分隔符；
+* 每个 `artifacts[].signature` 必须由 `publisher.public_key` 签发，且
+  `target.hash` / `target.size` 与同条目的 `blake3` / `size` 一致；
+* 清单按 UTF-8、两空格缩进、末尾换行序列化后**逐字节**签名。
+
+验签流程固定为：解析并校验清单 → 校验 `release.json.sig`（必要时钉选公钥，
+不一致 `ODC-E036`）→ 对每个工件重算大小与 BLAKE3（不符 `ODC-E038`）→ 用
+发布者公钥校验内联签名（不符 `ODC-E038`）→ 未钉选时要求发布者已在信任库中
+（否则 `ODC-E036`）。清单本身非法或签名不匹配一律 `ODC-E037`。
+

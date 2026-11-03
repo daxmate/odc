@@ -304,6 +304,76 @@ int32_t odc_copy_pack_to_repo(
 
 
 /*
+ * Ed25519 keypairs, detached signatures, the publisher trust store and signed
+ * release bundles.
+ *
+ * Every function returns 0 on success and -1 on failure, storing a heap
+ * allocated message in error_message. Strings written through out_json /
+ * out_pem / out_public_hex must be released with odc_string_free.
+ *
+ * odc_verify_signature_file and odc_verify_release treat cryptographic
+ * failures as business results: they return 0 and the JSON holds
+ * {"valid": false, "error_code": "ODC-E0xx", "error": "..."}.
+ */
+
+/* Generate a keypair. out_pem receives a PKCS#8 PEM private key, and
+ * out_public_hex the 64 hex character public key. */
+int32_t odc_keypair_generate(char **out_pem, char **out_public_hex,
+                             char **error_message);
+
+/* Sign a file and return the sidecar JSON in out_json. No file is written. */
+int32_t odc_sign_file(const char *path_utf8, const char *key_pem,
+                      const char *signer_or_null, char **out_json,
+                      char **error_message);
+
+/* Verify a file against a sidecar JSON, optionally pinning the key. The JSON
+ * holds {"valid": true, "public_key", "created_at", "signer", "hash",
+ * "size"} or {"valid": false, "error_code", "error"}. */
+int32_t odc_verify_signature_file(const char *path_utf8,
+                                  const char *sig_json,
+                                  const char *expected_pub_hex_or_null,
+                                  char **out_json, char **error_message);
+
+/* List trusted publishers: {"publishers": [{"public_key", "name",
+ * "added_at", "source"}]}. */
+int32_t odc_publishers_json(const OdcRepo *repo, char **out_json,
+                            char **error_message);
+
+/* Trust a publisher key. The JSON holds {"outcome": "added" |
+ * "already_trusted", "publisher": {...}}. A name owned by another key fails
+ * with ODC-E036. */
+int32_t odc_trust_add(OdcRepo *repo, const char *public_key_hex,
+                      const char *name_or_null, char **out_json,
+                      char **error_message);
+
+/* Forget a publisher key: {"public_key", "removed": bool}. */
+int32_t odc_trust_remove(OdcRepo *repo, const char *public_key_hex,
+                         char **out_json, char **error_message);
+
+/* Publish a signed release into out_dir. Existing files are never
+ * overwritten. The JSON holds {"out_dir", "manifest", "head", "base",
+ * "artifacts": [{"kind", "path", "size", "blake3"}],
+ * "publisher": {"public_key"}}. */
+int32_t odc_publish(const OdcRepo *repo, const char *out_dir_utf8,
+                    const char *name_utf8, const char *label_utf8,
+                    const char *base_or_null, const char *key_pem,
+                    const char *signer_or_null, const char *notes_or_null,
+                    char **out_json, char **error_message);
+
+/* Verify a release directory. The JSON mirrors odc_publish plus label,
+ * created_at and publisher name when one was recorded. */
+int32_t odc_verify_release(const char *dir_utf8,
+                           const char *expected_pub_hex_or_null,
+                           char **out_json, char **error_message);
+
+/* Verify a signed patch and apply it. Verification runs before any
+ * repository mutation; allow_trust_new is 0 or 1. */
+int32_t odc_patch_apply_signed(OdcRepo *repo, const char *patch_path_utf8,
+                               const char *sig_path_utf8,
+                               int32_t allow_trust_new, char **out_json,
+                               char **error_message);
+
+/*
  * Release a string returned by this library. Passing NULL is a no-op.
  */
 void odc_string_free(char *s);

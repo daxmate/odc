@@ -21,6 +21,28 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 * Tests: fixed Ed25519 vector in `spec/testvectors/signature_ed25519.json`
   (cross-checked with OpenSSL 3 `pkeyutl`), plus core and CLI integration
   coverage.
+* Core: `publishers` trust store (schema version 3; version 1 and 2
+  databases gain the table on open) with manual and TOFU sources, plus the
+  `release` module that writes and verifies `release.json` manifests.
+* CLI: `odc publish` writes a pack, an optional base..HEAD patch, a manifest
+  and a signature for every file; existing files are refused without
+  `--force`.
+* CLI: `odc verify-release` re-checks the manifest signature and recomputes
+  every artifact size, BLAKE3 digest and inline signature; `--pub` /
+  `--pubkey` pin the publisher, otherwise the trust store decides.
+* CLI: `odc trust add|list|remove` manages the publisher trust store;
+  `odc patch apply --sig` verifies and enforces trust (`--trust-new`)
+  before touching HEAD or the working set. New error codes `ODC-E036` ..
+  `ODC-E038`.
+* FFI: `odc_keypair_generate`, `odc_sign_file`,
+  `odc_verify_signature_file`, `odc_publishers_json`, `odc_trust_add`,
+  `odc_trust_remove`, `odc_publish`, `odc_verify_release` and
+  `odc_patch_apply_signed`, with matching declarations in `odc.h`.
+* Docs: `docs/release.md` describes the release layout, manifest v1, TOFU
+  rules and limits; the spec gains section 17.6 and the new error codes.
+* Tests: core, CLI and FFI coverage for publish / verify-release / trust and
+  for signed patch application, plus an end-to-end publish smoke in
+  `scripts/e2e.sh`.
 
 ## [0.9.0] - 2026-11-03
 

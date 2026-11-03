@@ -262,4 +262,21 @@ merge_verify=$("$ODC" --repo "$MERGE" verify)
 grep -q "verify: OK" <<<"$merge_verify" || { echo "FAIL: merge verify"; exit 1; }
 echo "ok: merge conflict resolved, merge commit verified"
 
+echo "== publish / verify-release / trust =="
+KEYS="$WORK/keys"
+RELEASE="$WORK/release"
+"$ODC" keygen --out "$KEYS" > /dev/null
+PUB_HEX=$(awk 'NR == 1 { print $2 }' "$KEYS/default.pub")
+"$ODC" --repo "$REPO" publish --out "$RELEASE" --name e2e --label 2026.11 \
+  --key "$KEYS/default.key" --signer e2e --json > "$WORK/publish.json"
+grep -q '"head"' "$WORK/publish.json" || { echo "FAIL: publish"; exit 1; }
+"$ODC" --repo "$REPO" verify-release "$RELEASE" --pubkey "$PUB_HEX" --json \
+  > "$WORK/verify-release.json"
+grep -q '"valid": true' "$WORK/verify-release.json" || { echo "FAIL: verify-release"; exit 1; }
+"$ODC" --repo "$REPO" trust add --pub "$KEYS/default.pub" --name e2e > /dev/null
+"$ODC" --repo "$REPO" trust list --json | grep -q "$PUB_HEX" || { echo "FAIL: trust list"; exit 1; }
+"$ODC" --repo "$REPO" verify-release "$RELEASE" --json \
+  | grep -q '"trust": "trusted"' || { echo "FAIL: trust verify"; exit 1; }
+echo "ok: release published, verified and publisher trusted"
+
 echo "e2e: PASS (workdir $WORK)"

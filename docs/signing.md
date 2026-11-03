@@ -89,3 +89,16 @@ must not be treated as authenticated.
   matching public key; there is no key-compromise recovery in v1.
 * Verification reads the whole target into memory; very large artifacts need
   the same care as `odc verify`.
+
+## Trust store and releases
+
+A valid sidecar only proves that some key signed the bytes; it says nothing
+about whether that key should be trusted. v0.10 P2 adds two layers on top:
+
+* odc publish packages a full pack (and optionally a patch) with a manifest
+  and a signature per file.
+* odc trust add/list/remove maintains a per-repository list of accepted
+  publisher keys, seeded by trust-on-first-use when a repository has none.
+
+See [docs/release.md](release.md) for the manifest schema, the TOFU rules and
+the verification flow. The sidecar layout itself is unchanged by that work.
