@@ -44,6 +44,11 @@ struct ODictDesktopApp: App {
             EditorWindowView(store: store)
         }
         .defaultSize(width: 1100, height: 720)
+
+        Settings {
+            PublisherSettingsView()
+                .frame(minWidth: 520, minHeight: 460)
+        }
     }
 }
 
