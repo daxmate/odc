@@ -51,6 +51,45 @@ public struct DictionaryRootView: View {
             } message: {
                 Text(store.errorMessage ?? "")
             }
+            .alert(
+                "首次信任发布者",
+                isPresented: Binding(
+                    get: { store.pendingTrustRequest != nil },
+                    set: { presented in
+                        if !presented {
+                            store.cancelPendingTrust()
+                        }
+                    }
+                ),
+                presenting: store.pendingTrustRequest
+            ) { _ in
+                Button("信任并继续") {
+                    store.confirmPendingTrust()
+                }
+                Button("取消", role: .cancel) {
+                    store.cancelPendingTrust()
+                }
+            } message: { request in
+                Text(request.message)
+            }
+            .alert(
+                "未签名更新",
+                isPresented: Binding(
+                    get: { store.pendingUnsignedUpdate != nil },
+                    set: { presented in
+                        if !presented {
+                            store.dismissPendingUnsignedUpdate()
+                        }
+                    }
+                ),
+                presenting: store.pendingUnsignedUpdate
+            ) { _ in
+                Button("知道了", role: .cancel) {
+                    store.dismissPendingUnsignedUpdate()
+                }
+            } message: { update in
+                Text(update.message)
+            }
             .overlay(alignment: .bottom) {
                 if let progress = store.importProgress {
                     ImportProgressView(progress: progress)

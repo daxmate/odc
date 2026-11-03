@@ -26,6 +26,9 @@ public struct LibraryItem: Codable, Identifiable, Sendable, Equatable {
     public var sourceIsDirectory: Bool?
     /// When the copy was registered.
     public var importedAt: Date
+    /// Signature facts recorded when the copy was imported; nil for entries
+    /// created before signatures existed.
+    public var signature: LibrarySignatureInfo?
 
     public init(
         id: UUID = UUID(),
@@ -35,7 +38,8 @@ public struct LibraryItem: Codable, Identifiable, Sendable, Equatable {
         sourceBytes: Int64,
         sourceHash: String? = nil,
         sourceIsDirectory: Bool? = nil,
-        importedAt: Date = Date()
+        importedAt: Date = Date(),
+        signature: LibrarySignatureInfo? = nil
     ) {
         self.id = id
         self.displayName = displayName
@@ -45,6 +49,7 @@ public struct LibraryItem: Codable, Identifiable, Sendable, Equatable {
         self.sourceHash = sourceHash
         self.sourceIsDirectory = sourceIsDirectory
         self.importedAt = importedAt
+        self.signature = signature
     }
 }
 

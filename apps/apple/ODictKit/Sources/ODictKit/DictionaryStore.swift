@@ -71,6 +71,10 @@ public final class DictionaryStore {
     public private(set) var importProgress: MDXImportProgress?
     /// Summary shown once an MDX conversion finished, until dismissed.
     public private(set) var importSummary: String?
+    /// First-use trust prompt for a signed import or update, if one is open.
+    public private(set) var pendingTrustRequest: PendingTrustRequest?
+    /// Unsigned patch the reader asked to apply; shown until acknowledged.
+    public private(set) var pendingUnsignedUpdate: PendingUnsignedUpdate?
     /// Dictionaries copied into the app's storage.
     public private(set) var library = LibraryState()
     /// Bookmarks and recent entries, mirrored from `reader.json`.
@@ -106,6 +110,9 @@ public final class DictionaryStore {
     @ObservationIgnored private var importTask: Task<Void, Never>?
     @ObservationIgnored private var conversionTask: Task<Void, Never>?
     @ObservationIgnored private var restoreTask: Task<Void, Never>?
+    @ObservationIgnored private var updateTask: Task<Void, Never>?
+    /// Resumes the import or update flow once the trust alert is answered.
+    @ObservationIgnored private var trustContinuation: CheckedContinuation<Bool, Never>?
     @ObservationIgnored private var summaryTask: Task<Void, Never>?
     /// Stamped on every summary change so a stale timer cannot clear a newer one.
     @ObservationIgnored private var summaryGeneration = 0
@@ -434,6 +441,73 @@ public final class DictionaryStore {
                 DocumentLibrary.removeCopy(at: copy)
                 return
             }
+
+            // A signature next to the picked file gates the import: valid and
+            // trusted goes through, a first-use key asks once, everything else
+            // is refused before the copy is registered. The picker's security
+            // scope is needed again to read the sidecar.
+            let scopedSignature = url.startAccessingSecurityScopedResource()
+            defer {
+                if scopedSignature {
+                    url.stopAccessingSecurityScopedResource()
+                }
+            }
+            let signatureURL = ReleaseSidecar.signatureURL(for: url)
+            var signatureInfo: LibrarySignatureInfo?
+            var showsUnsignedNotice = false
+            if ReleaseSidecar.hasSignature(for: url) {
+                let verification = try ODCPublishing.verifySignatureFile(
+                    path: url.path,
+                    sigPath: signatureURL.path
+                )
+                let publishers = try ODCPublishing.publishers(repoPath: copy.path)
+                switch TrustDecision.evaluate(verification: verification, publishers: publishers) {
+                case .trusted:
+                    signatureInfo = Self.signatureInfo(for: verification)
+                case .firstTrust:
+                    let key = verification.publicKeyHex ?? ""
+                    let approved = await requestTrust(
+                        PendingTrustRequest(
+                            signerName: verification.displayName,
+                            fingerprint: verification.fingerprint ?? "（无法计算）",
+                            publicKeyHex: key,
+                            action: .importCopy(
+                                repoPath: copy.path,
+                                copyURL: copy,
+                                sourceName: descriptor.name,
+                                sourceBytes: descriptor.bytes,
+                                sourceHash: descriptor.contentHash,
+                                sourceIsDirectory: isDirectory
+                            )
+                        )
+                    )
+                    guard approved else {
+                        DocumentLibrary.removeCopy(at: copy)
+                        return
+                    }
+                    _ = try ODCPublishing.trustAdd(
+                        repoPath: copy.path,
+                        publicKeyHex: key,
+                        name: verification.signer
+                    )
+                    signatureInfo = Self.signatureInfo(for: verification)
+                case .unknownPublisher(let key):
+                    DocumentLibrary.removeCopy(at: copy)
+                    throw OdcError.verifyFailed(
+                        "未知发布者 \(Self.fingerprint(for: key))；请先在「信任管理」中添加这个公钥。"
+                    )
+                case .invalidSignature(let text):
+                    DocumentLibrary.removeCopy(at: copy)
+                    throw OdcError.verifyFailed(text)
+                case .missingPublicKey:
+                    DocumentLibrary.removeCopy(at: copy)
+                    throw OdcError.verifyFailed("签名缺少公钥，无法判断发布者。")
+                }
+            } else {
+                signatureInfo = LibrarySignatureInfo(signed: false)
+                showsUnsignedNotice = true
+            }
+
             let opened: OdcDictionary
             do {
                 opened = try OdcDictionary(url: copy)
@@ -453,7 +527,8 @@ public final class DictionaryStore {
                 sourceName: descriptor.name,
                 sourceBytes: descriptor.bytes,
                 sourceHash: descriptor.contentHash,
-                sourceIsDirectory: isDirectory
+                sourceIsDirectory: isDirectory,
+                signature: signatureInfo
             )
             do {
                 // Register only once the copy opens, and drop the copy again if
@@ -466,11 +541,188 @@ public final class DictionaryStore {
             }
             adopt(opened, as: item, at: copy)
             persistOpenState(in: directory)
+            if showsUnsignedNotice {
+                announceUnsignedImport()
+            }
         } catch is CancellationError {
             return
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    // MARK: - Signatures and updates
+
+    /// Accept the first-use publisher and resume the waiting flow.
+    public func confirmPendingTrust() {
+        resumeTrustPrompt(true)
+    }
+
+    /// Refuse the first-use publisher; the waiting flow drops its copy.
+    public func cancelPendingTrust() {
+        resumeTrustPrompt(false)
+    }
+
+    /// Dismiss the explanation shown for an unsigned patch.
+    public func dismissPendingUnsignedUpdate() {
+        pendingUnsignedUpdate = nil
+    }
+
+    /// Apply the patch at `patchURL` to the library item `itemID`.
+    ///
+    /// The patch is signature-gated exactly like an import: valid and trusted
+    /// applies, a first-use key asks once, an unknown key is refused. A patch
+    /// without a sidecar is refused too: the FFI only exposes the signed apply
+    /// entry point, so the repository is never touched with unverified bytes.
+    public func applyUpdate(itemID: UUID, patchURL: URL) {
+        updateTask?.cancel()
+        updateTask = Task { [weak self] in
+            await self?.performUpdate(itemID: itemID, patchURL: patchURL)
+        }
+    }
+
+    /// Repository path backing a library item, for the trust sheet.
+    public func repoPath(for itemID: UUID) -> String? {
+        guard let item = library.item(id: itemID),
+              let directory = try? libraryDirectoryURL() else {
+            return nil
+        }
+        return LibraryStore.copyDirectory(for: item, in: directory).path
+    }
+
+    private func performUpdate(itemID: UUID, patchURL: URL) async {
+        errorMessage = nil
+        do {
+            let directory = try libraryDirectoryURL()
+            guard let item = library.item(id: itemID) else {
+                throw OdcError.patchFailed("这本词典不在库中。")
+            }
+            let repoPath = LibraryStore.copyDirectory(for: item, in: directory).path
+            let scopedPatch = patchURL.startAccessingSecurityScopedResource()
+            defer {
+                if scopedPatch {
+                    patchURL.stopAccessingSecurityScopedResource()
+                }
+            }
+            let sigURL = ReleaseSidecar.signatureURL(for: patchURL)
+            guard ReleaseSidecar.hasSignature(for: patchURL) else {
+                pendingUnsignedUpdate = PendingUnsignedUpdate(itemID: itemID, patchURL: patchURL)
+                return
+            }
+            let verification = try ODCPublishing.verifySignatureFile(
+                path: patchURL.path,
+                sigPath: sigURL.path
+            )
+            let publishers = try ODCPublishing.publishers(repoPath: repoPath)
+            switch TrustDecision.evaluate(verification: verification, publishers: publishers) {
+            case .trusted:
+                break
+            case .firstTrust:
+                let key = verification.publicKeyHex ?? ""
+                let approved = await requestTrust(
+                    PendingTrustRequest(
+                        signerName: verification.displayName,
+                        fingerprint: verification.fingerprint ?? "（无法计算）",
+                        publicKeyHex: key,
+                        action: .applyPatch(
+                            itemID: itemID,
+                            patchURL: patchURL,
+                            repoPath: repoPath,
+                            sigPath: sigURL.path
+                        )
+                    )
+                )
+                guard approved else { return }
+                _ = try ODCPublishing.trustAdd(
+                    repoPath: repoPath,
+                    publicKeyHex: key,
+                    name: verification.signer
+                )
+            case .unknownPublisher(let key):
+                throw OdcError.verifyFailed(
+                    "未知发布者 \(Self.fingerprint(for: key))；请先在「信任管理」中添加这个公钥。"
+                )
+            case .invalidSignature(let text):
+                throw OdcError.verifyFailed(text)
+            case .missingPublicKey:
+                throw OdcError.verifyFailed("签名缺少公钥，无法判断发布者。")
+            }
+            try await applyVerifiedPatch(
+                itemID: itemID,
+                patchPath: patchURL.path,
+                sigPath: sigURL.path,
+                repoPath: repoPath,
+                verification: verification
+            )
+        } catch {
+            present(error: error)
+        }
+    }
+
+    private func applyVerifiedPatch(
+        itemID: UUID,
+        patchPath: String,
+        sigPath: String,
+        repoPath: String,
+        verification: SignatureVerification
+    ) async throws {
+        let report = try await Task.detached(priority: .userInitiated) {
+            try ODCPublishing.applySignedPatch(
+                repoPath: repoPath,
+                patchPath: patchPath,
+                sigPath: sigPath
+            )
+        }.value
+        if let index = library.items.firstIndex(where: { $0.id == itemID }) {
+            library.items[index].signature = Self.signatureInfo(for: verification)
+            if let directory = try? libraryDirectoryURL() {
+                saveLibrary(in: directory)
+            }
+        }
+        presentImportSummary(report.summaryText)
+        if isOpen(itemID) {
+            refreshAfterEditing()
+        }
+    }
+
+    /// Wait for the reader to answer the first-use trust alert.
+    private func requestTrust(_ request: PendingTrustRequest) async -> Bool {
+        pendingTrustRequest = request
+        return await withCheckedContinuation { continuation in
+            trustContinuation = continuation
+        }
+    }
+
+    private func resumeTrustPrompt(_ approved: Bool) {
+        guard let continuation = trustContinuation else { return }
+        trustContinuation = nil
+        pendingTrustRequest = nil
+        continuation.resume(returning: approved)
+    }
+
+    private static func signatureInfo(for verification: SignatureVerification) -> LibrarySignatureInfo {
+        LibrarySignatureInfo(
+            signed: true,
+            publisherName: verification.signer,
+            publicKeyHex: verification.publicKeyHex,
+            verifiedAt: Date()
+        )
+    }
+
+    private static func fingerprint(for publicKeyHex: String) -> String {
+        let normalised = PublisherIdentity.normalizedPublicKeyHex(publicKeyHex)
+        guard PublisherIdentity.isValidPublicKeyHex(normalised) else { return publicKeyHex }
+        return PublisherIdentity(name: "", publicKeyHex: normalised).fingerprint
+    }
+
+    private static let unsignedNoticeKey = "ODCUnsignedImportNoticeShown"
+
+    /// Explain once, on the first unsigned import, that no publisher could be verified.
+    private func announceUnsignedImport() {
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: Self.unsignedNoticeKey) else { return }
+        defaults.set(true, forKey: Self.unsignedNoticeKey)
+        presentImportSummary("这是一本未签名的词典：导入成功，但无法验证发布者。")
     }
 
     // MARK: - Importing MDX

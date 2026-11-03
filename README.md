@@ -125,6 +125,27 @@ odc merge --continue --json     # 写入 parent2 = 对方的合并提交
 自动合并按词条比较 `content_hash`：一方改动直接取该方；双方都改且字段不重叠时按
 字段合并（例如一方改音标、一方改释义），否则记为冲突。详见 `docs/merge.md`。
 
+## 签名与发布
+
+发布方（一次性密钥 + 每次发布签名）：
+
+```sh
+odc keygen --name release            # 私钥 ~/.config/odc/keys/release.key (0600)
+odc sign dict.odc --key ~/.config/odc/keys/release.key --signer alice
+odc publish -o release/ --key ~/.config/odc/keys/release.key --signer alice
+```
+
+接收方：
+
+```sh
+odc trust add --pub release.pub --name alice     # 记住发布者
+odc verify-signature dict.odc --pubkey <HEX>     # 单独验签
+odc patch apply update.odp --sig update.odp.sig  # 验签 + 信任校验后再应用
+odc verify-release release/ --pubkey <HEX>       # 校验整个发布目录
+```
+
+Apple 客户端：导入带 `.sig` 的 `.odc` 时会先验签，首次信任需用户确认，未知发布者会被拒绝；库条目上的「应用更新…」用于应用带签名的 `.odp` 增量包，完成后刷新词典与编辑器。布局、清单与信任规则见 `docs/release.md`。
+
 ## 仓库结构
 
 ```

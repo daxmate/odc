@@ -1,10 +1,13 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Sheet listing every imported dictionary, with the explicit cleanup command.
 public struct LibraryListView: View {
     private let store: DictionaryStore
     @Environment(\.dismiss) private var dismiss
     @State private var pendingRemoval: LibraryItem?
+    @State private var patchTarget: LibraryItem?
+    @State private var trustTarget: LibraryItem?
     @State private var isConfirmingCleanup = false
     @State private var cleanupMessage: String?
 
@@ -74,6 +77,33 @@ public struct LibraryListView: View {
             Button("好", role: .cancel) { cleanupMessage = nil }
         } message: {
             Text(cleanupMessage ?? "")
+        }
+        .sheet(item: $trustTarget) { item in
+            if let repoPath = store.repoPath(for: item.id) {
+                TrustListView(repoPath: repoPath)
+            }
+        }
+        .fileImporter(
+            isPresented: Binding(
+                get: { patchTarget != nil },
+                set: { presented in
+                    if !presented { patchTarget = nil }
+                }
+            ),
+            allowedContentTypes: [UTType(filenameExtension: "odp") ?? .data],
+            allowsMultipleSelection: false
+        ) { result in
+            let item = patchTarget
+            patchTarget = nil
+            guard let item else { return }
+            switch result {
+            case .success(let urls):
+                if let url = urls.first {
+                    store.applyUpdate(itemID: item.id, patchURL: url)
+                }
+            case .failure(let error):
+                store.present(error: error)
+            }
         }
     }
 
@@ -149,6 +179,11 @@ public struct LibraryListView: View {
                 Text(detail(for: item))
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if let signature = item.signature {
+                    Text(signature.statusText)
+                        .font(.caption2)
+                        .foregroundStyle(signature.signed ? Color.secondary : Color.orange)
+                }
             }
             Spacer()
             Button(store.isActive(item.id) ? "当前" : (isOpen ? "切换" : "打开")) {
@@ -178,6 +213,24 @@ public struct LibraryListView: View {
                 .buttonStyle(.borderless)
                 .accessibilityLabel("把 \(item.displayName) 转为可编辑副本")
                 .help("转为可编辑副本")
+            }
+            Button {
+                patchTarget = item
+            } label: {
+                Image(systemName: "arrow.down.doc")
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("应用更新 \(item.displayName)")
+            .help("应用更新…")
+            if store.repoPath(for: item.id) != nil {
+                Button {
+                    trustTarget = item
+                } label: {
+                    Image(systemName: "checkmark.shield")
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("信任管理 \(item.displayName)")
+                .help("信任管理…")
             }
             Button(role: .destructive) {
                 pendingRemoval = item

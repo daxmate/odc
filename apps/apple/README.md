@@ -89,6 +89,31 @@ sheet ("未能迁入词典库") with the reason; the failure is logged under
 `com.daxmate.odict` `library`. The original file is only read, never moved or
 deleted.
 
+## Signed imports and incremental updates (0.10.0)
+
+**Imports.** When a picked `.odc` has a `.odc.sig` next to it, the copy is
+verified before anything is registered:
+
+* valid signature + trusted key → the import continues and the row shows
+  "已签名 · 发布者名称";
+* valid signature + empty trust store → one "首次信任发布者" alert (signer,
+  fingerprint, public key); "信任并继续" adds the key with source `manual` and
+  resumes the import, "取消" deletes the copy and imports nothing;
+* valid signature + unknown key in a non-empty store → refused ("未知发布者");
+  the row's "信任管理…" opens the repository's trust sheet;
+* invalid signature or missing key → refused with the `ODC-E0xx` code;
+* no `.sig` → the import is allowed and the row is marked "未签名", with a
+  one-time explanation.
+
+**Updates.** "应用更新…" on a library row picks a `.odp`, verifies its
+`.odp.sig`, applies it through `odc_patch_apply_signed` and reports the
+applied / merged / conflict counts. Conflicts stay in the repository for the
+existing conflict workflow and are never resolved automatically. The open
+editor and entry list refresh after a successful apply. A patch without a
+sidecar is refused: the FFI only exposes the signed apply entry point.
+
+Version 0.10.0 (build 12).
+
 ## Known limitations (v0)
 
 * **iOS stays read-only.** Editing and MDX import are macOS-only, and sync is
@@ -185,8 +210,9 @@ Publishing is desktop-only: the iOS reader never signs anything.
 
 Limits:
 
-* There is no verify-release screen in the app yet (P4); use
-  `odc verify-release` or the CLI for now.
+* There is no verify-release screen in the app yet; use
+  `odc verify-release` from the CLI for now. Signed imports and "应用更新…"
+  cover the reader-facing flows.
 * The publish sheet always signs with the stored keychain identity; signer
   names are not prompted, so manifests carry no signer string.
 * Keychain items are per-app and per-user; moving to another Mac means

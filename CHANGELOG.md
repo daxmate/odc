@@ -6,6 +6,10 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ## [Unreleased]
 
+_暂无。_
+
+## [0.10.0] - 2026-11-03
+
 ### Added
 
 * Core: `signing` module with Ed25519 detached signatures (sidecar format v1).
@@ -47,6 +51,16 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   base..HEAD patch, remembers the last published head per library and shows a
   trust sheet (list / add / remove) for the current repository. The desktop
   app gains a Settings scene for the identity; the iOS reader stays read-only.
+* Apple: signature-gated imports. A `.odc` pack with a `.sig` sidecar is
+  verified before it is registered; a first-use key asks once, an unknown key
+  is refused, and unsigned packs are marked "未签名" in the library.
+* Apple: "应用更新…" on library rows verifies and applies a signed `.odp`
+  patch through `odc_patch_apply_signed`, reports applied / merged / conflict
+  counts and refreshes the open editor. Unsigned patches are refused because
+  the FFI only exposes the signed entry point.
+* Apple: FFI wrappers `verifySignatureFile`, `applySignedPatch` and `signFile`,
+  with decoding for signature reports and patch reports.
+* Apple app bundles: version 0.10.0 (build 12).
 
 ## [0.9.0] - 2026-11-03
 
