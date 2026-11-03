@@ -8,7 +8,8 @@ use odc_core::html::{HtmlImportSummary, HtmlMode, HtmlOptions};
 use odc_core::link::LinkResolution;
 use odc_core::merge::{self, Choice, MergeKind, MergeOutcome, Strategy};
 use odc_core::patch;
-use odc_core::repo::Repo;
+use odc_core::release::{self, PublishOptions};
+use odc_core::repo::{Repo, TRUST_SOURCE_MANUAL};
 use odc_core::signing;
 use serde_json::json;
 use std::io::Write;
@@ -258,10 +259,92 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Publish a signed release bundle.
+    Publish {
+        /// Output directory for the release files.
+        #[arg(short, long, value_name = "DIR")]
+        out: PathBuf,
+        /// Dictionary name (default: the repository directory name).
+        #[arg(long, value_name = "NAME")]
+        name: Option<String>,
+        /// Release label used in file names, e.g. 2026.11.
+        #[arg(long, value_name = "LABEL")]
+        label: String,
+        /// Also publish an incremental patch from this revision.
+        #[arg(long, value_name = "COMMIT")]
+        base: Option<String>,
+        /// Private key (default `<key dir>/default.key`).
+        #[arg(long, value_name = "PATH")]
+        key: Option<PathBuf>,
+        /// Signer name recorded in the sidecars.
+        #[arg(long, value_name = "NAME")]
+        signer: Option<String>,
+        /// Free-form note stored in the manifest.
+        #[arg(long, value_name = "TEXT")]
+        notes: Option<String>,
+        /// Overwrite existing release files.
+        #[arg(long)]
+        force: bool,
+        /// Print a JSON report.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Verify a release directory.
+    VerifyRelease {
+        /// Release directory containing release.json.
+        dir: PathBuf,
+        /// Public key file to pin the publisher.
+        #[arg(long = "pub", value_name = "PATH")]
+        pub_file: Option<PathBuf>,
+        /// Public key as 64 hex characters to pin the publisher.
+        #[arg(long, value_name = "HEX")]
+        pubkey: Option<String>,
+        /// Print a JSON report.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Manage the publisher trust store.
+    Trust {
+        #[command(subcommand)]
+        command: TrustCommand,
+    },
     /// Patch creation and application (specified, implemented in M3).
     Patch {
         #[command(subcommand)]
         command: PatchCommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum TrustCommand {
+    /// Trust a publisher key.
+    Add {
+        /// Public key file written by keygen.
+        #[arg(long = "pub", value_name = "PATH")]
+        pub_file: Option<PathBuf>,
+        /// Public key as 64 hex characters.
+        #[arg(long, value_name = "HEX")]
+        pubkey: Option<String>,
+        /// Display name for the publisher.
+        #[arg(long, value_name = "NAME")]
+        name: Option<String>,
+        /// Print a JSON report.
+        #[arg(long)]
+        json: bool,
+    },
+    /// List trusted publishers.
+    List {
+        /// Print a JSON report.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Forget a publisher key.
+    Remove {
+        /// Public key as 64 hex characters.
+        public_key: String,
+        /// Print a JSON report.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -284,6 +367,12 @@ enum PatchCommand {
     Apply {
         /// Patch file to apply.
         file: PathBuf,
+        /// Verify this sidecar signature before applying anything.
+        #[arg(long, value_name = "PATH")]
+        sig: Option<PathBuf>,
+        /// Trust an unknown publisher on first use (empty trust store only).
+        #[arg(long)]
+        trust_new: bool,
         /// Print a JSON report.
         #[arg(long)]
         json: bool,
@@ -713,6 +802,43 @@ fn run() -> odc_core::Result<ExitCode> {
             pubkey.as_deref(),
             json,
         ),
+        Command::Publish {
+            out,
+            name,
+            label,
+            base,
+            key,
+            signer,
+            notes,
+            force,
+            json,
+        } => run_publish(
+            &cli.repo,
+            &out,
+            PublishArgs {
+                name,
+                label,
+                base,
+                key,
+                signer,
+                notes,
+                force,
+                json,
+            },
+        ),
+        Command::VerifyRelease {
+            dir,
+            pub_file,
+            pubkey,
+            json,
+        } => run_verify_release(
+            &cli.repo,
+            &dir,
+            pub_file.as_deref(),
+            pubkey.as_deref(),
+            json,
+        ),
+        Command::Trust { command } => run_trust(&cli.repo, command),
         Command::Patch { command } => match run_patch(&cli.repo, command) {
             Ok(code) => Ok(code),
             Err(error) => {
@@ -765,9 +891,17 @@ fn run_patch(repo_dir: &std::path::Path, command: PatchCommand) -> odc_core::Res
             }
             Ok(ExitCode::SUCCESS)
         }
-        PatchCommand::Apply { file, json } => {
+        PatchCommand::Apply {
+            file,
+            sig,
+            trust_new,
+            json,
+        } => {
             let mut repo = Repo::open(repo_dir)?;
             let bytes = std::fs::read(&file)?;
+            if let Some(signature_path) = &sig {
+                release::verify_patch_signature(&mut repo, &file, signature_path, trust_new)?;
+            }
             let outcome = patch::apply(&mut repo, &bytes)?;
             match outcome {
                 patch::ApplyOutcome::Applied(outcome) => {
@@ -1809,6 +1943,116 @@ fn key_dir() -> odc_core::Result<PathBuf> {
     Ok(PathBuf::from(home).join(".config").join("odc").join("keys"))
 }
 
+struct PublishArgs {
+    name: Option<String>,
+    label: String,
+    base: Option<String>,
+    key: Option<PathBuf>,
+    signer: Option<String>,
+    notes: Option<String>,
+    force: bool,
+    json: bool,
+}
+
+fn default_release_name(repo_dir: &std::path::Path) -> String {
+    if repo_dir.is_dir() {
+        return repo_dir
+            .file_name()
+            .and_then(std::ffi::OsStr::to_str)
+            .map_or_else(|| "dictionary".to_string(), str::to_string);
+    }
+    repo_dir
+        .file_stem()
+        .and_then(std::ffi::OsStr::to_str)
+        .map_or_else(|| "dictionary".to_string(), str::to_string)
+}
+
+fn pinned_key(
+    pub_file: Option<&std::path::Path>,
+    pubkey: Option<&str>,
+) -> std::result::Result<Option<[u8; 32]>, String> {
+    match (pub_file, pubkey) {
+        (Some(_), Some(_)) => Err("--pub and --pubkey are mutually exclusive".to_string()),
+        (None, None) => Ok(None),
+        (Some(path), None) => {
+            let text = std::fs::read_to_string(path)
+                .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+            let key = signing::parse_public_key_file(&text).map_err(|error| error.to_string())?;
+            Ok(Some(key))
+        }
+        (None, Some(hex)) => {
+            let key = signing::hex_bytes::<32>(hex.trim(), "public_key")
+                .map_err(|error| error.to_string())?;
+            Ok(Some(key))
+        }
+    }
+}
+
+fn run_publish(
+    repo_dir: &std::path::Path,
+    out: &std::path::Path,
+    args: PublishArgs,
+) -> odc_core::Result<ExitCode> {
+    let repo = Repo::open(repo_dir)?;
+    let name = args.name.unwrap_or_else(|| default_release_name(repo_dir));
+    let key_path = match args.key {
+        Some(path) => path,
+        None => key_dir()?.join("default.key"),
+    };
+    let key_pem = std::fs::read_to_string(&key_path)?;
+    let options = PublishOptions {
+        name,
+        label: args.label,
+        base: args.base,
+        key_pem,
+        signer: args.signer,
+        notes: args.notes,
+        force: args.force,
+    };
+    let report = release::publish(&repo, out, &options)?;
+    if args.json {
+        let artifacts: Vec<serde_json::Value> = report
+            .artifacts
+            .iter()
+            .map(|artifact| {
+                json!({
+                    "kind": artifact.kind,
+                    "path": artifact.path,
+                    "size": artifact.size,
+                    "blake3": artifact.blake3,
+                })
+            })
+            .collect();
+        let payload = json!({
+            "out_dir": report.out_dir.display().to_string(),
+            "manifest": report.manifest_path.display().to_string(),
+            "head": report.head,
+            "base": report.base,
+            "artifacts": artifacts,
+            "publisher": { "public_key": report.public_key },
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&payload).unwrap_or_default()
+        );
+    } else {
+        println!(
+            "published {} -> {} (manifest {})",
+            report.head,
+            report.out_dir.display(),
+            report.manifest_path.display()
+        );
+        for artifact in &report.artifacts {
+            println!(
+                "  {} {} ({} bytes, blake3 {})",
+                artifact.kind, artifact.path, artifact.size, artifact.blake3
+            );
+        }
+        println!("publisher: {}", report.public_key);
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
 fn run_keygen(
     out: Option<PathBuf>,
     name: Option<String>,
@@ -1989,6 +2233,198 @@ fn run_verify_signature(
             Ok(ExitCode::SUCCESS)
         }
         Err(error) => Ok(report_invalid(&error, json)),
+    }
+}
+
+fn publisher_json(publisher: &odc_core::repo::Publisher) -> serde_json::Value {
+    json!({
+        "public_key": publisher.public_key,
+        "name": publisher.name,
+        "added_at": publisher.added_at,
+        "source": publisher.source,
+    })
+}
+
+fn run_verify_release(
+    repo_dir: &std::path::Path,
+    dir: &std::path::Path,
+    pub_file: Option<&std::path::Path>,
+    pubkey: Option<&str>,
+    json: bool,
+) -> odc_core::Result<ExitCode> {
+    let pinned = match pinned_key(pub_file, pubkey) {
+        Ok(value) => value,
+        Err(message) => {
+            eprintln!("error: {message}");
+            return Ok(ExitCode::from(2));
+        }
+    };
+    let report = match release::verify_release(dir, pinned.as_ref()) {
+        Ok(report) => report,
+        Err(error) => return Ok(report_invalid(&error, json)),
+    };
+    let trust = if pinned.is_some() {
+        "pinned"
+    } else {
+        let repo = Repo::open(repo_dir)?;
+        if let Err(error) = release::require_trusted_publisher(&repo, &report.publisher_key) {
+            return Ok(report_invalid(&error, json));
+        }
+        "trusted"
+    };
+    if json {
+        let artifacts: Vec<serde_json::Value> = report
+            .artifacts
+            .iter()
+            .map(|artifact| {
+                json!({
+                    "kind": artifact.kind,
+                    "path": artifact.path,
+                    "size": artifact.size,
+                    "blake3": artifact.blake3,
+                })
+            })
+            .collect();
+        let payload = json!({
+            "valid": true,
+            "dir": report.dir.display().to_string(),
+            "name": report.name,
+            "label": report.label,
+            "head": report.head,
+            "base": report.base,
+            "created_at": report.created_at,
+            "publisher": {
+                "public_key": report.publisher_key,
+                "name": report.publisher_name,
+            },
+            "trust": trust,
+            "artifacts": artifacts,
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&payload).unwrap_or_default()
+        );
+    } else {
+        println!(
+            "verify-release: OK ({} {}): {} artifacts, publisher {}, trust {trust}",
+            report.name,
+            report.label,
+            report.artifacts.len(),
+            &report.publisher_key[..16]
+        );
+        println!("head: {}", report.head);
+        for artifact in &report.artifacts {
+            println!(
+                "  {} {} ({} bytes, blake3 {})",
+                artifact.kind, artifact.path, artifact.size, artifact.blake3
+            );
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn run_trust(repo_dir: &std::path::Path, command: TrustCommand) -> odc_core::Result<ExitCode> {
+    match command {
+        TrustCommand::Add {
+            pub_file,
+            pubkey,
+            name,
+            json,
+        } => {
+            let key = match pinned_key(pub_file.as_deref(), pubkey.as_deref()) {
+                Ok(Some(key)) => key,
+                Ok(None) => {
+                    eprintln!("error: --pub or --pubkey is required");
+                    return Ok(ExitCode::from(2));
+                }
+                Err(message) => {
+                    eprintln!("error: {message}");
+                    return Ok(ExitCode::from(2));
+                }
+            };
+            let mut repo = Repo::open(repo_dir)?;
+            let hex = signing::hex_encode(&key);
+            let name = name.unwrap_or_default();
+            match repo.trust_publisher(&hex, &name, TRUST_SOURCE_MANUAL)? {
+                odc_core::repo::TrustOutcome::Added(publisher) => {
+                    if json {
+                        let payload = json!({
+                            "outcome": "added",
+                            "publisher": publisher_json(&publisher),
+                        });
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&payload).unwrap_or_default()
+                        );
+                    } else {
+                        println!("trusted {} (source manual)", publisher.public_key);
+                    }
+                }
+                odc_core::repo::TrustOutcome::AlreadyTrusted(publisher) => {
+                    if json {
+                        let payload = json!({
+                            "outcome": "already_trusted",
+                            "publisher": publisher_json(&publisher),
+                        });
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&payload).unwrap_or_default()
+                        );
+                    } else {
+                        println!("already trusted: {}", publisher.public_key);
+                    }
+                }
+                odc_core::repo::TrustOutcome::NameConflict { existing } => {
+                    let error = odc_core::Error::PublisherUntrusted(format!(
+                        "name {:?} is already trusted for {}",
+                        existing.name, existing.public_key
+                    ));
+                    return Ok(report_invalid(&error, json));
+                }
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        TrustCommand::List { json } => {
+            let repo = Repo::open(repo_dir)?;
+            let publishers = repo.publishers()?;
+            if json {
+                let items: Vec<serde_json::Value> = publishers.iter().map(publisher_json).collect();
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json!({ "publishers": items }))
+                        .unwrap_or_default()
+                );
+            } else if publishers.is_empty() {
+                println!("no publishers trusted");
+            } else {
+                for publisher in &publishers {
+                    println!(
+                        "{} {} ({}, added {})",
+                        publisher.public_key, publisher.name, publisher.source, publisher.added_at
+                    );
+                }
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        TrustCommand::Remove { public_key, json } => {
+            let mut repo = Repo::open(repo_dir)?;
+            let removed = repo.remove_publisher(&public_key)?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json!({
+                        "public_key": public_key,
+                        "removed": removed,
+                    }))
+                    .unwrap_or_default()
+                );
+            } else if removed {
+                println!("removed {public_key}");
+            } else {
+                println!("not trusted: {public_key}");
+            }
+            Ok(ExitCode::SUCCESS)
+        }
     }
 }
 
