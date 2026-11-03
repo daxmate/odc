@@ -119,28 +119,42 @@ deleted.
 
 ## Importing MDX (macOS)
 
-ODict Desktop converts a `.mdx` dictionary into a standalone `.odc` file, so
-the CLI is no longer required for the first step.
+ODict Desktop imports a `.mdx` dictionary as an **editable repository
+directory**, so the CLI is no longer required for the first step and the
+editor works on the imported copy right away.
 
 1. `Open Dictionary or MDX…` (⌘O) accepts `.odc` files, repository
    directories and `.mdx` files. The iOS target keeps rejecting `.mdx`.
-2. `DictionaryStore.importMDX(url:)` runs `odc_import_mdx_to_odc` on a
-   background thread and publishes the stage (准备 / 导入中 / 完成). The core
-   converts and packs in a single call, so the UI never invents a percentage.
-3. The output lands next to the source as `<name>.odc`; when that directory
-   is not writable it falls back to `~/Documents`. An existing file is never
-   replaced — the app uses `-1`, `-2`, … instead.
+2. `DictionaryStore.importMDX(url:)` runs
+   `odc_import_mdx_to_repo_with_mdd_progress` on a background thread and
+   publishes the stage (准备 / 导入中 / 完成). The core imports and commits in a
+   single call, so the UI never invents a percentage.
+3. The conversion lands in the library's `Imports` folder as `<name>.odc/`,
+   a directory holding `odc.db`. A directory that already holds files is
+   refused; the app picks `-1`, `-2`, … instead of overwriting one.
 4. Corrupt record blocks are skipped (the core imports a repaired copy) and
    the completion alert reports `已导入 N 条，跳过 M 个损坏块（K 条）` plus
    any scan warning.
-5. The converted document opens automatically through the normal path.
+5. The copy is registered as a directory library item (`sourceIsDirectory`)
+   and opens automatically, so the editor is available immediately.
 
-The same call is available without the GUI:
+Packs remain the export format (`odc pack`). A pack imported earlier keeps its
+read-only behaviour; the library's **转为可编辑副本** button copies it into a
+new directory item and leaves the pack untouched.
 
-```rust
-let report = odc_import_mdx_to_odc(mdx_path, out_odc_path, &mut report_json, &mut error);
+The same calls are available without the GUI:
+
+```c
+int32_t odc_import_mdx_to_repo_with_mdd_progress(
+    const char *mdx_path, const char *repo_dir, const char *mdd_paths_json,
+    odc_import_progress_fn callback, void *context, char **report_json_out,
+    char **error_message);
+int32_t odc_copy_pack_to_repo(
+    const char *pack_path, const char *repo_dir, char **report_json_out,
+    char **error_message);
 ```
 
 `cargo test -p odc-ffi --test ffi import_mdx` covers the clean, corrupt,
-existing-target and missing-source paths; the `imports_a_real_mdx_file` test
+existing-target and missing-source paths; `crates/odc-core/tests/mdx_repo_import.rs`
+covers the editable import and the pack copy. The `imports_a_real_mdx_file` test
 is opt-in through `ODC_MDX_SMOKE=<path to .mdx>` and `-- --ignored`.

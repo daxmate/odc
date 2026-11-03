@@ -350,6 +350,12 @@ public struct MDXImportReport: Decodable, Equatable, Sendable {
     public let resourceBytes: UInt64
     /// Non-fatal problems: unreadable or corrupt MDD volumes.
     public let warnings: [String]
+    /// Directory that received the repository, for directory imports only.
+    public let repoPath: String?
+    /// Commit that holds the imported entries, for directory imports only.
+    public let commit: String?
+    /// Whether the report describes a directory repository.
+    public let isDirectory: Bool?
 
     /// Keys the report uses; the MDD fields stay optional so a report from an
     /// older core still decodes.
@@ -358,6 +364,7 @@ public struct MDXImportReport: Decodable, Equatable, Sendable {
         case corruptBlocks, deduplicated, skippedEmpty, skippedOversized
         case workingSet, scanWarning, header, outputBytes
         case mddFiles, resourceCount, resourceBytes, warnings
+        case repoPath, commit, isDirectory
     }
 
     public init(from decoder: any Decoder) throws {
@@ -379,6 +386,9 @@ public struct MDXImportReport: Decodable, Equatable, Sendable {
         resourceCount = try container.decodeIfPresent(Int.self, forKey: .resourceCount) ?? 0
         resourceBytes = try container.decodeIfPresent(UInt64.self, forKey: .resourceBytes) ?? 0
         warnings = try container.decodeIfPresent([String].self, forKey: .warnings) ?? []
+        repoPath = try container.decodeIfPresent(String.self, forKey: .repoPath)
+        commit = try container.decodeIfPresent(String.self, forKey: .commit)
+        isDirectory = try container.decodeIfPresent(Bool.self, forKey: .isDirectory)
     }
 
     /// One-line, user-facing summary of the conversion.
@@ -440,6 +450,34 @@ public enum MDXImporter {
             fileManager: fileManager
         )
         return try uniqueURL(in: directory, base: base, fileManager: fileManager)
+    }
+
+    /// Destination directory for an editable conversion of `source`.
+    ///
+    /// Mirrors `outputURL`, but the result is a repository directory that the
+    /// core can initialise: it must not exist yet, so a collision takes the
+    /// next `-1`, `-2`, … suffix instead of being reused.
+    public static func repoOutputURL(
+        for source: URL,
+        documents: URL? = nil,
+        fileManager: FileManager = .default
+    ) throws -> URL {
+        let base = source.deletingPathExtension().lastPathComponent
+        guard !base.isEmpty else {
+            throw MDXImportError.unsupportedSource(source.lastPathComponent)
+        }
+        let directory = destinationDirectory(documents: documents, fileManager: fileManager)
+        for index in 0...999 {
+            let suffix = index == 0 ? "" : "-\(index)"
+            let candidate = directory.appending(
+                path: "\(base)\(suffix).odc",
+                directoryHint: .isDirectory
+            )
+            if !fileManager.fileExists(atPath: candidate.path) {
+                return candidate
+            }
+        }
+        throw MDXImportError.noDestination(directory.path)
     }
 
     /// Convert `source` on a background thread and hand back the report.
@@ -509,6 +547,89 @@ public enum MDXImporter {
         return MDXImportResult(outputURL: output, report: report)
     }
 
+    /// Copy a single-file pack into a new directory repository.
+    ///
+    /// The pack is never modified and `repoDirectory` must not exist yet: the
+    /// core copies the database, then opens the copy as a directory, which is
+    /// what makes it editable.
+    public static func copyPackToRepo(pack: URL, repoDirectory: URL) throws {
+        var reportPointer: UnsafeMutablePointer<CChar>?
+        var errorPointer: UnsafeMutablePointer<CChar>?
+        let code = pack.path.withCString { packCString in
+            repoDirectory.path.withCString { repoCString in
+                odc_copy_pack_to_repo(packCString, repoCString, &reportPointer, &errorPointer)
+            }
+        }
+        let failure = errorPointer.map { pointer -> String in
+            defer { odc_string_free(pointer) }
+            return String(cString: pointer)
+        }
+        if let reportPointer {
+            odc_string_free(reportPointer)
+        }
+        guard code == 0 else {
+            throw MDXImportError.conversionFailed(failure ?? "未知错误")
+        }
+    }
+
+    /// Convert `source` into an editable repository directory on a background
+    /// thread, reporting overall progress.
+    ///
+    /// The destination is a directory that holds `odc.db`; the core creates it,
+    /// imports entries and MDD resources, and commits the result, so the
+    /// returned report always names a commit.
+    public static func convertToRepo(
+        source: URL,
+        documents: URL? = nil,
+        onProgress: (@Sendable (MDXImportProgress) -> Void)? = nil
+    ) async throws -> MDXImportResult {
+        try await Task.detached(priority: .userInitiated) {
+            try convertToRepoSynchronously(
+                source: source,
+                documents: documents,
+                onProgress: onProgress
+            )
+        }.value
+    }
+
+    private static func convertToRepoSynchronously(
+        source: URL,
+        documents: URL?,
+        onProgress: (@Sendable (MDXImportProgress) -> Void)?
+    ) throws -> MDXImportResult {
+        var scopes: [(url: URL, active: Bool)] = []
+        func claim(_ url: URL) -> URL {
+            scopes.append((url, url.startAccessingSecurityScopedResource()))
+            return url
+        }
+        defer {
+            for scope in scopes where scope.active {
+                scope.url.stopAccessingSecurityScopedResource()
+            }
+        }
+        _ = claim(source)
+
+        guard source.pathExtension.lowercased() == "mdx" else {
+            throw MDXImportError.unsupportedSource(source.lastPathComponent)
+        }
+        let output = try repoOutputURL(for: source, documents: documents)
+        // The core refuses a non-empty directory, so only the parent may exist.
+        try FileManager.default.createDirectory(
+            at: output.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let volumes = volumes(for: source).map(claim)
+        onProgress?(MDXImportProgress.preparingSample)
+        let report = try runCoreToRepo(
+            source: source,
+            repoDirectory: output,
+            volumes: volumes,
+            onProgress: onProgress
+        )
+        onProgress?(MDXImportProgress.finishedSample)
+        return MDXImportResult(outputURL: output, report: report)
+    }
+
     /// Carries the running total and the handler across the C ABI.
     ///
     /// The box is created on the importing thread, used only from the C
@@ -537,10 +658,71 @@ public enum MDXImporter {
         volumes: [URL],
         onProgress: (@Sendable (MDXImportProgress) -> Void)? = nil
     ) throws -> MDXImportReport {
+        try runCore(
+            source: source,
+            destination: output.path,
+            volumes: volumes,
+            onProgress: onProgress
+        ) { sourceCString, destinationCString, jsonCString, callback, context,
+            reportPointer, errorPointer in
+            odc_import_mdx_to_odc_with_mdd_progress(
+                sourceCString,
+                destinationCString,
+                jsonCString,
+                callback,
+                context,
+                reportPointer,
+                errorPointer
+            )
+        }
+    }
+
+    /// Import into an editable repository directory instead of a pack.
+    private static func runCoreToRepo(
+        source: URL,
+        repoDirectory: URL,
+        volumes: [URL],
+        onProgress: (@Sendable (MDXImportProgress) -> Void)? = nil
+    ) throws -> MDXImportReport {
+        try runCore(
+            source: source,
+            destination: repoDirectory.path,
+            volumes: volumes,
+            onProgress: onProgress
+        ) { sourceCString, destinationCString, jsonCString, callback, context,
+            reportPointer, errorPointer in
+            odc_import_mdx_to_repo_with_mdd_progress(
+                sourceCString,
+                destinationCString,
+                jsonCString,
+                callback,
+                context,
+                reportPointer,
+                errorPointer
+            )
+        }
+    }
+
+    /// Shared plumbing for the pack and directory entry points.
+    private static func runCore(
+        source: URL,
+        destination: String,
+        volumes: [URL],
+        onProgress: (@Sendable (MDXImportProgress) -> Void)?,
+        call: (
+            UnsafePointer<CChar>,
+            UnsafePointer<CChar>,
+            UnsafePointer<CChar>?,
+            odc_import_progress_fn?,
+            UnsafeMutableRawPointer?,
+            UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>,
+            UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>
+        ) -> Int32
+    ) throws -> MDXImportReport {
         var reportPointer: UnsafeMutablePointer<CChar>?
         var errorPointer: UnsafeMutablePointer<CChar>?
         let sourcePath = source.path
-        let outputPath = output.path
+        let outputPath = destination
         let volumeList = volumes.isEmpty ? nil : volumes.map(\.path)
         let volumeJSON = volumeList.flatMap { list -> Data? in
             try? JSONSerialization.data(withJSONObject: list, options: [])
@@ -572,7 +754,7 @@ public enum MDXImporter {
             outputPath.withCString { outputCString in
                 let json = volumeJSON.flatMap { String(data: $0, encoding: .utf8) }
                 return withOptionalCString(json) { jsonCString in
-                    odc_import_mdx_to_odc_with_mdd_progress(
+                    call(
                         sourceCString,
                         outputCString,
                         jsonCString,

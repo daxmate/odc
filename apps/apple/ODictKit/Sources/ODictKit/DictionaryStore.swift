@@ -540,10 +540,11 @@ public final class DictionaryStore {
                 return
             }
             // The conversion is a staging artefact: it lands in the library's
-            // own folder, never next to the source the reader picked.
+            // own folder, never next to the source the reader picked. It is a
+            // directory repository, so the copy registered below is editable.
             let staging = directory.appending(path: "Imports", directoryHint: .isDirectory)
             try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
-            let result = try await MDXImporter.convert(
+            let result = try await MDXImporter.convertToRepo(
                 source: url,
                 documents: staging,
                 onProgress: { [weak self] sample in
@@ -566,6 +567,74 @@ public final class DictionaryStore {
         } catch {
             importPhase = nil
             importProgress = nil
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    // MARK: - Pack conversion
+
+    /// Turn a read-only pack into an editable directory copy.
+    ///
+    /// The pack stays in the library untouched; the copy is a new item with
+    /// its own UUID and its own `odc.db`. Opening the copy afterwards makes the
+    /// editor available straight away.
+    public func convertPackToEditable(itemID: UUID) async {
+        errorMessage = nil
+        guard let item = library.item(id: itemID) else {
+            errorMessage = "找不到这本词典。"
+            return
+        }
+        guard item.sourceIsDirectory == false else {
+            errorMessage = "这本词典已经是可编辑的。"
+            return
+        }
+        do {
+            let directory = try libraryDirectoryURL()
+            let source = LibraryStore.openTarget(for: item, in: directory)
+            let copyID = UUID()
+            let storedName = "\(copyID.uuidString).odc"
+            let copyURL = LibraryStore.copyDirectory(
+                for: LibraryItem(
+                    id: copyID,
+                    displayName: item.displayName,
+                    storedName: storedName,
+                    sourceName: item.sourceName,
+                    sourceBytes: item.sourceBytes
+                ),
+                in: directory
+            )
+            try await Task.detached(priority: .userInitiated) {
+                try MDXImporter.copyPackToRepo(pack: source, repoDirectory: copyURL)
+            }.value
+            let descriptor = try await Task.detached(priority: .userInitiated) {
+                try LibraryFileFingerprint.descriptor(
+                    for: copyURL,
+                    accessingSecurityScope: false
+                )
+            }.value
+            let copy = LibraryItem(
+                id: copyID,
+                displayName: item.displayName,
+                storedName: storedName,
+                sourceName: descriptor.name,
+                sourceBytes: descriptor.bytes,
+                sourceHash: descriptor.contentHash,
+                sourceIsDirectory: true
+            )
+            do {
+                try register(copy, in: directory)
+            } catch {
+                DocumentLibrary.removeCopy(at: copyURL)
+                throw error
+            }
+            do {
+                _ = try await openExisting(copy, in: directory)
+            } catch {
+                forget(copy.id, in: directory)
+                DocumentLibrary.removeCopy(at: copyURL)
+                throw error
+            }
+        } catch {
             errorMessage = error.localizedDescription
         }
     }

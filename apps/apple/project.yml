@@ -50,8 +50,8 @@ targets:
       path: ODict/Info.plist
       properties:
         CFBundleDisplayName: ODict
-        CFBundleShortVersionString: "0.7.0"
-        CFBundleVersion: "9"
+        CFBundleShortVersionString: "0.8.0"
+        CFBundleVersion: "10"
         UILaunchScreen: {}
         LSSupportsOpeningDocumentsInPlace: false
         UISupportedInterfaceOrientations:
@@ -90,8 +90,8 @@ targets:
       path: ODictDesktop/Info.plist
       properties:
         CFBundleDisplayName: ODict Desktop
-        CFBundleShortVersionString: "0.7.0"
-        CFBundleVersion: "9"
+        CFBundleShortVersionString: "0.8.0"
+        CFBundleVersion: "10"
         LSApplicationCategoryType: public.app-category.reference
         UTExportedTypeDeclarations:
           - UTTypeIdentifier: com.daxmate.odict.dictionary

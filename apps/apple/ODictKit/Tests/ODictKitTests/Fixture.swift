@@ -9,6 +9,20 @@ enum Fixture {
             .appending(path: "Fixtures/demo", directoryHint: .isDirectory)
     }
 
+    /// A small MDX dictionary produced by `odc-testkit gen-mdx 2`.
+    static var sampleMDX: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appending(path: "Fixtures/sample.mdx", directoryHint: .notDirectory)
+    }
+
+    /// A single-file pack built from `sampleMDX` with the CLI.
+    static var samplePack: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appending(path: "Fixtures/sample.odc", directoryHint: .notDirectory)
+    }
+
     static func temporaryDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appending(path: "ODictKitTests-\(UUID().uuidString)", directoryHint: .isDirectory)

@@ -6,6 +6,29 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-03
+
+### Added
+
+* Core: `import_mdx_to_repo` imports an MDX file straight into a directory
+  repository and commits the result, so `HEAD` always names the imported
+  entries. A non-empty destination is refused and a directory created by a
+  failed import is removed again.
+* Core: `copy_pack_to_repo` turns a single-file pack into an editable
+  directory repository without touching the original file.
+* FFI: `odc_import_mdx_to_repo_with_mdd_progress` and `odc_copy_pack_to_repo`
+  expose both paths to the Apple apps; the pack import entry points stay
+  unchanged for exports.
+* Apple: importing an MDX dictionary now registers an editable directory
+  library item, so the editor is available right after the import.
+* Apple: the library offers "转为可编辑副本" for read-only packs; the pack is
+  kept and the copy becomes a new editable item.
+
+### Changed
+
+* Apple: the MDX importer writes a repository directory instead of a
+  standalone `.odc`; packs remain the export format.
+
 ## [0.7.0] - 2026-11-02
 
 ### Added

@@ -169,6 +169,16 @@ public struct LibraryListView: View {
                 .buttonStyle(.borderless)
                 .accessibilityLabel("关闭 \(item.displayName)")
             }
+            if item.sourceIsDirectory == false {
+                Button {
+                    Task { await store.convertPackToEditable(itemID: item.id) }
+                } label: {
+                    Image(systemName: "square.and.pencil")
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("把 \(item.displayName) 转为可编辑副本")
+                .help("转为可编辑副本")
+            }
             Button(role: .destructive) {
                 pendingRemoval = item
             } label: {
