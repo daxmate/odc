@@ -6,6 +6,30 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-03
+
+### Added
+
+* Core: MDX imports repair each entry body as an HTML5 fragment, remove
+  `script` / `iframe` / `object` / `embed`, event handler attributes and
+  `javascript:` URLs, normalise `<style>` blocks and `style` attributes with
+  `lightningcss`, and format the result with `markup_fmt` in strict
+  whitespace mode. Diagnostics are aggregated per code in
+  `MdxImportReport::html`; a body whose formatting fails keeps its original
+  text and is counted as failed.
+* CLI: `odc check-html [PATH]` reports HTML and CSS problems without writing,
+  either for one `.mdx` file or for every entry of a repository (`--json`,
+  `--limit N`).
+* CLI: `odc normalize` rewrites `raw_html` in the working set; dry run by
+  default, `--apply` commits the result.
+* CLI: `odc import --html <format|check|off>` selects the HTML mode.
+
+### Changed
+
+* MDX imports (CLI and FFI) now normalise HTML by default; `--html off`
+  restores the previous byte-for-byte behaviour.
+* Apple app bundles: version 0.9.0 (build 11).
+
 ## [0.8.0] - 2026-11-03
 
 ### Added
