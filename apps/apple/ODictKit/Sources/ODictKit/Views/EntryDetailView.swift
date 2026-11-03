@@ -1,3 +1,4 @@
+import ODictCore
 import SwiftUI
 
 /// Renders the entry for the current selection: one page for every open

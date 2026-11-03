@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+@testable import ODictCore
 @testable import ODictKit
 
 final class EntryHTMLTests: XCTestCase {

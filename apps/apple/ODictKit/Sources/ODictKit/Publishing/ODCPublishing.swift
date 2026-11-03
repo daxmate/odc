@@ -1,5 +1,6 @@
 import Foundation
 import ODCFFI
+import ODictCore
 
 /// Swift surface over the signing, trust and release entry points of ODCFFI.
 ///

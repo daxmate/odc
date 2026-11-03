@@ -1,4 +1,5 @@
 import Foundation
+import ODictCore
 
 /// A table parsed from RFC 4180 CSV text.
 ///

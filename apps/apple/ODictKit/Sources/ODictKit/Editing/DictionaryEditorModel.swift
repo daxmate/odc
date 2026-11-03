@@ -1,4 +1,5 @@
 import Foundation
+import ODictCore
 import Observation
 
 /// Editable projection of one entry; the view binds to this, the model turns

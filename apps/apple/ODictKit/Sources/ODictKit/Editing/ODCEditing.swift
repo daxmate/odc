@@ -1,4 +1,5 @@
 import Foundation
+import ODictCore
 
 /// The subset of `OdcDictionary` the desktop editor uses.
 ///

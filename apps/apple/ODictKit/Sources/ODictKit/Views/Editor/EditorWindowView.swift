@@ -1,5 +1,6 @@
 #if os(macOS)
 import AppKit
+import ODictCore
 import SwiftUI
 
 /// Separate window hosting the editing surface. The root window owns the open

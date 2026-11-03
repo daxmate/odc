@@ -13,6 +13,13 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   snapshots and the source block store are copied inside one transaction;
   reaching genesis clears `meta.shallow` (see `docs/shallow.md`).
 
+### Changed
+
+* Apple: the Swift package is split into a UI-free `ODictCore` library (the
+  `ODCFFI` wrappers, resource helpers, models and entry HTML) and `ODictKit`,
+  the application layer built on top of it. `ODictKit` re-exports the core, so
+  `import ODictKit` keeps the previous API for app code.
+
 ## [0.10.0] - 2026-11-03
 
 ### Added

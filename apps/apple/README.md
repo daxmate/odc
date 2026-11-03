@@ -1,8 +1,13 @@
 # ODict for Apple platforms
 
 SwiftUI front ends for ODC: **ODict** (iOS) and **ODict Desktop** (macOS), both
-built on the shared `ODictKit` Swift package, which wraps the `ODCFFI`
-XCFramework produced from `crates/odc-ffi`.
+built on the shared `ODictKit` Swift package.
+
+The package has two layers: `ODictCore` is the UI-free Swift binding over the
+`ODCFFI` XCFramework produced from `crates/odc-ffi`, and `ODictKit` is the
+application layer on top of it (stores, editing, publishing and SwiftUI views).
+Apps that only need to open, search and read entries can depend on `ODictCore`
+alone; `ODictKit` re-exports it, so `import ODictKit` still sees the whole API.
 
 The readers open a dictionary, search it (prefix, then substring) and render
 entries. **ODict Desktop** also has an editing mode for repository
