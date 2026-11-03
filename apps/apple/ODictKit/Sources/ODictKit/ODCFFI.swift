@@ -21,6 +21,14 @@ public enum OdcError: LocalizedError, Equatable {
     case closed
     /// The core returned JSON this client could not decode.
     case invalidResponse(String)
+    /// `odc_keypair_generate` / `odc_sign_file` refused the key material.
+    case keyFailed(String)
+    /// `odc_publish` refused the release.
+    case publishFailed(String)
+    /// `odc_publishers_json` / `odc_trust_add` / `odc_trust_remove` failed.
+    case trustFailed(String)
+    /// `odc_verify_release` could not read or parse the release directory.
+    case verifyFailed(String)
 
     public var errorDescription: String? {
         switch self {
@@ -38,6 +46,14 @@ public enum OdcError: LocalizedError, Equatable {
             return "搜索数量 \(limit) 超出 1…200 的范围。"
         case .invalidPageLimit(let limit):
             return "分页数量 \(limit) 超出 1…500 的范围。"
+        case .keyFailed(let detail):
+            return "发布者密钥操作失败：\(detail)"
+        case .publishFailed(let detail):
+            return "发布失败：\(detail)"
+        case .trustFailed(let detail):
+            return "信任管理失败：\(detail)"
+        case .verifyFailed(let detail):
+            return "校验发布包失败：\(detail)"
         case .closed:
             return "词典已关闭。"
         case .invalidResponse(let detail):
