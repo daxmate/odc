@@ -87,6 +87,14 @@ pub enum Error {
     UnresolvedConflicts(usize),
     /// `resolve` or `merge --continue` found no merge to work on.
     NoMergeInProgress,
+    /// A `.sig` sidecar is not valid v1 signature JSON.
+    SignatureFormat(String),
+    /// The signed digest or size does not match the target file.
+    SignatureTargetMismatch(String),
+    /// Ed25519 verification failed (wrong key, corrupt signature, ...).
+    SignatureInvalid(String),
+    /// A private or public key is not in the expected PKCS#8 / hex form.
+    KeyFormat(String),
 }
 
 impl Error {
@@ -125,6 +133,10 @@ impl Error {
             Self::MergeInProgress(_) => "ODC-E028",
             Self::UnresolvedConflicts(_) => "ODC-E029",
             Self::NoMergeInProgress => "ODC-E030",
+            Self::SignatureFormat(_) => "ODC-E032",
+            Self::SignatureTargetMismatch(_) => "ODC-E033",
+            Self::SignatureInvalid(_) => "ODC-E034",
+            Self::KeyFormat(_) => "ODC-E035",
         }
     }
 }
@@ -180,6 +192,12 @@ impl fmt::Display for Error {
                 format!("merge has {remaining} unresolved conflict(s)")
             }
             Self::NoMergeInProgress => "no merge is in progress".to_string(),
+            Self::SignatureFormat(detail) => format!("malformed signature: {detail}"),
+            Self::SignatureTargetMismatch(detail) => {
+                format!("signature target does not match: {detail}")
+            }
+            Self::SignatureInvalid(detail) => format!("signature verification failed: {detail}"),
+            Self::KeyFormat(detail) => format!("invalid key material: {detail}"),
         };
         write!(f, "{}: {message}", self.code())
     }

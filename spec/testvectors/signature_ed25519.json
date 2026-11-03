@@ -1,0 +1,12 @@
+{
+  "name": "signature-ed25519-v1",
+  "description": "Detached Ed25519 signature over a BLAKE3 target digest (sidecar format v1). Values cross-checked with OpenSSL 3 pkeyutl.",
+  "domain_prefix_utf8": "ODC-SIG-V1\u0000",
+  "private_key_seed_hex": "7c08dd5e0ef158c59a518186c573ef7102bfe3ebee28ecde2e9d99e44a0671de",
+  "private_key_pem": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIHwI3V4O8VjFmlGBhsVz73ECv+Pr7ijs3i6dmeRKBnHe\n-----END PRIVATE KEY-----",
+  "public_key_hex": "7e589e63cccec894ca292fec61d37912d7e7e3e364feb19b3534a62f4bda84d4",
+  "target_utf8": "ODC signature test vector v1\n",
+  "target_size": 29,
+  "blake3_hex": "9159870c7b1f28a1ba8634582d1569cbe929b5a06b127ad4a917be3ec7464840",
+  "signature_hex": "48781da77abe0e4b802cb3c581e3a2a1572327a6988cbb2e0138c5a44f8c95097d0a4daef5c22baa15071378d2daf2bcef63aeeec5d852755d5bce58fac24f0e"
+}

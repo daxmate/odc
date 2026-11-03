@@ -11,14 +11,20 @@ categories.workspace = true
 
 [dependencies]
 blake3 = "1.8.7"
+ed25519-dalek = { version = "2", features = ["pkcs8", "rand_core"] }
 flate2 = "1.1.5"
 html5ever = "0.35"
 lightningcss = { version = "1.0.0-alpha.72", default-features = false }
 markup5ever_rcdom = "0.35"
 markup_fmt = "0.27.6"
 mdictlib = { version = "0.2.8", features = ["lzo"] }
+pkcs8 = { version = "0.10", features = ["pem"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
 rusqlite = { version = "0.41.1", features = ["blob", "bundled"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
 thiserror = "2.0.21"
+time = { version = "0.3.47", features = ["formatting", "parsing"] }
 unicode-normalization = "0.1.26"
 zstd = "0.14.3"
 
