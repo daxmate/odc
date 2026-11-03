@@ -53,7 +53,8 @@ final class EditorIntegrationTests: XCTestCase {
         XCTAssertTrue(model.save())
 
         XCTAssertTrue(model.commit(message: "integration edit"))
-        XCTAssertEqual(commits, 1)
+        // Save and commit each notify the reader.
+        XCTAssertEqual(commits, 2)
         XCTAssertTrue(model.committed)
         XCTAssertFalse(model.hasChanges)
         XCTAssertEqual(model.status.added + model.status.modified + model.status.removed, 0)

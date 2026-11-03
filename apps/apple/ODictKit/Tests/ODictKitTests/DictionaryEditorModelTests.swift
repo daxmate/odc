@@ -128,19 +128,22 @@ struct DictionaryEditorModelTests {
         #expect(model.alertMessage == "提交信息不能为空。")
     }
 
-    @Test("commit notifies the owner and stores the message")
+    @Test("save and commit both notify the owner")
     func commitsChanges() {
         var commits = 0
         let (model, fake) = makeModel(onCommit: { commits += 1 })
         model.loadIfNeeded()
         model.select("apple")
         model.updateForm { $0.display = "Apple 2" }
-        _ = model.save()
+        // A save changes the working set, which the reader renders, so the
+        // owner hears about it before anything is committed.
+        #expect(model.save())
+        #expect(commits == 1)
 
         #expect(model.commit(message: "edit apple"))
         #expect(fake.commitMessage == "edit apple")
         #expect(fake.commitAuthor == "tester")
-        #expect(commits == 1)
+        #expect(commits == 2)
         #expect(model.committed)
         #expect(model.hasChanges == false)
     }

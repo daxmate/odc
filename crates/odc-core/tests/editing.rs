@@ -3,7 +3,7 @@
 use odc_core::entry::{Def, Entry};
 use odc_core::error::Error;
 use odc_core::pack::PackOptions;
-use odc_core::repo::{ChangeKind, DiffKind, EntryWriteOutcome, Repo};
+use odc_core::repo::{ChangeKind, DiffKind, EntryWriteOutcome, Repo, WorkingResolution};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -256,4 +256,65 @@ fn packed_file_is_read_only() {
     ));
     assert_eq!(packed.entries_page(None, 10).expect("page").len(), 1);
     cleanup(&work);
+}
+
+#[test]
+fn resolve_prefer_working_follows_uncommitted_edits() {
+    let (dir, mut repo) = seeded();
+
+    // Unchanged: the committed entry is served.
+    match repo.resolve_prefer_working("alpha").expect("resolve") {
+        WorkingResolution::Found { entry, hops, .. } => {
+            assert_eq!(hops, 0);
+            assert_eq!(entry.defs[0].sense, "one");
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
+
+    // Modified: the working copy wins over the committed body.
+    repo.upsert_entry(&entry("alpha", "one v2"))
+        .expect("upsert");
+    match repo.resolve_prefer_working("alpha").expect("resolve") {
+        WorkingResolution::Found { entry, hops, .. } => {
+            assert_eq!(hops, 0);
+            assert_eq!(entry.defs[0].sense, "one v2");
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
+
+    // Added: a word only the working set carries.
+    repo.upsert_entry(&entry("delta", "four")).expect("upsert");
+    match repo.resolve_prefer_working("delta").expect("resolve") {
+        WorkingResolution::Found { entry, hops, .. } => {
+            assert_eq!(hops, 0);
+            assert_eq!(entry.defs[0].sense, "four");
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
+
+    // Deleted: HEAD still carries the word, so this is not NotFound.
+    repo.delete_entry("beta").expect("delete");
+    assert_eq!(
+        repo.resolve_prefer_working("BETA").expect("resolve"),
+        WorkingResolution::Deleted {
+            requested: "beta".to_string()
+        }
+    );
+
+    // Redirects resolve against the working set too.
+    let mut redirect = entry("zulu", "");
+    redirect.raw_html = Some("@@@LINK=alpha".to_string());
+    repo.upsert_entry(&redirect).expect("upsert");
+    match repo.resolve_prefer_working("zulu").expect("resolve") {
+        WorkingResolution::Found {
+            key, hops, entry, ..
+        } => {
+            assert_eq!(key, "alpha");
+            assert_eq!(hops, 1);
+            assert_eq!(entry.defs[0].sense, "one v2");
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
+
+    cleanup(&dir);
 }

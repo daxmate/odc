@@ -15,10 +15,10 @@ use odc_ffi::{
     odc_import_mdx_to_odc_with_mdd_progress, odc_import_mdx_to_repo_with_mdd_progress,
     odc_repo_close, odc_repo_commit_json, odc_repo_discard_json, odc_repo_entries_page_json,
     odc_repo_entry_count, odc_repo_entry_delete_json, odc_repo_entry_diff_json,
-    odc_repo_entry_json, odc_repo_entry_put_json, odc_repo_open, odc_repo_resource_copy,
-    odc_repo_resource_count, odc_repo_resource_len, odc_repo_search_json,
-    odc_repo_search_substring_json, odc_repo_working_changes_json, odc_repo_working_status_json,
-    odc_string_free, odc_version,
+    odc_repo_entry_json, odc_repo_entry_link_json, odc_repo_entry_link_working_json,
+    odc_repo_entry_put_json, odc_repo_open, odc_repo_resource_copy, odc_repo_resource_count,
+    odc_repo_resource_len, odc_repo_search_json, odc_repo_search_substring_json,
+    odc_repo_working_changes_json, odc_repo_working_status_json, odc_string_free, odc_version,
 };
 use serde_json::Value;
 use tempfile::TempDir;
@@ -1064,4 +1064,70 @@ fn copy_pack_to_repo_reports_an_editable_copy() {
     drop(copy);
     let original = Repo::open(&pack).expect("open pack");
     assert!(original.is_read_only(), "the pack stays read-only");
+}
+
+#[test]
+fn working_link_prefers_uncommitted_edits() {
+    fn lookup(repo: *const odc_ffi::OdcRepo, key: &str) -> Value {
+        let key = CString::new(key).expect("key");
+        let mut error: *mut c_char = ptr::null_mut();
+        // SAFETY: `repo` is live, `key` is NUL-terminated and outlives the call.
+        let payload = unsafe { odc_repo_entry_link_working_json(repo, key.as_ptr(), &mut error) };
+        assert!(take_error_if_any(error).is_none(), "link failed");
+        serde_json::from_str(&take_string(payload)).expect("link json")
+    }
+
+    let dir = seeded_repo();
+    let repo = open(&dir);
+
+    let committed = lookup(repo, "apple");
+    assert_eq!(committed["status"], "found");
+    assert_eq!(committed["entry"]["defs"][0]["sense"], "a fruit");
+
+    let body = serde_json::json!({
+        "key": "apple",
+        "display": "Apple",
+        "phonetic": [],
+        "defs": [{"pos": "noun", "sense": "a working fruit", "examples": [], "labels": []}],
+        "raw_html": null,
+        "extra": {}
+    })
+    .to_string();
+    let body = CString::new(body).expect("entry json");
+    let mut error: *mut c_char = ptr::null_mut();
+    // SAFETY: body is NUL-terminated and outlives the call.
+    let put = unsafe { odc_repo_entry_put_json(repo, body.as_ptr(), &mut error) };
+    assert!(take_error_if_any(error).is_none(), "put failed");
+    let _ = take_string(put);
+
+    let modified = lookup(repo, "apple");
+    assert_eq!(modified["status"], "found");
+    assert_eq!(modified["entry"]["defs"][0]["sense"], "a working fruit");
+
+    let key = CString::new("application").expect("key");
+    let mut error: *mut c_char = ptr::null_mut();
+    // SAFETY: key is NUL-terminated and outlives the call.
+    let deleted = unsafe { odc_repo_entry_delete_json(repo, key.as_ptr(), &mut error) };
+    assert!(take_error_if_any(error).is_none(), "delete failed");
+    let _ = take_string(deleted);
+
+    let removed = lookup(repo, "application");
+    assert_eq!(removed["status"], "deleted");
+    assert_eq!(removed["requested"], "application");
+
+    // Existing resolve still reads the committed body.
+    let committed = lookup_committed(repo);
+    assert_eq!(committed["entry"]["defs"][0]["sense"], "a fruit");
+
+    // SAFETY: the handle is closed exactly once and not used afterwards.
+    unsafe { odc_repo_close(repo) }
+}
+
+fn lookup_committed(repo: *const odc_ffi::OdcRepo) -> Value {
+    let key = CString::new("apple").expect("key");
+    let mut error: *mut c_char = ptr::null_mut();
+    // SAFETY: `repo` is live and the string outlives the call.
+    let payload = unsafe { odc_repo_entry_link_json(repo, key.as_ptr(), &mut error) };
+    assert!(take_error_if_any(error).is_none(), "committed link failed");
+    serde_json::from_str(&take_string(payload)).expect("link json")
 }

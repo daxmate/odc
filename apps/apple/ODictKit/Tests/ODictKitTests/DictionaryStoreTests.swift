@@ -254,6 +254,27 @@ final class DictionaryStoreTests: XCTestCase {
         XCTAssertNil(store.importSummary)
     }
 
+    func testEntrySectionsPreferUncommittedEdits() async throws {
+        let store = DictionaryStore(container: try makeContainer())
+        defer { store.close() }
+        store.open(url: Fixture.demoRepository)
+        try await waitUntil { store.documentURL != nil }
+        let dictionaryID = try XCTUnwrap(store.activeDictionaryID)
+
+        // The editor saves into the working set through the store's own
+        // handle; the reader must show that text before anything is committed.
+        let model = try XCTUnwrap(store.makeEditorModel())
+        model.loadIfNeeded()
+        model.select("apple")
+        model.updateForm { $0.display = "Apple (saved)" }
+        XCTAssertTrue(model.save())
+
+        await store.select(key: "apple")
+        let section = store.entrySection(for: "apple", in: dictionaryID)
+        XCTAssertEqual(section?.entry.display, "Apple (saved)")
+        XCTAssertNil(section?.notice)
+    }
+
     func testCloseResetsState() {
         let store = DictionaryStore()
         store.close()

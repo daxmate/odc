@@ -75,6 +75,8 @@ public enum EntryLinkResult: Equatable, Sendable {
     case tooLong([String])
     /// The word itself is absent.
     case notFound(String)
+    /// HEAD still carries the word but the working set removed it.
+    case deleted(String)
 }
 
 /// Thin, main-actor-confined wrapper around the ODCFFI C ABI.
@@ -182,6 +184,31 @@ public final class OdcDictionary {
         }
         defer { odc_string_free(result) }
         let data = Data(bytes: result, count: strlen(result))
+        return try decodeLink(data)
+    }
+
+    /// Same lookup as ``resolve(_:)`` but working-set edits win.
+    ///
+    /// A saved but uncommitted edit is returned instead of the committed
+    /// body, so the reader shows the change immediately. A word removed from
+    /// the working set reports ``EntryLinkResult/deleted(_:)`` and callers
+    /// must not fall back to the committed entry.
+    public func resolvePreferWorking(_ key: String) throws -> EntryLinkResult {
+        let handle = try requireHandle()
+        var error: UnsafeMutablePointer<CChar>?
+        let result = key.withCString { key in
+            odc_repo_entry_link_working_json(handle, key, &error)
+        }
+        guard let result else {
+            throw OdcError.entryFailed(Self.take(error) ?? "未找到词条：\(key)")
+        }
+        defer { odc_string_free(result) }
+        let data = Data(bytes: result, count: strlen(result))
+        return try decodeLink(data)
+    }
+
+    /// Decode the JSON both link entry points return.
+    private func decodeLink(_ data: Data) throws -> EntryLinkResult {
         let payload: LinkPayload
         do {
             payload = try decoder.decode(LinkPayload.self, from: data)
@@ -209,6 +236,8 @@ public final class OdcDictionary {
             return .tooLong(payload.chain ?? [])
         case "not_found":
             return .notFound(payload.requested)
+        case "deleted":
+            return .deleted(payload.requested)
         default:
             throw OdcError.invalidResponse("unknown status: \(payload.status)")
         }

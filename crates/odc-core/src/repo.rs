@@ -142,6 +142,70 @@ pub struct EntryDiff {
     pub fields: Vec<FieldDiff>,
 }
 
+/// Where a word lives once uncommitted edits are taken into account.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum WorkingState {
+    /// The entry exists in the working set, or unchanged in HEAD.
+    Present(Entry),
+    /// HEAD carries the word but the working set deleted it.
+    Deleted,
+    /// Neither HEAD nor the working set carries the word.
+    Absent,
+}
+
+/// Outcome of [`Repo::resolve_prefer_working`].
+///
+/// Mirrors [`crate::link::LinkResolution`] and adds `Deleted`: the word
+/// exists in HEAD but an uncommitted edit removed it, so readers must not fall
+/// back to the committed body.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WorkingResolution {
+    /// The word, or the end of its redirect chain, is a real entry.
+    Found {
+        /// Key the caller asked for, normalised.
+        requested: String,
+        /// Key of the entry that was finally found.
+        key: String,
+        /// Redirects followed to reach it (`0` for a direct hit).
+        hops: usize,
+        /// The entry itself, with working-set edits applied.
+        entry: Entry,
+    },
+    /// The requested key was deleted from the working set but is still in HEAD.
+    Deleted {
+        /// Key the caller asked for, normalised.
+        requested: String,
+    },
+    /// A redirect pointed at a word the dictionary does not carry.
+    Missing {
+        /// Key the caller asked for, normalised.
+        requested: String,
+        /// Redirect target that could not be found.
+        target: String,
+        /// Redirects followed before the miss.
+        hops: usize,
+    },
+    /// The redirect chain came back to a word it had already visited.
+    Cycle {
+        /// Key the caller asked for, normalised.
+        requested: String,
+        /// Keys visited, starting with the requested one.
+        chain: Vec<String>,
+    },
+    /// The chain was longer than the hop limit.
+    TooLong {
+        /// Key the caller asked for, normalised.
+        requested: String,
+        /// Keys visited, starting with the requested one.
+        chain: Vec<String>,
+    },
+    /// The word is neither committed nor staged.
+    NotFound {
+        /// Key the caller asked for, normalised.
+        requested: String,
+    },
+}
+
 /// A stored commit row.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CommitRecord {
@@ -1689,6 +1753,81 @@ impl Repo {
         let mut entry = Entry::decode_payload(&payload)?;
         entry.word = key;
         Ok(Some(entry))
+    }
+
+    /// Read one entry the way a reader should: working-set edits win.
+    ///
+    /// The kind comes from [`Repo::entry_diff`], so the three states match
+    /// what the editor shows: added or modified entries are read from the
+    /// working set, deleted ones are reported as [`WorkingState::Deleted`]
+    /// instead of falling back to the committed body, and untouched words
+    /// resolve through the committed index as before.
+    fn working_state(&self, word: &str) -> Result<WorkingState> {
+        let key = normalize_key(word);
+        match self.entry_diff(&key)?.kind {
+            DiffKind::Added | DiffKind::Modified => {
+                let entry = self
+                    .working_entry(&key)?
+                    .ok_or_else(|| Error::Inconsistent("working entry vanished".to_string()))?;
+                Ok(WorkingState::Present(entry))
+            }
+            DiffKind::Deleted => Ok(WorkingState::Deleted),
+            DiffKind::Absent => Ok(WorkingState::Absent),
+        }
+    }
+
+    /// Resolve a word through `@@@LINK=` redirects, preferring uncommitted
+    /// working-set edits over the committed index.
+    ///
+    /// Readers use this instead of [`Repo::resolve_link`] so a save in the
+    /// editor shows up immediately, before the edit is committed. A word
+    /// deleted from the working set reports [`WorkingResolution::Deleted`];
+    /// a redirect that points *at* a deleted word is reported as
+    /// [`WorkingResolution::Missing`], the same as any other broken redirect.
+    pub fn resolve_prefer_working(&self, word: &str) -> Result<WorkingResolution> {
+        let requested = normalize_key(word);
+        match self.working_state(&requested)? {
+            WorkingState::Deleted => return Ok(WorkingResolution::Deleted { requested }),
+            WorkingState::Absent => return Ok(WorkingResolution::NotFound { requested }),
+            WorkingState::Present(_) => {}
+        }
+
+        let resolution =
+            crate::link::resolve(&requested, |key| match self.working_state(key)? {
+                WorkingState::Present(entry) => Ok(Some(entry)),
+                WorkingState::Deleted | WorkingState::Absent => Ok(None),
+            })?;
+        Ok(match resolution {
+            crate::link::LinkResolution::Found {
+                requested,
+                key,
+                hops,
+                entry,
+            } => WorkingResolution::Found {
+                requested,
+                key,
+                hops,
+                entry,
+            },
+            crate::link::LinkResolution::Missing {
+                requested,
+                target,
+                hops,
+            } => WorkingResolution::Missing {
+                requested,
+                target,
+                hops,
+            },
+            crate::link::LinkResolution::Cycle { requested, chain } => {
+                WorkingResolution::Cycle { requested, chain }
+            }
+            crate::link::LinkResolution::TooLong { requested, chain } => {
+                WorkingResolution::TooLong { requested, chain }
+            }
+            crate::link::LinkResolution::NotFound { requested } => {
+                WorkingResolution::NotFound { requested }
+            }
+        })
     }
 
     /// One page of working-set entries in ascending key order.

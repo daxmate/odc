@@ -355,6 +355,9 @@ public final class DictionaryEditorModel {
             diff = try? editing.entryDiff(entry.key)
             validationMessage = nil
             noticeMessage = "已保存到工作区。"
+            // The reader shows working-set edits, so a save must refresh it
+            // even though nothing is committed yet.
+            onCommitHandler?()
             return true
         } catch {
             alertMessage = error.localizedDescription

@@ -78,4 +78,31 @@ final class EditingTests: XCTestCase {
             ["apple", "application", "cherry"]
         )
     }
+
+    func testWorkingResolutionPrefersEditsAndReportsDeletions() throws {
+        let dictionary = try openCopy()
+        defer { dictionary.close() }
+
+        _ = try dictionary.upsert(
+            DictionaryEntry(key: "apple", display: "Apple (saved)")
+        )
+        guard case let .entry(edited, _, hops) = try dictionary.resolvePreferWorking("apple")
+        else {
+            return XCTFail("expected the working copy")
+        }
+        XCTAssertEqual(edited.display, "Apple (saved)")
+        XCTAssertEqual(hops, 0)
+
+        // The committed lookup keeps reading HEAD.
+        guard case let .entry(committed, _, _) = try dictionary.resolve("apple") else {
+            return XCTFail("expected the committed entry")
+        }
+        XCTAssertEqual(committed.display, "apple")
+
+        _ = try dictionary.deleteEntry("banana")
+        XCTAssertEqual(try dictionary.resolvePreferWorking("banana"), .deleted("banana"))
+        guard case .entry = try dictionary.resolve("banana") else {
+            return XCTFail("the committed lookup must still find banana")
+        }
+    }
 }

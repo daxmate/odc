@@ -86,6 +86,23 @@ char *odc_repo_entry_link_json(const OdcRepo *repo, const char *key_utf8,
                                char **error_message);
 
 /*
+ * Resolve a word through `@@@LINK=` redirects, preferring uncommitted
+ * working-set edits. Same JSON object and statuses as
+ * odc_repo_entry_link_json(), plus:
+ *
+ *   "deleted"   {"status","requested"}
+ *
+ * "deleted" means HEAD still carries the word but the working set removed it;
+ * callers must not fall back to the committed body. Everything else matches
+ * odc_repo_entry_link_json(), with "entry" carrying the working copy when the
+ * edit is uncommitted. Returns NULL on failure; *error_message then carries
+ * the diagnostic. Release the result with odc_string_free().
+ */
+char *odc_repo_entry_link_working_json(const OdcRepo *repo,
+                                       const char *key_utf8,
+                                       char **error_message);
+
+/*
  * One page of working-set entries as a JSON array of entry objects (the
  * same shape odc_repo_entry_json returns).
  *

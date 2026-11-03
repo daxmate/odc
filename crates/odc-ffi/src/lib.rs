@@ -29,7 +29,9 @@ use std::ptr;
 use odc_core::cbor::Value as CborValue;
 use odc_core::link::LinkResolution;
 use odc_core::pack::PackOptions;
-use odc_core::repo::{ChangeKind, DiffKind, EntryDiff, EntryWriteOutcome, FieldDiff, Status};
+use odc_core::repo::{
+    ChangeKind, DiffKind, EntryDiff, EntryWriteOutcome, FieldDiff, Status, WorkingResolution,
+};
 use odc_core::{import_mdx, Def, Entry, ImportProgress, MdxImportOptions, MdxImportReport, Repo};
 use serde_json::{json, Map, Value as JsonValue};
 
@@ -322,6 +324,43 @@ pub unsafe extern "C" fn odc_repo_entry_link_json(
             .resolve_link(&key)
             .map_err(|error| error.to_string())?;
         to_c_string(&link_resolution_json(&resolution))
+    })
+}
+
+/// Resolve a word through `@@@LINK=` redirects, preferring uncommitted
+/// working-set edits.
+///
+/// Same JSON shape as [`odc_repo_entry_link_json`], plus the `deleted`
+/// status for a word that HEAD still carries but the working set removed:
+///
+/// * `found` — `~{ requested, key, hops, entry }`; `entry` is the working
+///   copy when the edit is uncommitted;
+/// * `deleted` — `~{ requested }`; do not fall back to the committed body;
+/// * `missing`, `cycle`, `too_long`, `not_found` — as for
+///   [`odc_repo_entry_link_json`].
+///
+/// # Safety
+///
+/// `repo` must be `NULL` or a live handle; `key_utf8` must be `NULL` or a
+/// NUL-terminated UTF-8 string; `error_message` must be `NULL` or point to
+/// writable storage for one `char *`.
+#[no_mangle]
+pub unsafe extern "C" fn odc_repo_entry_link_working_json(
+    repo: *const OdcRepo,
+    key_utf8: *const c_char,
+    error_message: *mut *mut c_char,
+) -> *mut c_char {
+    guarded(error_message, ptr::null_mut(), || {
+        let repo = repo_ref(repo)?;
+        let key = text_arg(key_utf8, "key")?;
+        if key.trim().is_empty() {
+            return Err("key must not be empty".to_string());
+        }
+        let resolution = repo
+            .repo
+            .resolve_prefer_working(&key)
+            .map_err(|error| error.to_string())?;
+        to_c_string(&working_resolution_json(&resolution))
     })
 }
 
@@ -1374,6 +1413,54 @@ fn link_resolution_json(resolution: &LinkResolution) -> JsonValue {
             "requested": requested,
         }),
     }
+}
+
+/// JSON for [`WorkingResolution`].
+///
+/// Everything except `deleted` shares the wire shape with
+/// [`odc_repo_entry_link_json`], so the conversion goes through
+/// [`link_resolution_json`] rather than a second copy of the encoder.
+fn working_resolution_json(resolution: &WorkingResolution) -> JsonValue {
+    let as_link = match resolution {
+        WorkingResolution::Deleted { requested } => {
+            return json!({
+                "status": "deleted",
+                "requested": requested,
+            });
+        }
+        WorkingResolution::Found {
+            requested,
+            key,
+            hops,
+            entry,
+        } => LinkResolution::Found {
+            requested: requested.clone(),
+            key: key.clone(),
+            hops: *hops,
+            entry: entry.clone(),
+        },
+        WorkingResolution::Missing {
+            requested,
+            target,
+            hops,
+        } => LinkResolution::Missing {
+            requested: requested.clone(),
+            target: target.clone(),
+            hops: *hops,
+        },
+        WorkingResolution::Cycle { requested, chain } => LinkResolution::Cycle {
+            requested: requested.clone(),
+            chain: chain.clone(),
+        },
+        WorkingResolution::TooLong { requested, chain } => LinkResolution::TooLong {
+            requested: requested.clone(),
+            chain: chain.clone(),
+        },
+        WorkingResolution::NotFound { requested } => LinkResolution::NotFound {
+            requested: requested.clone(),
+        },
+    };
+    link_resolution_json(&as_link)
 }
 
 fn entry_to_json(entry: &Entry) -> JsonValue {

@@ -47,6 +47,9 @@ public final class DictionaryStore {
         guard let activeDictionaryID else { return [] }
         return searchGroups.first { $0.dictionaryID == activeDictionaryID }?.hits ?? []
     }
+    /// Shown when the working set deleted the entry the reader asked for.
+    static let workingDeletedNotice = "该词条已在工作区删除（未提交）"
+
     /// Key of the entry currently shown.
     public private(set) var selectedKey: String?
     /// The entry for the current selection, once loaded.
@@ -190,7 +193,23 @@ public final class DictionaryStore {
         } else {
             setQuery(query)
         }
+        reloadSelectedEntry()
         refreshEntrySections()
+    }
+
+    /// Pick up a save without touching search history or the query.
+    private func reloadSelectedEntry() {
+        guard let key = selectedKey, let dictionary = activeHandle else { return }
+        switch try? dictionary.resolvePreferWorking(key) {
+        case let .entry(loaded, _, _)?:
+            entry = loaded
+            noticeMessage = nil
+        case .deleted?:
+            entry = nil
+            noticeMessage = Self.workingDeletedNotice
+        default:
+            break
+        }
     }
 
     // MARK: - Opening and closing
@@ -1150,17 +1169,13 @@ public final class DictionaryStore {
             entrySections = []
             return
         }
-        let activeID = activeDictionaryID
         var sections: [DictionaryEntrySection] = []
         for dictionary in orderedOpenDictionaries() {
-            // The active dictionary already holds the resolved entry (and its
-            // history side effects); the others are looked up quietly.
-            let resolved: (entry: DictionaryEntry, notice: String?)?
-            if dictionary.id == activeID, let entry = self.entry, entry.key == key {
-                resolved = (entry, nil)
-            } else {
-                resolved = resolveSection(key: key, dictionaryID: dictionary.id)
-            }
+            // Every dictionary goes through the working-set-aware lookup,
+            // including the active one: after a save `entry` still holds the
+            // committed copy, so reusing it would keep showing stale text.
+            let resolved: (entry: DictionaryEntry, notice: String?)? =
+                resolveSection(key: key, dictionaryID: dictionary.id)
             guard let resolved else { continue }
             sections.append(
                 DictionaryEntrySection(
@@ -1192,12 +1207,23 @@ public final class DictionaryStore {
         key: String,
         dictionaryID: UUID
     ) -> (entry: DictionaryEntry, notice: String?)? {
-        guard let handle = handles[dictionaryID], let result = try? handle.resolve(key) else {
+        guard let handle = handles[dictionaryID],
+              let result = try? handle.resolvePreferWorking(key)
+        else { return nil }
+        switch result {
+        case let .entry(entry, requestedKey, _):
+            let notice = entry.key == requestedKey ? nil : "重定向到 \(entry.key)"
+            return (entry, notice)
+        case let .deleted(requested):
+            // Keep the section renderable: the notice carries the message and
+            // the empty entry only supplies the header.
+            return (
+                DictionaryEntry(key: requested, display: requested),
+                Self.workingDeletedNotice
+            )
+        default:
             return nil
         }
-        guard case let .entry(entry, requestedKey, _) = result else { return nil }
-        let notice = entry.key == requestedKey ? nil : "重定向到 \(entry.key)"
-        return (entry, notice)
     }
 
     /// Load `key` from the active dictionary and show it.
@@ -1209,7 +1235,7 @@ public final class DictionaryStore {
         errorMessage = nil
         noticeMessage = nil
         do {
-            switch try dictionary.resolve(key) {
+            switch try dictionary.resolvePreferWorking(key) {
             case let .entry(loaded, requestedKey, _):
                 guard selectedKey == key else { return }
                 entry = loaded
@@ -1231,6 +1257,12 @@ public final class DictionaryStore {
             case let .tooLong(chain):
                 entry = previous
                 noticeMessage = "重定向层数过多：\(chain.joined(separator: " → "))"
+            case .deleted:
+                guard selectedKey == key else { return }
+                // Never fall back to the committed body: the reader must see
+                // that the working set removed the word.
+                entry = nil
+                noticeMessage = Self.workingDeletedNotice
             case let .notFound(requested):
                 entry = previous
                 noticeMessage = "词典中没有这个词：\(requested)"
