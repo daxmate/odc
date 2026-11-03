@@ -6,7 +6,12 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ## [Unreleased]
 
-_暂无。_
+### Added
+
+* CLI: `odc fetch --from <repo> --depth N` deepens a shallow export from another
+  ODC repository without touching the network. Missing commits, their index
+  snapshots and the source block store are copied inside one transaction;
+  reaching genesis clears `meta.shallow` (see `docs/shallow.md`).
 
 ## [0.10.0] - 2026-11-03
 

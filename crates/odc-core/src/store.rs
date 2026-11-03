@@ -339,6 +339,12 @@ pub fn set_meta(connection: &Connection, key: &str, value: &[u8]) -> Result<()> 
     Ok(())
 }
 
+/// Delete a meta row; missing keys are ignored.
+pub fn remove_meta(connection: &Connection, key: &str) -> Result<()> {
+    connection.execute("DELETE FROM meta WHERE key = ?1", rusqlite::params![key])?;
+    Ok(())
+}
+
 /// Read a meta row.
 pub fn get_meta(connection: &Connection, key: &str) -> Result<Option<Vec<u8>>> {
     let value: Option<Vec<u8>> = connection

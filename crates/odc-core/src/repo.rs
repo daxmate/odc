@@ -652,6 +652,11 @@ impl Repo {
         &self.dir
     }
 
+    /// SQLite file backing the repository, whichever form it was opened in.
+    pub(crate) fn database_path(&self) -> &Path {
+        &self.db_path
+    }
+
     /// Whether this repository starts at HEAD and expects missing parents.
     pub fn is_shallow(&self) -> Result<bool> {
         pack::is_shallow(&self.connection)
@@ -2257,7 +2262,10 @@ impl Repo {
     /// A shallow pack keeps one commit, so an index that points at a parent
     /// would be unreadable in the destination. Returns the rebuilt bytes, or
     /// `None` when the stored entry is already a full snapshot.
-    fn materialized_head_index(&self, hash: &[u8; 32]) -> Result<Option<(u64, Vec<u8>)>> {
+    pub(crate) fn materialized_head_index(
+        &self,
+        hash: &[u8; 32],
+    ) -> Result<Option<(u64, Vec<u8>)>> {
         if index::index_header(&self.connection, hash)?
             .is_some_and(|header| header.kind == snapshot::EntryKind::Full)
         {

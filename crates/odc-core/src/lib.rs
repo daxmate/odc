@@ -20,6 +20,7 @@ pub mod cbor;
 pub mod cdc;
 pub mod entry;
 pub mod error;
+pub mod fetch;
 pub mod hash;
 pub mod html;
 mod index;

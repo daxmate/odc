@@ -125,6 +125,18 @@ enum Command {
         #[arg(long)]
         force: bool,
     },
+    /// Deepen a shallow repository from another ODC repository (offline).
+    Fetch {
+        /// Source repository: a repository directory or a packed .odc file.
+        #[arg(long)]
+        from: PathBuf,
+        /// Total commits visible from HEAD once the fetch finishes.
+        #[arg(long)]
+        depth: u32,
+        /// Print the result as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Compare two revisions (word level).
     Diff {
         /// Base revision (HEAD, HEAD~1 or a hash prefix).
@@ -566,6 +578,34 @@ fn run() -> odc_core::Result<ExitCode> {
                 report.entries,
                 report.bytes
             );
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Fetch { from, depth, json } => {
+            let mut repo = Repo::open(&cli.repo)?;
+            let report = odc_core::fetch::deepen(&mut repo, &from, depth)?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json!({
+                        "depth": report.depth_requested,
+                        "commits_added": report.commits_added,
+                        "commit_index_added": report.commit_index_added,
+                        "blocks_added": report.blocks_added,
+                        "complete": report.complete,
+                    }))
+                    .unwrap_or_default()
+                );
+            } else if report.complete {
+                println!(
+                    "fetched to depth {}: {} commits and {} blocks added, history complete",
+                    report.depth_requested, report.commits_added, report.blocks_added
+                );
+            } else {
+                println!(
+                    "fetched to depth {}: {} commits and {} blocks added (still shallow)",
+                    report.depth_requested, report.commits_added, report.blocks_added
+                );
+            }
             Ok(ExitCode::SUCCESS)
         }
         Command::Diff { from, to, json } => {

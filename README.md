@@ -89,6 +89,7 @@ odc --repo ./demo export --format jsonl -o dump.jsonl
 | `odc search --prefix P [-n N] [--json]` | 前缀查询（走索引） |
 | `odc export --format jsonl\|csv [-o FILE]` | 导出全部已提交词条 |
 | `odc pack [-o FILE] [--shallow] [--force]` | 导出为单个 .odc 文件（`--shallow` 只含 HEAD，见 `docs/shallow.md`） |
+| `odc fetch --from SRC --depth N [--json]` | 浅仓库沿 first-parent 链离线补齐历史（见 `docs/shallow.md`） |
 | `odc diff A B [--json]` | 词条级差异（added / removed / modified） |
 | `odc status` | 工作区状态 |
 | `odc verify` | 全量校验块、索引与提交 |
