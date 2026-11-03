@@ -80,7 +80,15 @@ impl Drop for Fixture {
 }
 
 fn options() -> MdxImportOptions {
-    MdxImportOptions::default()
+    // These tests cover corrupt-block recovery and record plumbing, not the
+    // HTML formatter, and their fixtures are unbreakable 8 KiB text runs.
+    MdxImportOptions {
+        html: odc_core::html::HtmlOptions {
+            mode: odc_core::html::HtmlMode::Off,
+            ..odc_core::html::HtmlOptions::default()
+        },
+        ..MdxImportOptions::default()
+    }
 }
 
 fn corrupt_fixture(label: &str, count: usize) -> Fixture {

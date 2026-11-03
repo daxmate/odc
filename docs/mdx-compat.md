@@ -48,6 +48,60 @@
 * **跳过规则**：空键（trim 后为空）与超过 1 MiB 的记录被跳过并计数；
   `odc import --format mdx` 会输出跳过/去重统计。
 
+## HTML 规范化与警告
+
+0.9.0 起，MDX 导入默认把每条记录的正文当作 HTML5 **片段**处理（`--html format`）：
+
+1. `html5ever` 以 `<div>` 为上下文解析片段，按 HTML5 树构建规则修复未闭合、
+   错配的标签，并收集解析错误；
+2. 删除 `script`、`iframe`、`object`、`embed`、`on*` 事件属性以及
+   `javascript:` URL；
+3. `<style>` 块与 `style` 属性交给 `lightningcss` 解析并重写
+   （`style` 属性始终输出为单行）；
+4. 序列化后用 `markup_fmt` 格式化，空白敏感度固定为 **Strict**。
+
+`--html check` 只做诊断，输出与输入逐字节相同；`--html off` 完全不解析，
+恢复到 0.8 的行为。两条路径（打包导入与目录仓库导入）共用同一个管道。
+
+### 诊断码
+
+| code | 含义 |
+| --- | --- |
+| `html.parse_error` | HTML5 解析 / 树构建错误（未闭合标签等） |
+| `html.removed_element` | 删除了危险元素 |
+| `html.removed_attribute` | 删除了事件属性 |
+| `html.unsafe_url` | 删除了 `javascript:` URL |
+| `css.parse_error` | `lightningcss` 无法解析的 CSS |
+| `format.failed` | `markup_fmt` 无法格式化该条正文 |
+
+### 失败策略
+
+* 格式化失败：**原 HTML 原样入库**，计 `entries_failed`，告警
+  `format.failed`，导入不中断。
+* CSS 解析失败：保留该块 / 属性的原文，只告警 `css.parse_error`。
+* 原始 HTML 不另存副本；源 `.mdx` 即底稿。
+
+### 为什么必须是 Strict
+
+`markup_fmt` 默认的 CSS 空白敏感度会在相邻内联元素之间插入空白，改变渲染
+文本。spike 实测：COCA 文本等价率 **0%**、LDOCE 43.7%；`Strict` 在 4 本真实
+词典上均为 **100%**。默认值写在 `HtmlOptions::default()`，并由
+`inline_neighbours_keep_text` 回归测试守住。
+
+### 报告与独立命令
+
+`MdxImportReport::html` 汇总 `entries_checked` / `entries_changed` /
+`entries_failed`、按 code 的计数、每 code 最多 20 条样例（headword + message）
+以及 `css_entries` / `css_changed`。CLI 导入结束打印一行汇总、每类计数和少量
+样例。
+
+* `odc check-html [PATH]`：`PATH` 为 `.mdx` 时检查该文件，省略时用
+  `for_each_entry` 检查仓库全部词条；只读，不取写锁、不产生 commit。
+  `--json` 输出稳定结构，`--limit N` 限制条数。
+* `odc normalize`：默认 dry-run，报告将改动多少条及诊断；`--apply` 要求工作
+  集干净，只改 `raw_html`，通过 `Repo::import`（`prune=false`）写工作集再
+  `commit`，提交信息 `normalize HTML for N entries (odc 0.9.0)`；无改动不提交。
+
 ## 实测（release 构建，Apple Silicon，本机样本）
 
 | 样本 | 词条数 | 导入耗时 | 导入峰值内存 | commit 耗时 | commit 峰值内存 |

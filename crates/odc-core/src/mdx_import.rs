@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crate::error::{Error, Result};
+use crate::html::{self, HtmlImportSummary, HtmlMode, HtmlOptions};
 use crate::mdd_import::{self, MddImportReport, MddScan, MddVolumeReport};
 use crate::mdx::{entry_from_record, MdxHeader, MdxKeys, MdxSource};
 use crate::mdx_scan::{self, CorruptBlock};
@@ -27,6 +28,11 @@ pub struct MdxImportOptions {
     pub prune: bool,
     /// Stop after this many accepted entries.
     pub limit: Option<usize>,
+    /// How entry bodies are repaired, sanitised and formatted.
+    ///
+    /// Defaults to [`HtmlMode::Format`]: MDX imports normalise HTML unless the
+    /// caller opts out.
+    pub html: HtmlOptions,
     /// Called with samples of the import progress.
     ///
     /// Samples are stage-scoped: `done` and `total` count records of the
@@ -54,6 +60,7 @@ impl Default for MdxImportOptions {
             skip_corrupt_blocks: true,
             prune: false,
             limit: None,
+            html: HtmlOptions::default(),
             progress: None,
             import_mdd: true,
             mdd_volumes: None,
@@ -241,6 +248,8 @@ pub struct MdxImportReport {
     /// Stylesheets copied from beside the .mdx because the volumes lacked
     /// them; zero when every sheet came out of the .mdd.
     pub stylesheets: usize,
+    /// HTML repair, sanitiser and formatter tallies for this import.
+    pub html: HtmlImportSummary,
 }
 
 /// Import an MDX file into `repo`.
@@ -262,8 +271,10 @@ pub fn import_mdx(
         progress,
         import_mdd,
         mdd_volumes,
+        html,
     } = options;
     let mut reporter = ProgressSink::new(progress);
+    let mut html_summary = HtmlImportSummary::default();
 
     // The repaired copy owns a temporary file that is removed when dropped, so
     // it stays alive until the import (including error paths) has finished.
@@ -336,7 +347,7 @@ pub fn import_mdx(
             let Some(record) = records.next() else {
                 return Ok(None);
             };
-            let record = record?;
+            let mut record = record?;
             processed += 1;
             reporter.send(ImportProgress {
                 stage: ImportStage::Entries,
@@ -352,6 +363,17 @@ pub fn import_mdx(
             if skipped_blocks > 0 && mdx_scan::is_sentinel_payload(&record.html) {
                 skipped_entries += 1;
                 continue;
+            }
+            // The sentinel check ran on the original payload; from here on the
+            // body is a normal entry and may be repaired, sanitised and
+            // formatted. A formatting failure keeps the original text.
+            if html.mode != HtmlMode::Off {
+                let outcome = html::process_html(&record.html, &html);
+                let changed = outcome.changed && !outcome.failed;
+                if changed {
+                    record.html.clone_from(&outcome.html);
+                }
+                html_summary.record(record.key.trim(), &outcome, changed, html.max_samples);
             }
             let mut entry = match entry_from_record(&record) {
                 Ok(entry) => entry,
@@ -425,6 +447,7 @@ pub fn import_mdx(
         resource_count: mdd.resources,
         resource_bytes: mdd.resource_bytes,
         warnings,
+        html: html_summary,
     })
 }
 

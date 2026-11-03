@@ -19,6 +19,7 @@ pub mod cdc;
 pub mod entry;
 pub mod error;
 pub mod hash;
+pub mod html;
 mod index;
 pub mod link;
 pub mod mdd_import;

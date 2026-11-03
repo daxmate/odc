@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 use odc_core::cbor;
 use odc_core::entry::{normalize_key, Def, Entry};
 use odc_core::hash;
+use odc_core::html::{HtmlImportSummary, HtmlMode, HtmlOptions};
 use odc_core::link::LinkResolution;
 use odc_core::merge::{self, Choice, MergeKind, MergeOutcome, Strategy};
 use odc_core::patch;
@@ -48,6 +49,9 @@ enum Command {
         /// Print progress to stderr (MDX only).
         #[arg(long)]
         progress: bool,
+        /// HTML handling for imported entry bodies (MDX only).
+        #[arg(long, value_parser = ["format", "check", "off"], default_value = "format")]
+        html: String,
     },
     /// Record the working set as a new commit.
     Commit {
@@ -187,6 +191,26 @@ enum Command {
     },
     /// Show the working set relative to HEAD.
     Status,
+    /// Check entry HTML without writing anything.
+    CheckHtml {
+        /// MDX file to inspect (default: every entry of the repository).
+        path: Option<PathBuf>,
+        /// Print a JSON report.
+        #[arg(long)]
+        json: bool,
+        /// Stop after this many entries (debugging aid).
+        #[arg(short = 'n', long)]
+        limit: Option<usize>,
+    },
+    /// Normalise entry HTML in the working set.
+    Normalize {
+        /// Write the result instead of only reporting it.
+        #[arg(long)]
+        apply: bool,
+        /// Print a JSON report.
+        #[arg(long)]
+        json: bool,
+    },
     /// Patch creation and application (specified, implemented in M3).
     Patch {
         #[command(subcommand)]
@@ -255,10 +279,11 @@ fn run() -> odc_core::Result<ExitCode> {
             prune,
             limit,
             progress,
+            html,
         } => {
             let mut repo = Repo::open(&cli.repo)?;
             if format == "mdx" {
-                return import_mdx(&mut repo, &file, prune, limit, progress);
+                return import_mdx(&mut repo, &file, prune, limit, progress, &html);
             }
             let entries = if format == "csv" {
                 read_csv(&file)?
@@ -610,6 +635,10 @@ fn run() -> odc_core::Result<ExitCode> {
             );
             Ok(ExitCode::SUCCESS)
         }
+        Command::CheckHtml { path, json, limit } => {
+            check_html(&cli.repo, path.as_deref(), json, limit)
+        }
+        Command::Normalize { apply, json } => normalize_html(&cli.repo, apply, json),
         Command::Patch { command } => match run_patch(&cli.repo, command) {
             Ok(code) => Ok(code),
             Err(error) => {
@@ -990,6 +1019,7 @@ fn import_mdx(
     prune: bool,
     limit: Option<usize>,
     progress: bool,
+    html: &str,
 ) -> odc_core::Result<ExitCode> {
     use odc_core::mdx::MdxSource;
     use odc_core::MdxImportOptions;
@@ -1013,10 +1043,15 @@ fn import_mdx(
     );
 
     let mut tally = ProgressTally::default();
+    let html = HtmlMode::from_name(html).unwrap_or(HtmlMode::Format);
     let options = MdxImportOptions {
         skip_corrupt_blocks: true,
         prune,
         limit,
+        html: HtmlOptions {
+            mode: html,
+            ..HtmlOptions::default()
+        },
         import_mdd: true,
         mdd_volumes: None,
         progress: if progress {
@@ -1084,6 +1119,7 @@ fn import_mdx(
             report.stylesheets
         );
     }
+    print_html_summary("html", html.name(), &report.html);
     if report.skipped_blocks > 0 {
         println!(
             "mdx: skipped {} corrupt record block{} ({} entries)",
@@ -1091,6 +1127,187 @@ fn import_mdx(
             if report.skipped_blocks == 1 { "" } else { "s" },
             report.skipped_entries
         );
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// JSON shape shared by `check-html` and `normalize`.
+fn html_summary_json(summary: &HtmlImportSummary) -> serde_json::Value {
+    let samples: Vec<serde_json::Value> = summary
+        .samples
+        .iter()
+        .map(|sample| {
+            json!({
+                "headword": sample.headword,
+                "code": sample.code,
+                "message": sample.message,
+            })
+        })
+        .collect();
+    json!({
+        "entries_checked": summary.entries_checked,
+        "entries_changed": summary.entries_changed,
+        "entries_failed": summary.entries_failed,
+        "css_entries": summary.css_entries,
+        "css_changed": summary.css_changed,
+        "diagnostics": summary.diagnostics,
+        "samples": samples,
+    })
+}
+
+fn print_html_summary(prefix: &str, mode: &str, summary: &HtmlImportSummary) {
+    println!(
+        "{prefix}: {} checked, {} changed, {} failed (mode {mode})",
+        summary.entries_checked, summary.entries_changed, summary.entries_failed
+    );
+    if summary.css_entries > 0 {
+        println!(
+            "{prefix}: {} entries with CSS, {} rewritten",
+            summary.css_entries, summary.css_changed
+        );
+    }
+    for (code, count) in &summary.diagnostics {
+        println!("{prefix}: {code} {count}");
+    }
+    for sample in &summary.samples {
+        println!(
+            "{prefix} sample [{}] {}: {}",
+            sample.code, sample.headword, sample.message
+        );
+    }
+}
+
+/// `odc check-html`: read-only HTML diagnostics for an MDX file or a repository.
+fn check_html(
+    repo_path: &std::path::Path,
+    path: Option<&std::path::Path>,
+    json: bool,
+    limit: Option<usize>,
+) -> odc_core::Result<ExitCode> {
+    let options = HtmlOptions {
+        mode: HtmlMode::Check,
+        ..HtmlOptions::default()
+    };
+    let mut summary = HtmlImportSummary::default();
+    match path {
+        Some(file) => {
+            let source = odc_core::mdx::MdxSource::open(file)?;
+            for (seen, record) in source.records().enumerate() {
+                if limit.is_some_and(|cap| seen >= cap) {
+                    break;
+                }
+                let record = record?;
+                let outcome = odc_core::html::process_html(&record.html, &options);
+                summary.record(record.key.trim(), &outcome, false, options.max_samples);
+            }
+        }
+        None => {
+            let repo = Repo::open(repo_path)?;
+            let mut seen = 0_usize;
+            repo.for_each_entry(|entry| {
+                if limit.is_some_and(|cap| seen >= cap) {
+                    return Ok(());
+                }
+                if let Some(html) = entry.raw_html.as_deref() {
+                    let outcome = odc_core::html::process_html(html, &options);
+                    summary.record(&entry.display, &outcome, false, options.max_samples);
+                    seen += 1;
+                }
+                Ok(())
+            })?;
+        }
+    }
+    if json {
+        let payload = json!({
+            "mode": "check",
+            "summary": html_summary_json(&summary),
+        });
+        let line = serde_json::to_string(&payload)
+            .map_err(|error| odc_core::Error::InvalidArgument(error.to_string()))?;
+        println!("{line}");
+    } else {
+        print_html_summary("html", "check", &summary);
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `odc normalize`: rewrite `raw_html` in the working set (dry-run by default).
+fn normalize_html(
+    repo_path: &std::path::Path,
+    apply: bool,
+    json: bool,
+) -> odc_core::Result<ExitCode> {
+    let options = HtmlOptions {
+        mode: HtmlMode::Format,
+        ..HtmlOptions::default()
+    };
+    let mut repo = Repo::open(repo_path)?;
+    if apply {
+        let status = repo.working_status()?;
+        if !status.is_clean() {
+            return Err(odc_core::Error::InvalidArgument(
+                "normalize --apply needs a clean working set; commit or discard changes first"
+                    .to_string(),
+            ));
+        }
+    }
+    let mut summary = HtmlImportSummary::default();
+    let mut changed_entries: Vec<Entry> = Vec::new();
+    repo.for_each_entry(|mut entry| {
+        if let Some(html) = entry.raw_html.as_deref() {
+            let outcome = odc_core::html::process_html(html, &options);
+            let changed = outcome.changed && !outcome.failed;
+            if changed {
+                entry.raw_html = Some(outcome.html.clone());
+                changed_entries.push(entry.clone());
+            }
+            summary.record(&entry.display, &outcome, changed, options.max_samples);
+        }
+        Ok(())
+    })?;
+
+    let mut commit = None;
+    if apply && !changed_entries.is_empty() {
+        repo.import(&changed_entries, false)?;
+        let message = format!(
+            "normalize HTML for {} entries (odc {})",
+            changed_entries.len(),
+            env!("CARGO_PKG_VERSION")
+        );
+        let outcome = repo.commit(&message, odc_core::DEFAULT_AUTHOR, now())?;
+        let hex = hash::to_hex(&outcome.commit.hash);
+        println!(
+            "normalize: committed {} entries as [{}] {}",
+            outcome.entries,
+            &hex[..12],
+            outcome.commit.message
+        );
+        commit = Some(hex);
+    }
+
+    if json {
+        let payload = json!({
+            "mode": "normalize",
+            "applied": apply,
+            "entries_updated": changed_entries.len(),
+            "commit": commit,
+            "summary": html_summary_json(&summary),
+        });
+        let line = serde_json::to_string(&payload)
+            .map_err(|error| odc_core::Error::InvalidArgument(error.to_string()))?;
+        println!("{line}");
+    } else {
+        let mode = if apply { "format" } else { "format, dry run" };
+        print_html_summary("normalize", mode, &summary);
+        if !apply {
+            println!(
+                "normalize: {} of {} entries would change (pass --apply to write)",
+                changed_entries.len(),
+                summary.entries_checked
+            );
+        } else if changed_entries.is_empty() {
+            println!("normalize: no changes");
+        }
     }
     Ok(ExitCode::SUCCESS)
 }

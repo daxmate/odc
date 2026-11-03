@@ -49,11 +49,14 @@ CSV 也可（表头 `word,display,definition[,pos]`）：
 odc --repo ./demo import words.csv --format csv --prune
 ```
 
-MDict `.mdx` 词典（1.2 / 2.0）可直接导入，词条保留原 HTML：
+MDict `.mdx` 词典（1.2 / 2.0）可直接导入；词条 HTML 默认在导入时修复、清洗并格式化（`--html off` 关闭，`--html check` 只告警）：
 
 ```bash
 odc --repo ./demo import LDOCE6.mdx --format mdx
 odc --repo ./demo commit -m "import LDOCE6"
+odc --repo ./demo check-html            # 只读检查已提交词条
+odc normalize --repo ./demo             # dry-run：报告将改动多少条
+odc normalize --repo ./demo --apply     # 写回 raw_html 并提交
 odc --repo ./demo lookup apple --json
 odc --repo ./demo search --prefix app
 odc --repo ./demo export --format jsonl -o dump.jsonl
@@ -76,7 +79,9 @@ odc --repo ./demo export --format jsonl -o dump.jsonl
 | 命令 | 作用 |
 | --- | --- |
 | `odc init` | 新建仓库（含 genesis 提交） |
-| `odc import FILE --format jsonl\|csv\|mdx [--prune] [--limit N] [--progress]` | 导入 / 更新工作区（MDX 支持限量与进度） |
+| `odc import FILE --format jsonl\|csv\|mdx [--prune] [--limit N] [--progress] [--html format\|check\|off]` | 导入 / 更新工作区（MDX 支持限量、进度与 HTML 模式） |
+| `odc check-html [FILE] [--json] [-n N]` | 只读检查 MDX 文件或仓库词条的 HTML / CSS |
+| `odc normalize [--apply] [--json]` | 规范化工作区 HTML（默认 dry-run，`--apply` 写回并提交） |
 | `odc commit -m MSG` | 提交工作区 |
 | `odc log [-n N] [--json]` | 历史 |
 | `odc show WORD [--json]` | 查询词条 |

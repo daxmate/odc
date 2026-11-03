@@ -1055,6 +1055,24 @@ fn import_report_to_json(report: &MdxImportReport, output_bytes: u64) -> JsonVal
         "resource_count": report.resource_count,
         "resource_bytes": report.resource_bytes,
         "warnings": report.warnings,
+        "html": {
+            "entries_checked": report.html.entries_checked,
+            "entries_changed": report.html.entries_changed,
+            "entries_failed": report.html.entries_failed,
+            "css_entries": report.html.css_entries,
+            "css_changed": report.html.css_changed,
+            "diagnostics": report.html.diagnostics,
+            "samples": report
+                .html
+                .samples
+                .iter()
+                .map(|sample| json!({
+                    "headword": sample.headword,
+                    "code": sample.code,
+                    "message": sample.message,
+                }))
+                .collect::<Vec<_>>(),
+        },
         "header": {
             "engine_version": report.header.engine_version.as_str(),
             "required_engine_version": report.header.required_engine_version.as_str(),
