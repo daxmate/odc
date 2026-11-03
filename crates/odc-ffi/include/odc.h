@@ -259,6 +259,32 @@ int32_t odc_import_mdx_to_odc_with_mdd_progress(
     const char *mdx_path, const char *out_odc_path, const char *mdd_paths_json,
     odc_import_progress_fn callback, void *context, char **report_json_out,
     char **error_message);
+/*
+ * Import an MDX file into a new directory repository (an editable library).
+ *
+ * repo_dir must be absent or an empty directory; anything else is refused so
+ * an existing library is never overwritten. The call imports entries and MDD
+ * resources, then commits them, so HEAD exists when the function returns.
+ * On failure a directory created by this call is removed again.
+ *
+ * The report carries the same fields as odc_import_mdx_to_odc plus
+ * repo_path, commit and is_directory.
+ */
+int32_t odc_import_mdx_to_repo_with_mdd_progress(
+    const char *mdx_path, const char *repo_dir, const char *mdd_paths_json,
+    odc_import_progress_fn callback, void *context, char **report_json_out,
+    char **error_message);
+
+/*
+ * Copy a single-file pack into a new directory repository without touching
+ * the source file. repo_dir must be absent or empty.
+ *
+ * The report is {"repo_path", "commit", "entries", "is_directory"}.
+ */
+int32_t odc_copy_pack_to_repo(
+    const char *pack_path, const char *repo_dir, char **report_json_out,
+    char **error_message);
+
 
 /*
  * Release a string returned by this library. Passing NULL is a no-op.

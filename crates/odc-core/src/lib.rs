@@ -24,6 +24,7 @@ pub mod link;
 pub mod mdd_import;
 pub mod mdx;
 pub mod mdx_import;
+pub mod mdx_repo_import;
 pub mod mdx_scan;
 pub mod merge;
 pub mod pack;
@@ -38,6 +39,9 @@ pub use entry::{Def, Entry};
 pub use error::{Error, Result};
 pub use mdd_import::{MddImportReport, MddProgress, MddScan, MddVolumeReport};
 pub use mdx_import::{import_mdx, ImportProgress, ImportStage, MdxImportOptions, MdxImportReport};
+pub use mdx_repo_import::{
+    copy_pack_to_repo, import_mdx_to_repo, MdxRepoImportReport, PackRepoConversion,
+};
 pub use repo::{
     CommitOutcome, CommitRecord, Diff, GcReport, ImportReport, Repo, Status, VerifyReport,
     DEFAULT_AUTHOR,

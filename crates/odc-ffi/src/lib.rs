@@ -33,6 +33,10 @@ use odc_core::repo::{ChangeKind, DiffKind, EntryDiff, EntryWriteOutcome, FieldDi
 use odc_core::{import_mdx, Def, Entry, ImportProgress, MdxImportOptions, MdxImportReport, Repo};
 use serde_json::{json, Map, Value as JsonValue};
 
+mod mdx_dir;
+
+pub use mdx_dir::{odc_copy_pack_to_repo, odc_import_mdx_to_repo_with_mdd_progress};
+
 /// Largest accepted `limit` for [`odc_repo_search_json`].
 const MAX_SEARCH_LIMIT: i32 = 200;
 

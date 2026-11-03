@@ -11,7 +11,8 @@ use odc_core::cbor::Value as CborValue;
 use odc_core::mdx_scan::{scan, ScanOutcome};
 use odc_core::{Def, Entry, Repo};
 use odc_ffi::{
-    odc_import_mdx_to_odc, odc_import_mdx_to_odc_with_mdd, odc_import_mdx_to_odc_with_mdd_progress,
+    odc_copy_pack_to_repo, odc_import_mdx_to_odc, odc_import_mdx_to_odc_with_mdd,
+    odc_import_mdx_to_odc_with_mdd_progress, odc_import_mdx_to_repo_with_mdd_progress,
     odc_repo_close, odc_repo_commit_json, odc_repo_discard_json, odc_repo_entries_page_json,
     odc_repo_entry_count, odc_repo_entry_delete_json, odc_repo_entry_diff_json,
     odc_repo_entry_json, odc_repo_entry_put_json, odc_repo_open, odc_repo_resource_copy,
@@ -936,4 +937,131 @@ fn editing_calls_report_errors() {
 
     // SAFETY: the handle is closed exactly once and not used afterwards.
     unsafe { odc_repo_close(repo) };
+}
+
+#[test]
+fn import_into_repo_writes_an_editable_library() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mdx = dir.path().join("dictionary.mdx");
+    write_mdx_fixture(&mdx, 3);
+    let repo_dir = dir.path().join("library.odc");
+    let mdx_text = CString::new(mdx.to_str().expect("path")).expect("mdx path");
+    let repo_text = CString::new(repo_dir.to_str().expect("path")).expect("repo path");
+    let mut report: *mut c_char = ptr::null_mut();
+    let mut error: *mut c_char = ptr::null_mut();
+    // SAFETY: both arguments are live C strings, the out slots are writable and
+    // no callback or context is passed.
+    let code = unsafe {
+        odc_import_mdx_to_repo_with_mdd_progress(
+            mdx_text.as_ptr(),
+            repo_text.as_ptr(),
+            ptr::null(),
+            None,
+            ptr::null_mut(),
+            &mut report,
+            &mut error,
+        )
+    };
+    assert_eq!(code, 0, "import failed: {:?}", take_error_if_any(error));
+    let payload: Value = serde_json::from_str(&take_string(report)).expect("report json");
+    assert_eq!(payload["is_directory"], Value::Bool(true));
+    assert_eq!(payload["imported_entries"], Value::from(3));
+    assert_eq!(
+        payload["repo_path"].as_str().expect("repo path"),
+        repo_dir.to_str().expect("path")
+    );
+    assert_eq!(
+        payload["commit"].as_str().expect("commit").len(),
+        64,
+        "commit is a 32-byte hex hash"
+    );
+
+    let repo = Repo::open(&repo_dir).expect("open library");
+    assert!(!repo.is_read_only(), "an imported library must be editable");
+    assert!(repo.head().expect("head").is_some());
+    assert!(repo.entry_count().expect("count") >= 3);
+}
+
+#[test]
+fn import_into_repo_refuses_an_existing_library() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mdx = dir.path().join("dictionary.mdx");
+    write_mdx_fixture(&mdx, 1);
+    let repo_dir = dir.path().join("library.odc");
+    std::fs::create_dir_all(&repo_dir).expect("dir");
+    std::fs::write(repo_dir.join("odc.db"), b"existing").expect("marker");
+    let mdx_text = CString::new(mdx.to_str().expect("path")).expect("mdx path");
+    let repo_text = CString::new(repo_dir.to_str().expect("path")).expect("repo path");
+    let mut report: *mut c_char = ptr::null_mut();
+    let mut error: *mut c_char = ptr::null_mut();
+    // SAFETY: as above.
+    let code = unsafe {
+        odc_import_mdx_to_repo_with_mdd_progress(
+            mdx_text.as_ptr(),
+            repo_text.as_ptr(),
+            ptr::null(),
+            None,
+            ptr::null_mut(),
+            &mut report,
+            &mut error,
+        )
+    };
+    assert_eq!(code, -1);
+    assert!(report.is_null(), "a failed import leaves no report");
+    let message = take_error_if_any(error).expect("error message");
+    assert!(
+        message.contains("already initialized"),
+        "unexpected message: {message}"
+    );
+    assert_eq!(
+        std::fs::read(repo_dir.join("odc.db")).expect("marker survives"),
+        b"existing".to_vec()
+    );
+}
+
+#[test]
+fn copy_pack_to_repo_reports_an_editable_copy() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mdx = dir.path().join("dictionary.mdx");
+    write_mdx_fixture(&mdx, 2);
+    let pack = dir.path().join("export.odc");
+    let pack_text = CString::new(pack.to_str().expect("path")).expect("pack path");
+    let mdx_text = CString::new(mdx.to_str().expect("path")).expect("mdx path");
+    let mut report: *mut c_char = ptr::null_mut();
+    let mut error: *mut c_char = ptr::null_mut();
+    // SAFETY: live C strings and writable out slots.
+    let code = unsafe {
+        odc_import_mdx_to_odc(
+            mdx_text.as_ptr(),
+            pack_text.as_ptr(),
+            &mut report,
+            &mut error,
+        )
+    };
+    assert_eq!(code, 0, "pack failed: {:?}", take_error_if_any(error));
+    let _ = take_string(report);
+
+    let copy_dir = dir.path().join("copy.odc");
+    let copy_text = CString::new(copy_dir.to_str().expect("path")).expect("copy path");
+    let mut copy_report: *mut c_char = ptr::null_mut();
+    let mut copy_error: *mut c_char = ptr::null_mut();
+    // SAFETY: as above.
+    let code = unsafe {
+        odc_copy_pack_to_repo(
+            pack_text.as_ptr(),
+            copy_text.as_ptr(),
+            &mut copy_report,
+            &mut copy_error,
+        )
+    };
+    assert_eq!(code, 0, "copy failed: {:?}", take_error_if_any(copy_error));
+    let payload: Value = serde_json::from_str(&take_string(copy_report)).expect("report json");
+    assert_eq!(payload["is_directory"], Value::Bool(true));
+    assert!(payload["entries"].as_u64().expect("entries") >= 2);
+
+    let copy = Repo::open(&copy_dir).expect("open copy");
+    assert!(!copy.is_read_only(), "the copy must be editable");
+    drop(copy);
+    let original = Repo::open(&pack).expect("open pack");
+    assert!(original.is_read_only(), "the pack stays read-only");
 }
