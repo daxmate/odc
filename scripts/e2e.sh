@@ -168,7 +168,8 @@ if [ "$MIRROR_HEAD" != "$PATCH_TARGET" ]; then
   exit 1
 fi
 "$ODC" --repo "$MIRROR" verify >/dev/null
-"$ODC" --repo "$MIRROR" status | grep -q "working set clean" || { echo "FAIL: patch apply left a dirty working set"; exit 1; }
+patch_status=$("$ODC" --repo "$MIRROR" status)
+grep -q "working set clean" <<<"$patch_status" || { echo "FAIL: patch apply left a dirty working set"; exit 1; }
 echo "ok: patch roundtrip produced the target commit with a clean working set"
 set +e
 "$ODC" --repo "$MIRROR" patch apply "$WORK/fix.odp" >/dev/null 2>&1
@@ -253,9 +254,12 @@ grep -q '"resolution": null' "$WORK/merge-conflicts.json" || { echo "FAIL: confl
 "$ODC" --repo "$MERGE" resolve alpha --ours
 "$ODC" --repo "$MERGE" merge --continue --json | tee "$WORK/merge-done.json"
 grep -q '"kind": "merged"' "$WORK/merge-done.json" || { echo "FAIL: merge --continue"; exit 1; }
-"$ODC" --repo "$MERGE" lookup alpha | grep -q "ours alpha" || { echo "FAIL: resolved payload"; exit 1; }
-"$ODC" --repo "$MERGE" status | grep -q "working set clean" || { echo "FAIL: merge status"; exit 1; }
-"$ODC" --repo "$MERGE" verify | grep -q "verify: OK" || { echo "FAIL: merge verify"; exit 1; }
+merge_lookup=$("$ODC" --repo "$MERGE" lookup alpha)
+grep -q "ours alpha" <<<"$merge_lookup" || { echo "FAIL: resolved payload"; exit 1; }
+merge_status=$("$ODC" --repo "$MERGE" status)
+grep -q "working set clean" <<<"$merge_status" || { echo "FAIL: merge status"; exit 1; }
+merge_verify=$("$ODC" --repo "$MERGE" verify)
+grep -q "verify: OK" <<<"$merge_verify" || { echo "FAIL: merge verify"; exit 1; }
 echo "ok: merge conflict resolved, merge commit verified"
 
 echo "e2e: PASS (workdir $WORK)"
