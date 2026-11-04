@@ -11,6 +11,7 @@ public protocol ODCEditing: AnyObject {
     func search(_ query: String, limit: Int) throws -> [SearchHit]
     func entry(for key: String) throws -> DictionaryEntry
     func upsert(_ entry: DictionaryEntry) throws -> EntryWriteResult
+    func deleteEntry(_ key: String) throws -> EntryWriteResult
     func workingStatus() throws -> WorkingStatus
     func workingChanges(after key: String?, limit: Int) throws -> [ChangeRow]
     func entryDiff(_ key: String) throws -> EntryDiff

@@ -154,6 +154,10 @@ public final class DictionaryEditorModel {
     public private(set) var committed = false
     public var author: String
 
+    /// Whether the session holds a step to undo / redo.
+    public private(set) var canUndo = false
+    public private(set) var canRedo = false
+
     @ObservationIgnored private let editing: ODCEditing
     @ObservationIgnored private let onCommitHandler: (() -> Void)?
     @ObservationIgnored private var loadedEntries: [DictionaryEntry] = []
@@ -162,14 +166,24 @@ public final class DictionaryEditorModel {
     @ObservationIgnored private var lastLoadedKey: String?
     @ObservationIgnored private var searching = false
 
+    /// Session-only undo/redo stacks; they die with the editor window.
+    @ObservationIgnored private var undoStack: [EditorSnapshot] = []
+    @ObservationIgnored private var redoStack: [EditorSnapshot] = []
+    @ObservationIgnored private var lastCoalescedField: String?
+    @ObservationIgnored private var lastCoalescedKey: String?
+    @ObservationIgnored private var lastCoalescedAt: Date?
+    @ObservationIgnored private let now: () -> Date
+
     public init(
         editing: ODCEditing,
         author: String = NSUserName(),
-        onCommit: (() -> Void)? = nil
+        onCommit: (() -> Void)? = nil,
+        now: @escaping () -> Date = { Date() }
     ) {
         self.editing = editing
         self.author = author
         self.onCommitHandler = onCommit
+        self.now = now
         self.status = WorkingStatus(
             added: 0,
             modified: 0,
@@ -183,6 +197,21 @@ public final class DictionaryEditorModel {
 
     public var hasChanges: Bool {
         status.added + status.modified + status.removed > 0
+    }
+
+    /// Unsaved work: a dirty working set or a form that would write a
+    /// different entry than the one it was loaded from.
+    public var isDirty: Bool {
+        if hasChanges { return true }
+        guard let form else { return false }
+        guard let original else { return true }
+        return form.makeEntry(extra: original.extra) != original
+    }
+
+    /// Entries created in this session may still be renamed on save.
+    public var canRenameSelectedEntry: Bool {
+        guard let selectedKey else { return false }
+        return changeKinds[selectedKey] == .added
     }
 
     /// Importer bound to the same handle; opens with the current status.
@@ -204,6 +233,7 @@ public final class DictionaryEditorModel {
 
     public func reload() {
         isLoaded = false
+        clearUndoHistory()
         if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             loadFirstPage()
         } else {
@@ -305,18 +335,332 @@ public final class DictionaryEditorModel {
         diff = try? editing.entryDiff(key)
     }
 
-    public func updateForm(_ mutate: (inout EntryEditorForm) -> Void) {
+    /// Apply a form edit. Passing `field` lets consecutive keystrokes on the
+    /// same field collapse into a single undo step.
+    public func updateForm(
+        _ field: String? = nil,
+        _ mutate: (inout EntryEditorForm) -> Void
+    ) {
+        guard form != nil else { return }
+        recordStep(touching: touchedKeys(), coalescing: field)
+        mutateForm(mutate)
+        validationMessage = nil
+    }
+
+    public func addDefinition() {
+        guard form != nil else { return }
+        recordStep(touching: touchedKeys())
+        mutateForm { $0.definitions.append(DefinitionForm()) }
+        validationMessage = nil
+    }
+
+    public func removeDefinition(id: UUID) {
+        guard let form, form.definitions.contains(where: { $0.id == id }) else { return }
+        recordStep(touching: touchedKeys())
+        mutateForm { $0.definitions.removeAll { $0.id == id } }
+        validationMessage = nil
+    }
+
+    // MARK: - Creating and deleting entries
+
+    /// Insert an empty entry into the working set and select it.
+    ///
+    /// The key stays editable until the entry is saved. Without an explicit
+    /// key a free `untitled` placeholder is used so the row shows up in the
+    /// list immediately.
+    @discardableResult
+    public func createEntry(key suggestedKey: String? = nil) -> Bool {
+        let key = (suggestedKey ?? nextDraftKey())
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else {
+            validationMessage = "key 不能为空。"
+            return false
+        }
+        guard !keyExists(key) else {
+            validationMessage = "key「\(key)」已存在，请换一个。"
+            return false
+        }
+
+        recordStep(touching: [key])
+        do {
+            _ = try editing.upsert(DictionaryEntry(key: key, display: ""))
+            status = try editing.workingStatus()
+            try refreshChanges()
+            let stored = (try? editing.entry(for: key))
+                ?? DictionaryEntry(key: key, display: "")
+            if !loadedEntries.contains(where: { $0.key == stored.key }) {
+                loadedEntries.append(stored)
+                loadedEntries.sort { $0.key < $1.key }
+            }
+            lastLoadedKey = loadedEntries.last?.key
+            rebuildRows()
+            selectedKey = stored.key
+            original = stored
+            form = EntryEditorForm(
+                key: stored.key,
+                display: stored.display,
+                definitions: [DefinitionForm()]
+            )
+            diff = try? editing.entryDiff(stored.key)
+            validationMessage = nil
+            noticeMessage = "已新建词条。"
+            onCommitHandler?()
+            return true
+        } catch {
+            alertMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    /// Delete the selected entry from the working set.
+    ///
+    /// Entries that exist in HEAD are staged as deletions; entries created in
+    /// this session simply disappear. The confirmation dialog lives in the
+    /// view, not here.
+    @discardableResult
+    public func deleteEntry() -> Bool {
+        guard let key = selectedKey else { return false }
+        let index = rows.firstIndex { $0.key == key }
+
+        recordStep(touching: [key])
+        do {
+            _ = try editing.deleteEntry(key)
+            status = try editing.workingStatus()
+            try refreshChanges()
+            loadedEntries.removeAll { $0.key == key }
+            lastLoadedKey = loadedEntries.last?.key
+            rebuildRows()
+
+            let remaining = rows.filter { $0.key != key }
+            let nextKey: String?
+            if remaining.isEmpty {
+                nextKey = nil
+            } else if let index {
+                nextKey = remaining[min(index, remaining.count - 1)].key
+            } else {
+                nextKey = remaining.first?.key
+            }
+            select(nextKey)
+            validationMessage = nil
+            noticeMessage = "已删除词条。"
+            onCommitHandler?()
+            return true
+        } catch {
+            alertMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    // MARK: - Undo and redo
+
+    /// Undo the last editing step of this session.
+    @discardableResult
+    public func undo() -> Bool {
+        guard let snapshot = undoStack.last else { return false }
+        let current = makeSnapshot(touching: Set(snapshot.backend.keys))
+        guard restore(snapshot) else { return false }
+        undoStack.removeLast()
+        redoStack.append(current)
+        resetCoalescing()
+        refreshUndoState()
+        return true
+    }
+
+    /// Re-apply the step that `undo()` reverted.
+    @discardableResult
+    public func redo() -> Bool {
+        guard let snapshot = redoStack.last else { return false }
+        let current = makeSnapshot(touching: Set(snapshot.backend.keys))
+        guard restore(snapshot) else { return false }
+        redoStack.removeLast()
+        pushUndo(current)
+        resetCoalescing()
+        refreshUndoState()
+        return true
+    }
+
+    // MARK: - Undo support
+
+    /// Upper bound on session undo steps.
+    public static let undoLimit = 100
+
+    /// Edits to the same field inside this window merge into one step.
+    public static let coalescingWindow: TimeInterval = 0.75
+
+    struct EditorSnapshot {
+        enum WorkingState: Equatable {
+            case present(DictionaryEntry)
+            case absent
+        }
+
+        var loadedEntries: [DictionaryEntry]
+        var lastLoadedKey: String?
+        var hasMore: Bool
+        var searching: Bool
+        var searchText: String
+        var selectedKey: String?
+        var form: EntryEditorForm?
+        var original: DictionaryEntry?
+        var backend: [String: WorkingState]
+    }
+
+    private func touchedKeys() -> Set<String> {
+        guard let selectedKey else { return [] }
+        return [selectedKey]
+    }
+
+    private func makeSnapshot(touching keys: Set<String>) -> EditorSnapshot {
+        var backend: [String: EditorSnapshot.WorkingState] = [:]
+        for key in keys {
+            if let entry = try? editing.entry(for: key) {
+                backend[key] = .present(entry)
+            } else {
+                backend[key] = .absent
+            }
+        }
+        return EditorSnapshot(
+            loadedEntries: loadedEntries,
+            lastLoadedKey: lastLoadedKey,
+            hasMore: hasMore,
+            searching: searching,
+            searchText: searchText,
+            selectedKey: selectedKey,
+            form: form,
+            original: original,
+            backend: backend
+        )
+    }
+
+    /// Record the state before a step. `field` merges rapid edits of one
+    /// field; structural operations pass `nil` and always start a new step.
+    private func recordStep(
+        touching keys: Set<String>,
+        coalescing field: String? = nil
+    ) {
+        if let field, let lastCoalescedAt, !undoStack.isEmpty,
+            field == lastCoalescedField,
+            selectedKey == lastCoalescedKey,
+            now().timeIntervalSince(lastCoalescedAt) <= Self.coalescingWindow {
+            self.lastCoalescedAt = now()
+            return
+        }
+
+        pushUndo(makeSnapshot(touching: keys))
+        redoStack.removeAll()
+        lastCoalescedField = field
+        lastCoalescedKey = field == nil ? nil : selectedKey
+        lastCoalescedAt = field == nil ? nil : now()
+        refreshUndoState()
+    }
+
+    private func pushUndo(_ snapshot: EditorSnapshot) {
+        undoStack.append(snapshot)
+        if undoStack.count > Self.undoLimit {
+            undoStack.removeFirst(undoStack.count - Self.undoLimit)
+        }
+    }
+
+    private func restore(_ snapshot: EditorSnapshot) -> Bool {
+        var backendChanged = false
+        do {
+            for (key, state) in snapshot.backend {
+                switch state {
+                case .present(let entry):
+                    if (try? editing.entry(for: key)) != entry {
+                        _ = try editing.upsert(entry)
+                        backendChanged = true
+                    }
+                case .absent:
+                    if (try? editing.entry(for: key)) != nil {
+                        _ = try editing.deleteEntry(key)
+                        backendChanged = true
+                    }
+                }
+            }
+            status = try editing.workingStatus()
+            try refreshChanges()
+        } catch {
+            alertMessage = error.localizedDescription
+            return false
+        }
+
+        loadedEntries = snapshot.loadedEntries
+        lastLoadedKey = snapshot.lastLoadedKey
+        hasMore = snapshot.hasMore
+        searching = snapshot.searching
+        searchText = snapshot.searchText
+        selectedKey = snapshot.selectedKey
+        form = snapshot.form
+        original = snapshot.original
+        diff = snapshot.selectedKey.flatMap { try? editing.entryDiff($0) }
+        validationMessage = nil
+        rebuildRows()
+        if backendChanged {
+            onCommitHandler?()
+        }
+        return true
+    }
+
+    private func mutateForm(_ mutate: (inout EntryEditorForm) -> Void) {
         guard var form else { return }
         mutate(&form)
         self.form = form
     }
 
-    public func addDefinition() {
-        updateForm { $0.definitions.append(DefinitionForm()) }
+    private func resetCoalescing() {
+        lastCoalescedField = nil
+        lastCoalescedKey = nil
+        lastCoalescedAt = nil
     }
 
-    public func removeDefinition(id: UUID) {
-        updateForm { $0.definitions.removeAll { $0.id == id } }
+    private func refreshUndoState() {
+        canUndo = !undoStack.isEmpty
+        canRedo = !redoStack.isEmpty
+    }
+
+    private func clearUndoHistory() {
+        undoStack.removeAll()
+        redoStack.removeAll()
+        resetCoalescing()
+        refreshUndoState()
+    }
+
+    /// Mirrors the storage normalisation (`crates/odc-core`), so "Apple" and
+    /// "apple" count as the same headword.
+    static func normalizedKey(_ key: String) -> String {
+        let folded = key.precomposedStringWithCompatibilityMapping.lowercased()
+        return folded
+            .replacingOccurrences(of: "ß", with: "ss")
+            .replacingOccurrences(of: "ẞ", with: "ss")
+            .replacingOccurrences(of: "ς", with: "σ")
+    }
+
+    /// Key uniqueness is enforced by storage (normalised upsert replaces an
+    /// existing row), so the editor checks before writing. `excludingKey` lets
+    /// a new entry keep its own key while it is being renamed.
+    private func keyExists(_ key: String, excludingKey: String? = nil) -> Bool {
+        let normalized = Self.normalizedKey(key)
+        if let excludingKey, normalized == Self.normalizedKey(excludingKey) {
+            return false
+        }
+        if loadedEntries.contains(where: { Self.normalizedKey($0.key) == normalized }) {
+            return true
+        }
+        if rows.contains(where: { Self.normalizedKey($0.key) == normalized }) {
+            return true
+        }
+        return (try? editing.entry(for: key)) != nil
+    }
+
+    private func nextDraftKey() -> String {
+        let taken = Set(rows.map { Self.normalizedKey($0.key) })
+        var candidate = "untitled"
+        var index = 1
+        while taken.contains(Self.normalizedKey(candidate)) {
+            index += 1
+            candidate = "untitled-\(index)"
+        }
+        return candidate
     }
 
     @discardableResult
@@ -340,20 +684,40 @@ public final class DictionaryEditorModel {
             validationMessage = "display 不能为空。"
             return false
         }
-        guard key == selectedKey else {
-            validationMessage = "key 不可在编辑器里修改，请重新导入或新建词条。"
-            return false
+        let renaming = key != selectedKey
+        if renaming {
+            guard changeKinds[selectedKey] == .added else {
+                validationMessage = "key 不可在编辑器里修改，请重新导入或新建词条。"
+                return false
+            }
+            guard !keyExists(key, excludingKey: selectedKey) else {
+                validationMessage = "key「\(key)」已存在，请换一个。"
+                return false
+            }
         }
 
         let entry = form.makeEntry(extra: original?.extra ?? [:])
+        recordStep(touching: [selectedKey, key])
         do {
+            if renaming {
+                _ = try editing.deleteEntry(selectedKey)
+                loadedEntries.removeAll { $0.key == selectedKey }
+            }
             _ = try editing.upsert(entry)
-            original = entry
-            self.form = EntryEditorForm(entry: entry)
+            // Storage normalises keys; show what was actually written.
+            let stored = (try? editing.entry(for: key)) ?? entry
+            original = stored
+            self.form = EntryEditorForm(entry: stored)
+            self.selectedKey = stored.key
+            if !loadedEntries.contains(where: { $0.key == stored.key }) {
+                loadedEntries.append(stored)
+                loadedEntries.sort { $0.key < $1.key }
+            }
+            lastLoadedKey = loadedEntries.last?.key
             status = try editing.workingStatus()
             try refreshChanges()
             rebuildRows()
-            diff = try? editing.entryDiff(entry.key)
+            diff = try? editing.entryDiff(stored.key)
             validationMessage = nil
             noticeMessage = "已保存到工作区。"
             // The reader shows working-set edits, so a save must refresh it
@@ -389,6 +753,7 @@ public final class DictionaryEditorModel {
             diff = selectedKey.flatMap { try? editing.entryDiff($0) }
             noticeMessage = "已提交。"
             committed = true
+            clearUndoHistory()
             return true
         } catch {
             alertMessage = error.localizedDescription
@@ -411,6 +776,7 @@ public final class DictionaryEditorModel {
             searchText = ""
             searching = false
             noticeMessage = "已丢弃工作区改动。"
+            clearUndoHistory()
             loadFirstPage()
             return true
         } catch {

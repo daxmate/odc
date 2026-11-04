@@ -69,6 +69,16 @@ final class FakeEditing: ODCEditing {
         return EntryWriteResult(key: entry.key, outcome: outcome)
     }
 
+    func deleteEntry(_ key: String) throws -> EntryWriteResult {
+        if failOnKeys.contains(key) {
+            throw OdcError.editFailed("delete refused \(key)")
+        }
+        guard working.removeValue(forKey: key) != nil else {
+            return EntryWriteResult(key: key, outcome: .notFound)
+        }
+        return EntryWriteResult(key: key, outcome: .deleted)
+    }
+
     func workingStatus() throws -> WorkingStatus {
         let added = working.keys.filter { head[$0] == nil }.count
         let removed = head.keys.filter { working[$0] == nil }.count
