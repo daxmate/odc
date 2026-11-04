@@ -58,7 +58,9 @@
    `javascript:` URL；
 3. `<style>` 块与 `style` 属性交给 `lightningcss` 解析并重写
    （`style` 属性始终输出为单行）；
-4. 序列化后用 `markup_fmt` 格式化，空白敏感度固定为 **Strict**。
+4. 序列化后用块级结构化格式化器（`block_fmt`）排版：只在块级元素
+   （`div` / `p` / `li` / `table` 等）边界换行并缩进；标签绝不拆行，文本
+   节点逐字节保留；`pre` / `script` / `style` / `textarea` 与注释原样输出。
 
 `--html check` 只做诊断，输出与输入逐字节相同；`--html off` 完全不解析，
 恢复到 0.8 的行为。两条路径（打包导入与目录仓库导入）共用同一个管道。
@@ -72,7 +74,7 @@
 | `html.removed_attribute` | 删除了事件属性 |
 | `html.unsafe_url` | 删除了 `javascript:` URL |
 | `css.parse_error` | `lightningcss` 无法解析的 CSS |
-| `format.failed` | `markup_fmt` 无法格式化该条正文 |
+| `format.failed` | 块级格式化器无法排版该条正文（畸形 HTML） |
 
 ### 失败策略
 
@@ -81,12 +83,14 @@
 * CSS 解析失败：保留该块 / 属性的原文，只告警 `css.parse_error`。
 * 原始 HTML 不另存副本；源 `.mdx` 即底稿。
 
-### 为什么必须是 Strict
+### 为什么不用宽度排版
 
-`markup_fmt` 默认的 CSS 空白敏感度会在相邻内联元素之间插入空白，改变渲染
-文本。spike 实测：COCA 文本等价率 **0%**、LDOCE 43.7%；`Strict` 在 4 本真实
-词典上均为 **100%**。默认值写在 `HtmlOptions::default()`，并由
-`inline_neighbours_keep_text` 回归测试守住。
+`markup_fmt` 是 Prettier 的移植，会按行宽重排文本。词典正文内联标签密集，
+80 列时 **47.85%** 的行被拆开；放宽到 160 列反而升到 **61.52%**（更多内联
+内容被纳入同一行）。0.14.0 起改用块级排版：只在块级边界换行，200 条真实
+正文的拆行率 **0.00%**、文本等价 200/200、幂等 200/200，约 0.17 ms/条
+（本机 200 条实测）。
+`inline_neighbours_keep_text` 回归测试继续守住「相邻内联元素之间不插空白」。
 
 ### 报告与独立命令
 

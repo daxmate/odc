@@ -16,6 +16,7 @@
 //! The normative description lives in `docs/odc-spec.md`.
 
 pub mod block;
+pub mod block_fmt;
 pub mod cbor;
 pub mod cdc;
 pub mod entry;

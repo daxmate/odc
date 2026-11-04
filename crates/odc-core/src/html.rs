@@ -14,11 +14,12 @@
 //!    handler attributes and `javascript:` URLs are removed.
 //! 3. CSS in `<style>` blocks and `style` attributes is parsed and
 //!    re-serialised with `lightningcss`.
-//! 4. The repaired tree is serialised and formatted with `markup_fmt` in
-//!    [`WhitespaceSensitivity::Strict`] mode. The default (CSS) sensitivity
-//!    inserts whitespace between inline elements, which changes the rendered
-//!    text of dictionary entries; the spike measured 0% text equivalence on
-//!    COCA with the default, so strict is a hard requirement.
+//! 4. The repaired tree is serialised and laid out by [`crate::block_fmt`]:
+//!    line breaks and indentation appear only at block-level element
+//!    boundaries. Tags are never split and text nodes are copied byte for
+//!    byte, so the rendered text of dictionary entries is preserved exactly.
+//!    A body that cannot be tokenised keeps its unformatted (repaired) markup
+//!    and reports `format.failed`.
 //!
 //! `HtmlMode::Check` runs the same analysis but never touches the output, and
 //! `HtmlMode::Off` returns the input before any parsing happens.
@@ -28,7 +29,6 @@
 //! layer decides what to store (see `mdx_import`); this module always reports
 //! what it would have written.
 
-use std::borrow::Cow;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -39,8 +39,8 @@ use html5ever::{local_name, ns, Attribute, QualName};
 use lightningcss::printer::PrinterOptions;
 use lightningcss::stylesheet::{ParserOptions, StyleAttribute, StyleSheet};
 use markup5ever_rcdom::{Handle, Node, NodeData, RcDom, SerializableHandle};
-use markup_fmt::config::{FormatOptions, WhitespaceSensitivity};
-use markup_fmt::Language;
+
+use crate::block_fmt::format_blocks;
 
 /// Diagnostic code for an HTML5 parse / tree-construction error.
 pub const PARSE_ERROR: &str = "html.parse_error";
@@ -52,7 +52,7 @@ pub const REMOVED_ATTRIBUTE: &str = "html.removed_attribute";
 pub const UNSAFE_URL: &str = "html.unsafe_url";
 /// Diagnostic code for CSS that `lightningcss` could not parse.
 pub const CSS_PARSE_ERROR: &str = "css.parse_error";
-/// Diagnostic code for a body `markup_fmt` refused to format.
+/// Diagnostic code for a body the block formatter could not tokenise.
 pub const FORMAT_FAILED: &str = "format.failed";
 
 /// Elements removed from imported bodies.
@@ -114,7 +114,8 @@ impl HtmlMode {
 pub struct HtmlOptions {
     /// What to do with a body; defaults to `Format`.
     pub mode: HtmlMode,
-    /// Print width handed to `markup_fmt` (default 80).
+    /// Retained for API compatibility; the block formatter never wraps at a
+    /// width. The value is ignored (default 80).
     pub line_width: usize,
     /// Samples kept per diagnostic code when callers aggregate a summary
     /// (default 20). [`process_html`] itself never truncates diagnostics.
@@ -155,8 +156,8 @@ pub struct HtmlOutcome {
     pub css_blocks: usize,
     /// Whether CSS rewriting changed anything.
     pub css_changed: bool,
-    /// Whether `markup_fmt` failed; `html` then holds the repaired body and
-    /// the caller should keep the original text instead.
+    /// Whether the block formatter failed; `html` then holds the repaired
+    /// body and the caller should keep the original text instead.
     pub failed: bool,
 }
 
@@ -193,25 +194,7 @@ pub fn process_html(input: &str, options: &HtmlOptions) -> HtmlOutcome {
         return HtmlOutcome::unchanged(input);
     }
 
-    // Parse as a fragment in a `<div>` context: entries are body fragments,
-    // and document parsing would wrap them in `<html><head><body>` and report
-    // a spurious "unexpected start tag in initial mode" for every body.
-    let dom: RcDom = parse_fragment_for_element(
-        RcDom::default(),
-        parse_options(),
-        fragment_context(),
-        true,
-        None,
-    )
-    .one(input.to_string());
-    let mut context = Context::new(options.mode);
-    // `<template>` keeps its children in a separate slot that the serialiser
-    // does not visit; move them onto the element so nothing is dropped.
-    flatten_templates(&dom.document);
-    for error in dom.errors.borrow().iter() {
-        context.push(PARSE_ERROR, error.to_string(), None);
-    }
-    clean_children(&dom.document, &mut context);
+    let (dom, context) = parse_and_clean(input, options.mode);
 
     let mut diagnostics = context.diagnostics;
     let css_blocks = context.css_blocks;
@@ -228,29 +211,17 @@ pub fn process_html(input: &str, options: &HtmlOptions) -> HtmlOutcome {
     }
 
     let repaired = serialize_fragment(&dom);
-    let (mut html, failed) = match format_html(&repaired, options.line_width) {
-        Ok(mut formatted) => {
-            // `markup_fmt` terminates its output with a newline; entry bodies
-            // do not carry one, and keeping it would mark every body changed.
-            if formatted.ends_with('\n') {
-                formatted.pop();
-            }
-            (formatted, false)
-        }
+    let (html, failed) = match format_blocks(&repaired) {
+        Ok(formatted) => (formatted, false),
         Err(error) => {
             diagnostics.push(HtmlDiagnostic {
                 code: FORMAT_FAILED.to_string(),
-                message: "markup_fmt could not format the body".to_string(),
-                detail: Some(error),
+                message: "block formatter could not lay out the body".to_string(),
+                detail: Some(error.to_string()),
             });
             (repaired, true)
         }
     };
-    if !failed && html.trim_end_matches('\n') == input.trim_end_matches('\n') {
-        // Only trailing newlines differ: keep the caller's bytes verbatim so a
-        // body is never "changed" for whitespace the formatter appends.
-        html = input.to_string();
-    }
     let changed = html != input;
     HtmlOutcome {
         html,
@@ -260,6 +231,44 @@ pub fn process_html(input: &str, options: &HtmlOptions) -> HtmlOutcome {
         css_changed,
         failed,
     }
+}
+
+/// Repair and sanitise one body without formatting it.
+///
+/// Returns `None` for bodies without markup. Used by the formatter sampler
+/// to compare the formatter's output with the markup it actually receives;
+/// the import path calls [`process_html`] instead.
+#[must_use]
+pub fn repair_sanitize(input: &str) -> Option<String> {
+    if !input.contains('<') {
+        return None;
+    }
+    let (dom, _context) = parse_and_clean(input, HtmlMode::Format);
+    Some(serialize_fragment(&dom))
+}
+
+/// Parse a fragment and run the repair / sanitisation walk.
+fn parse_and_clean(input: &str, mode: HtmlMode) -> (RcDom, Context) {
+    // Parse as a fragment in a `<div>` context: entries are body fragments,
+    // and document parsing would wrap them in `<html><head><body>` and report
+    // a spurious "unexpected start tag in initial mode" for every body.
+    let dom: RcDom = parse_fragment_for_element(
+        RcDom::default(),
+        parse_options(),
+        fragment_context(),
+        true,
+        None,
+    )
+    .one(input.to_string());
+    let mut context = Context::new(mode);
+    // `<template>` keeps its children in a separate slot that the serialiser
+    // does not visit; move them onto the element so nothing is dropped.
+    flatten_templates(&dom.document);
+    for error in dom.errors.borrow().iter() {
+        context.push(PARSE_ERROR, error.to_string(), None);
+    }
+    clean_children(&dom.document, &mut context);
+    (dom, context)
 }
 
 /// State shared by one tree walk.
@@ -518,20 +527,6 @@ fn serialize_with(node: &Handle, traversal_scope: TraversalScope) -> String {
     String::from_utf8_lossy(&buffer).into_owned()
 }
 
-/// Format repaired markup with `markup_fmt`.
-///
-/// Whitespace sensitivity is forced to strict: the default CSS mode inserts
-/// whitespace between inline elements and changes what readers see.
-fn format_html(html: &str, line_width: usize) -> Result<String, String> {
-    let mut options = FormatOptions::default();
-    options.layout.print_width = line_width.max(1);
-    options.language.whitespace_sensitivity = WhitespaceSensitivity::Strict;
-    markup_fmt::format_text(html, Language::Html, &options, |code: &str, _hints| {
-        Ok(Cow::Borrowed(code))
-    })
-    .map_err(|error| error.to_string())
-}
-
 /// One example of a diagnostic, kept by [`HtmlImportSummary`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HtmlSample {
@@ -784,8 +779,10 @@ mod tests {
         // `<template>` children live in a separate slot; moving them out must
         // not let `Node::drop` clear the subtree.
         let outcome = format("<template><p>x</p></template>");
-        assert_eq!(outcome.html, "<template><p>x</p></template>");
-        assert_eq!(text_of(&outcome.html), "x");
+        // The block formatter breaks before block-level children, including
+        // those that were moved out of the template slot.
+        assert_eq!(outcome.html, "<template>\n<p>x</p></template>");
+        assert_eq!(text_of(&outcome.html).trim(), "x");
     }
 
     #[test]
