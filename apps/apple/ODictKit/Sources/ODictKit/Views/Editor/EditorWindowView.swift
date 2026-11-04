@@ -57,6 +57,7 @@ struct EditorView: View {
     @State private var isCommitPresented = false
     @State private var isImportPresented = false
     @State private var isDiscardPresented = false
+    @State private var isDeletePresented = false
     @State private var importer: CSVImportModel?
     @State private var isPublishPresented = false
     @State private var isTrustPresented = false
@@ -77,6 +78,41 @@ struct EditorView: View {
         }
         .toolbar {
             ToolbarItemGroup {
+                Button {
+                    _ = model.createEntry()
+                } label: {
+                    Label("新建词条", systemImage: "plus")
+                }
+                .keyboardShortcut("n", modifiers: .command)
+                .help("在工作区新建一个词条")
+                .disabled(!model.isLoaded)
+
+                Button {
+                    isDeletePresented = true
+                } label: {
+                    Label("删除词条", systemImage: "trash")
+                }
+                .help("从工作区删除选中的词条")
+                .disabled(model.selectedKey == nil)
+
+                Button {
+                    _ = model.undo()
+                } label: {
+                    Label("撤销", systemImage: "arrow.uturn.backward")
+                }
+                .keyboardShortcut("z", modifiers: .command)
+                .help("撤销上一步编辑")
+                .disabled(!model.canUndo)
+
+                Button {
+                    _ = model.redo()
+                } label: {
+                    Label("重做", systemImage: "arrow.uturn.forward")
+                }
+                .keyboardShortcut("z", modifiers: [.command, .shift])
+                .help("重做上一步撤销")
+                .disabled(!model.canRedo)
+
                 Button {
                     importer = model.makeCSVImportModel()
                     isImportPresented = importer != nil
@@ -160,6 +196,18 @@ struct EditorView: View {
         } message: {
             Text("所有未提交的新增、修改和删除都会丢失，无法恢复。")
         }
+        .confirmationDialog(
+            "删除「\(model.selectedKey ?? "")」？",
+            isPresented: $isDeletePresented,
+            titleVisibility: .visible
+        ) {
+            Button("删除", role: .destructive) {
+                _ = model.deleteEntry()
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("删除会在工作区标记，提交后才从 HEAD 移除。")
+        }
         .alert(
             "无法完成操作",
             isPresented: Binding(
@@ -188,6 +236,15 @@ struct EditorView: View {
 
     // MARK: - Entry list
 
+    /// Route selection through the model instead of observing it, so a
+    /// programmatic select (create / delete / undo) is not re-applied.
+    private var selectionBinding: Binding<String?> {
+        Binding(
+            get: { model.selectedKey },
+            set: { model.select($0) }
+        )
+    }
+
     private var entryList: some View {
         VStack(spacing: 0) {
             HStack(spacing: 6) {
@@ -212,14 +269,11 @@ struct EditorView: View {
             }
             .padding(8)
 
-            List(selection: $model.selectedKey) {
+            List(selection: selectionBinding) {
                 ForEach(model.rows) { row in
                     EntryRowView(row: row)
                         .tag(row.key)
                 }
-            }
-            .onChange(of: model.selectedKey) { _, key in
-                model.select(key)
             }
 
             HStack {
@@ -380,21 +434,31 @@ private struct EntryFormView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Text(form.key)
-                    .font(.headline.monospaced())
-                Text("key 不可修改")
+            if model.canRenameSelectedEntry {
+                LabeledContent("key") {
+                    TextField("key", text: binding(\.key, field: "key"))
+                        .textFieldStyle(.roundedBorder)
+                }
+                Text("新词条保存前可以修改 key。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            } else {
+                HStack {
+                    Text(form.key)
+                        .font(.headline.monospaced())
+                    Text("key 不可修改")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             LabeledContent("display") {
-                TextField("display", text: binding(\.display))
+                TextField("display", text: binding(\.display, field: "display"))
                     .textFieldStyle(.roundedBorder)
             }
 
             LabeledContent("phonetic") {
-                TextField("多个读音用逗号分隔", text: binding(\.phoneticText))
+                TextField("多个读音用逗号分隔", text: binding(\.phoneticText, field: "phoneticText"))
                     .textFieldStyle(.roundedBorder)
             }
 
@@ -416,10 +480,10 @@ private struct EntryFormView: View {
                 DefinitionEditorView(
                     model: model,
                     id: definition.id,
-                    pos: definitionBinding(definition.id, \.pos),
-                    sense: definitionBinding(definition.id, \.sense),
-                    examples: definitionBinding(definition.id, \.examplesText),
-                    labels: definitionBinding(definition.id, \.labelsText)
+                    pos: definitionBinding(definition.id, \.pos, field: "pos"),
+                    sense: definitionBinding(definition.id, \.sense, field: "sense"),
+                    examples: definitionBinding(definition.id, \.examplesText, field: "examples"),
+                    labels: definitionBinding(definition.id, \.labelsText, field: "labels")
                 )
             }
 
@@ -437,7 +501,7 @@ private struct EntryFormView: View {
                 Text("结构化释义为空时，阅读器会渲染这段 HTML。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                TextEditor(text: binding(\.rawHTML))
+                TextEditor(text: binding(\.rawHTML, field: "rawHTML"))
                     .font(.body.monospaced())
                     .frame(minHeight: 90)
                     .overlay {
@@ -462,26 +526,28 @@ private struct EntryFormView: View {
     }
 
     private func binding(
-        _ keyPath: WritableKeyPath<EntryEditorForm, String>
+        _ keyPath: WritableKeyPath<EntryEditorForm, String>,
+        field: String
     ) -> Binding<String> {
         Binding(
             get: { model.form?[keyPath: keyPath] ?? "" },
             set: { value in
-                model.updateForm { $0[keyPath: keyPath] = value }
+                model.updateForm(field) { $0[keyPath: keyPath] = value }
             }
         )
     }
 
     private func definitionBinding(
         _ id: UUID,
-        _ keyPath: WritableKeyPath<DefinitionForm, String>
+        _ keyPath: WritableKeyPath<DefinitionForm, String>,
+        field: String
     ) -> Binding<String> {
         Binding(
             get: {
                 model.form?.definitions.first { $0.id == id }?[keyPath: keyPath] ?? ""
             },
             set: { value in
-                model.updateForm { form in
+                model.updateForm("\(field).\(id.uuidString)") { form in
                     guard let index = form.definitions.firstIndex(where: { $0.id == id }) else {
                         return
                     }
