@@ -106,11 +106,17 @@ public struct DictionaryRootView: View {
                 openDocument(url)
             }
             .sheet(isPresented: $isLibraryPresented) {
-                LibraryListView(store: store)
+                LibraryListView(store: store, isImporterPresented: $isImporterPresented)
             }
             .sheet(isPresented: $isWordbookPresented) {
                 WordbookView(store: store)
             }
+            #if os(macOS)
+            .onChange(of: store.lastCreatedDictionaryID) { _, created in
+                guard created != nil else { return }
+                openWindow(id: "editor")
+            }
+            #endif
     }
 
     /// MDX files are converted into a standalone document first.

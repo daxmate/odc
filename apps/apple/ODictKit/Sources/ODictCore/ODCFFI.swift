@@ -5,6 +5,8 @@ import ODCFFI
 public enum OdcError: LocalizedError, Equatable {
     /// `odc_repo_open` refused the path.
     case openFailed(String)
+    /// `odc_repo_init` refused the path.
+    case initFailed(String)
     /// `odc_repo_search_json` failed.
     case searchFailed(String)
     /// `odc_repo_entry_json` failed (including "entry not found").
@@ -38,6 +40,8 @@ public enum OdcError: LocalizedError, Equatable {
         switch self {
         case .openFailed(let detail):
             return "无法打开词典：\(detail)"
+        case .initFailed(let detail):
+            return "无法新建词典：\(detail)"
         case .searchFailed(let detail):
             return "搜索失败：\(detail)"
         case .resourceFailed(let detail):
@@ -133,6 +137,26 @@ public final class OdcDictionary {
             throw OdcError.openFailed(Self.take(error) ?? "无法读取 \(url.lastPathComponent)")
         }
         repo = RepoHandle(pointer: opened)
+    }
+
+    /// Wrap a handle produced by `odc_repo_init`.
+    private init(pointer: OpaquePointer) {
+        repo = RepoHandle(pointer: pointer)
+    }
+
+    /// Create a repository at `url` and return an open handle.
+    ///
+    /// The parent directory must exist. An existing repository is refused
+    /// rather than reopened, matching `Repo::init` in the core.
+    public static func create(at url: URL) throws -> OdcDictionary {
+        var error: UnsafeMutablePointer<CChar>?
+        let opened = url.path.withCString { path in
+            odc_repo_init(path, &error)
+        }
+        guard let opened else {
+            throw OdcError.initFailed(Self.take(error) ?? "无法创建 \(url.lastPathComponent)")
+        }
+        return OdcDictionary(pointer: opened)
     }
 
     public var isOpen: Bool { repo != nil }

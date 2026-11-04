@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 /// Sheet listing every imported dictionary, with the explicit cleanup command.
 public struct LibraryListView: View {
     private let store: DictionaryStore
+    @Binding private var isImporterPresented: Bool
     @Environment(\.dismiss) private var dismiss
     @State private var pendingRemoval: LibraryItem?
     @State private var patchTarget: LibraryItem?
@@ -11,8 +12,9 @@ public struct LibraryListView: View {
     @State private var isConfirmingCleanup = false
     @State private var cleanupMessage: String?
 
-    public init(store: DictionaryStore) {
+    public init(store: DictionaryStore, isImporterPresented: Binding<Bool> = .constant(false)) {
         self.store = store
+        _isImporterPresented = isImporterPresented
     }
 
     public var body: some View {
@@ -105,6 +107,12 @@ public struct LibraryListView: View {
                 store.present(error: error)
             }
         }
+        .onChange(of: store.lastCreatedDictionaryID) { _, created in
+            if created != nil { dismiss() }
+        }
+        .onChange(of: isImporterPresented) { _, presented in
+            if presented { dismiss() }
+        }
     }
 
     private var removalTitle: String {
@@ -117,11 +125,13 @@ public struct LibraryListView: View {
     @ViewBuilder
     private var content: some View {
         if store.library.items.isEmpty {
-            ContentUnavailableView(
-                "词典库为空",
-                systemImage: "books.vertical",
-                description: Text("导入的词典会留在这里，重启应用后依然可以打开。")
-            )
+            ContentUnavailableView {
+                Label("词典库为空", systemImage: "books.vertical")
+            } description: {
+                Text("导入的词典会留在这里，重启应用后依然可以打开。")
+            } actions: {
+                LibraryStartActionsView(store: store, isImporterPresented: $isImporterPresented)
+            }
         } else {
             List {
                 if !store.migrationIssues.isEmpty {

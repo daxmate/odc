@@ -42,12 +42,9 @@ public struct EmptyStateView: View {
                 }
                 .frame(maxWidth: 320)
             }
-            Button("打开词典…") {
-                isImporterPresented = true
-            }
-            .buttonStyle(.borderedProminent)
-            .padding(.top, 4)
-            Text("v0 只读：前缀搜索、词条渲染。编辑与生词本尚未实现。")
+            LibraryStartActionsView(store: store, isImporterPresented: $isImporterPresented)
+                .padding(.top, 4)
+            Text("词典会复制到本机，之后可以离线打开。")
                 .font(.footnote)
                 .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)

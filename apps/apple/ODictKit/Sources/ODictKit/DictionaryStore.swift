@@ -6,6 +6,21 @@ import OSLog
 /// Library diagnostics; stale entries are dropped quietly instead of via alerts.
 private let libraryLog = Logger(subsystem: "com.daxmate.odict", category: "library")
 
+/// Failures while creating a dictionary from the empty state.
+public enum DictionaryCreationError: LocalizedError, Equatable {
+    case emptyName
+    case tooManyOpenDictionaries(Int)
+
+    public var errorDescription: String? {
+        switch self {
+        case .emptyName:
+            return "请输入词典名称。"
+        case .tooManyOpenDictionaries(let limit):
+            return "最多同时打开 \(limit) 本词典，请先关闭一本。"
+        }
+    }
+}
+
 /// One dictionary's share of the detail page.
 ///
 /// A word can live in several open dictionaries at once; the detail page stacks
@@ -95,6 +110,8 @@ public final class DictionaryStore {
     public private(set) var searchGroups: [DictionarySearchGroup] = []
     /// The dictionary `hits`, `selectedKey` and `entry` belong to.
     public private(set) var activeDictionaryID: UUID?
+    /// Last dictionary created from the empty state, used to open the editor.
+    public private(set) var lastCreatedDictionaryID: UUID?
     /// Bumped whenever a new entry lands on screen. The compact layout watches
     /// it instead of `selectedKey`, so picking the same key from another
     /// dictionary still pushes the detail column.
@@ -232,6 +249,72 @@ public final class DictionaryStore {
         importTask = Task { [weak self] in
             await self?.performOpen(url: url)
         }
+    }
+
+    // MARK: - Creating dictionaries
+
+    /// Create a dictionary in the library, optionally fill it with the
+    /// sample entries, and make it active.
+    ///
+    /// Throws instead of presenting so tests can assert on the diagnostic;
+    /// `createDictionaryReportingErrors(named:sample:)` is the UI wrapper.
+    @discardableResult
+    public func createDictionary(named rawName: String, sample: Bool = false) throws -> UUID {
+        let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else {
+            throw DictionaryCreationError.emptyName
+        }
+        guard canOpenAnotherDictionary else {
+            throw DictionaryCreationError.tooManyOpenDictionaries(Self.maximumOpenDictionaries)
+        }
+
+        let directory = try libraryDirectoryURL()
+        let id = UUID()
+        let storedName = "\(id.uuidString).odc"
+        let copy = directory.appending(path: storedName, directoryHint: .notDirectory)
+        var created: OdcDictionary?
+        do {
+            let opened = try OdcDictionary.create(at: copy)
+            created = opened
+            if sample {
+                try SampleDictionary.populate(opened)
+            }
+            let item = LibraryItem(
+                id: id,
+                displayName: name,
+                storedName: storedName,
+                sourceName: name,
+                sourceBytes: 0,
+                sourceIsDirectory: true,
+                importedAt: Date()
+            )
+            try register(item, in: directory)
+            adopt(opened, as: item, at: copy)
+            persistOpenState(in: directory)
+            if sample {
+                importSummary = SampleDictionary.notice
+            }
+            lastCreatedDictionaryID = id
+            return id
+        } catch {
+            created?.close()
+            DocumentLibrary.removeCopy(at: copy)
+            throw error
+        }
+    }
+
+    /// UI-facing wrapper: failures land in the same alert as import errors.
+    public func createDictionaryReportingErrors(named name: String, sample: Bool = false) {
+        do {
+            _ = try createDictionary(named: name, sample: sample)
+        } catch {
+            present(error: error)
+        }
+    }
+
+    /// Create and open the bundled sample dictionary.
+    public func createSampleDictionary() {
+        createDictionaryReportingErrors(named: SampleDictionary.displayName, sample: true)
     }
 
     /// Close the active dictionary and delete its imported copy.
