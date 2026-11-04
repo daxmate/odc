@@ -121,7 +121,7 @@ existing conflict workflow and are never resolved automatically. The open
 editor and entry list refresh after a successful apply. A patch without a
 sidecar is refused: the FFI only exposes the signed apply entry point.
 
-Version 0.11.0 (build 13).
+Version 0.12.0 (build 14).
 
 ## Known limitations (v0)
 

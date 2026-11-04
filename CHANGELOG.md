@@ -8,6 +8,16 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 _暂无。_
 
+## [0.12.0] - 2026-11-04
+
+### Added
+- macOS editor: create and delete entries, with session-scoped undo/redo (100 steps, 750 ms coalescing).
+- XLSX import through the existing CSV mapping/preview pipeline (CoreXLSX 0.14.2, first non-empty worksheet).
+- Per-entry HTML check and one-click repair in the editor, backed by a new `odc_html_process_json` C ABI; repairs are one undoable edit.
+
+### Fixed
+- Editor key validation now queries the repository (not only loaded pages), refuses unknown lookup failures, and skips placeholder keys that already exist.
+
 ## [0.11.0] - 2026-11-03
 
 ### Added
