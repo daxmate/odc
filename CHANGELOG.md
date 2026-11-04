@@ -8,6 +8,29 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 _暂无。_
 
+## [0.13.0] - 2026-11-04
+
+### Added
+- Editor: working-changes panel, field-level diff, commit/discard, and
+  external-change detection for the open repository (P1).
+- Import: column-mapping templates and a duplicate-word policy for CSV and
+  XLSX (P2).
+- First-run onboarding: `New Dictionary…`, `Try a Sample` and `Open…` from an
+  empty library, with a ten-entry sample dictionary that can be deleted again
+  (P3).
+- FFI: `odc_repo_init` creates a repository directory and returns an open
+  handle, with declarations in `odc.h` and a Swift `OdcDictionary.create(at:)`
+  wrapper.
+
+### Fixed
+- Import: legacy encodings fall back instead of failing, and rejected rows are
+  reported with their line numbers (P2).
+
+### Changed
+- Version 0.13.0 (build 15) across the Cargo workspace and both Apple targets.
+- README roadmap: M1 marked complete; M2 multilingual entries explicitly
+  deferred.
+
 ## [0.12.0] - 2026-11-04
 
 ### Added

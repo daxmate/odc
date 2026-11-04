@@ -178,8 +178,8 @@ apps/apple/               iOS / macOS SwiftUI 客户端（ODict / ODict Desktop�
 | 里程碑 | 内容 |
 | --- | --- |
 | **M0（本仓库）** | 规范 + Rust 内核 + CLI + 测试向量 + CI |
-| M1 | macOS SwiftUI 编辑器（表格导入、逐条校对、字段级 diff） |
-| M2 | 合并 / 冲突表、并发编辑、多语言词条 |
+| **M1**（已完成，0.13.0） | macOS SwiftUI 编辑器（表格导入、逐条校对、字段级 diff） |
+| M2 | 合并 / 冲突表、并发编辑；多语言词条 **deferred**（0.13 不做） |
 | M3 | patch 生成与应用、增量发布、签名 |
 | M4 | 三方合并、冲突表、字段级合并 |
 | M5 | gc / shallow 仓库、Swift 与 Kotlin 绑定 |
@@ -199,7 +199,8 @@ M0 阶段这些能力由 CLI 提供（odc import / commit / diff / patch），M1
 
 `apps/apple/` 下是 **ODict**（iOS）与 **ODict Desktop**（macOS）两个 SwiftUI
 target，共享 `ODictKit`（`ODCFFI` 封装、状态与视图）。当前范围：打开 .odc →
-前缀搜索 → 词条渲染，只读。构建步骤见 `apps/apple/README.md`：
+前缀搜索 → 词条渲染；macOS 另支持新建 / 示例词典、导入和编辑（iOS 仍只读）。
+构建步骤见 `apps/apple/README.md`：
 
 ```bash
 bash scripts/build-odc-xcframework.sh   # Rust C ABI -> ODCFFI.xcframework
