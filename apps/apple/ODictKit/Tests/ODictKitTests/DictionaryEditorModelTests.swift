@@ -231,6 +231,44 @@ struct DictionaryEditorModelTests {
         #expect(fake.working.count == 3)
     }
 
+    @Test("rejects a duplicate that only exists on an unloaded page")
+    func createEntryRejectsUnloadedDuplicate() {
+        let (model, fake) = makeModel(entries: [makeEntry("apple"), makeEntry("Zebra")])
+        fake.unloadedKeys = ["Zebra"]
+        model.loadIfNeeded()
+        #expect(model.rows.map(\.key) == ["apple"])
+
+        // Storage normalises keys, so the unseen "Zebra" is still a duplicate.
+        #expect(model.createEntry(key: "zebra") == false)
+        #expect(model.validationMessage?.contains("已存在") == true)
+        #expect(fake.working["Zebra"]?.display == "Zebra")
+        #expect(fake.working.count == 2)
+    }
+
+    @Test("skips a placeholder key that only exists on an unloaded page")
+    func draftKeySkipsUnloadedPlaceholder() {
+        let (model, fake) = makeModel(entries: [makeEntry("apple"), makeEntry("untitled")])
+        fake.unloadedKeys = ["untitled"]
+        model.loadIfNeeded()
+        #expect(model.rows.map(\.key) == ["apple"])
+
+        #expect(model.createEntry())
+        #expect(model.selectedKey == "untitled-2")
+        #expect(fake.working["untitled"]?.display == "Untitled")
+    }
+
+    @Test("refuses to create when the key cannot be verified")
+    func createEntryRefusesUnverifiableKey() {
+        let (model, fake) = makeModel()
+        fake.lookupFailures = ["kiwi"]
+        model.loadIfNeeded()
+
+        // An unreadable repository is not proof that the key is free.
+        #expect(model.createEntry(key: "kiwi") == false)
+        #expect(model.alertMessage?.contains("无法校验") == true)
+        #expect(fake.working["kiwi"] == nil)
+    }
+
     @Test("renames a new entry when saving it")
     func renamesNewEntryOnSave() {
         let (model, fake) = makeModel()

@@ -8,6 +8,11 @@ final class FakeEditing: ODCEditing {
     var working: [String: DictionaryEntry]
     var diffs: [String: EntryDiff] = [:]
     var failOnKeys: Set<String> = []
+    /// Keys that live in storage but are never returned by `entriesPage`,
+    /// i.e. entries sitting on pages the editor has not loaded yet.
+    var unloadedKeys: Set<String> = []
+    /// Keys whose lookup fails with a non-"not found" error.
+    var lookupFailures: Set<String> = []
     var commitMessage: String?
     var commitAuthor: String?
     var discardCount = 0
@@ -38,7 +43,7 @@ final class FakeEditing: ODCEditing {
     }
 
     func entriesPage(after key: String?, limit: Int) throws -> [DictionaryEntry] {
-        let keys = working.keys.sorted()
+        let keys = working.keys.filter { !unloadedKeys.contains($0) }.sorted()
         let start = key.map { cursor in keys.firstIndex { $0 > cursor } ?? keys.count } ?? 0
         return keys[start..<min(start + limit, keys.count)].compactMap { working[$0] }
     }
@@ -48,11 +53,19 @@ final class FakeEditing: ODCEditing {
         return keys.map { SearchHit(key: $0, display: working[$0]?.display ?? $0) }
     }
 
+    /// Mirrors `OdcDictionary.entry(for:)`: exact lookup by normalised key.
     func entry(for key: String) throws -> DictionaryEntry {
-        guard let entry = working[key] else {
-            throw OdcError.entryFailed("entry not found")
+        let normalized = DictionaryEditorModel.normalizedKey(key)
+        if lookupFailures.contains(normalized) {
+            throw OdcError.entryFailed("repository unavailable")
         }
-        return entry
+        guard let match = working.first(where: {
+            DictionaryEditorModel.normalizedKey($0.key) == normalized
+        }) else {
+            // Same shape `OdcDictionary` produces for a missing key.
+            throw OdcError.entryFailed("entry not found: \(key)")
+        }
+        return match.value
     }
 
     func upsert(_ entry: DictionaryEntry) throws -> EntryWriteResult {

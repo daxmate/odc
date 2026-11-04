@@ -649,14 +649,29 @@ public final class DictionaryEditorModel {
         if rows.contains(where: { Self.normalizedKey($0.key) == normalized }) {
             return true
         }
-        return (try? editing.entry(for: key)) != nil
+        // Entries on pages that were never loaded still live in storage, and
+        // `upsert` replaces a normalised key without asking. The lookup goes
+        // through `entry(for:)` with the same normalisation the repository
+        // applies, so an unseen duplicate cannot be overwritten silently.
+        do {
+            _ = try editing.entry(for: normalized)
+            return true
+        } catch let error as OdcError where error.isMissingEntry {
+            return false
+        } catch {
+            // An unreadable repository cannot prove the key is free. Refuse
+            // the write instead of guessing, and surface the real error.
+            alertMessage = "无法校验 key「\(key)」是否已存在：\(error.localizedDescription)"
+            return true
+        }
     }
 
+    /// Placeholder keys go through the same uniqueness check, so `untitled`
+    /// never lands on an entry hiding in an unloaded page.
     private func nextDraftKey() -> String {
-        let taken = Set(rows.map { Self.normalizedKey($0.key) })
         var candidate = "untitled"
         var index = 1
-        while taken.contains(Self.normalizedKey(candidate)) {
+        while keyExists(candidate) {
             index += 1
             candidate = "untitled-\(index)"
         }

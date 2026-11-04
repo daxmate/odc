@@ -64,6 +64,16 @@ public enum OdcError: LocalizedError, Equatable {
             return "词典返回了无法解析的数据：\(detail)"
         }
     }
+
+    /// Whether this error only reports that the looked-up key has no entry.
+    ///
+    /// `entry(for:)` has no dedicated not-found case, so the flag is derived
+    /// here, next to the `odc_repo_entry_json` message it comes from
+    /// (`crates/odc-ffi/src/lib.rs`). Callers must not match the text.
+    public var isMissingEntry: Bool {
+        guard case .entryFailed(let detail) = self else { return false }
+        return detail.hasPrefix("entry not found")
+    }
 }
 
 /// Owns one OdcRepo pointer and closes it exactly once, when released.
