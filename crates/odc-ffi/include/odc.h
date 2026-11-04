@@ -28,6 +28,18 @@ typedef struct OdcRepo OdcRepo;
 OdcRepo *odc_repo_open(const char *path_utf8, char **error_message);
 
 /*
+ * Create a new repository directory (and any missing parents) and return an
+ * open handle.
+ *
+ * An existing repository is refused with ODC-E013; the call never reopens it.
+ * On success returns a non-NULL handle and stores NULL in *error_message.
+ * On failure returns NULL and stores a heap-allocated, NUL-terminated UTF-8
+ * error message in *error_message; release it with odc_string_free().
+ * error_message may be NULL if the caller does not want the diagnostic.
+ */
+OdcRepo *odc_repo_init(const char *path_utf8, char **error_message);
+
+/*
  * Close a handle returned by odc_repo_open(). Passing NULL is a no-op.
  */
 void odc_repo_close(OdcRepo *repo);

@@ -207,6 +207,29 @@ pub unsafe extern "C" fn odc_repo_open(
     })
 }
 
+/// Create a new repository directory and return an open handle.
+///
+/// The directory (and any missing parents) is created. An existing
+/// repository is refused with the core's `ODC-E013` diagnostic instead of
+/// being reopened, so callers never silently attach to someone else's data.
+///
+/// # Safety
+///
+/// `path_utf8` must be a NUL-terminated UTF-8 string; `error_message` must
+/// be `NULL` or point to writable storage for one `char *`. On success the
+/// returned handle must be closed with [`odc_repo_close`].
+#[no_mangle]
+pub unsafe extern "C" fn odc_repo_init(
+    path_utf8: *const c_char,
+    error_message: *mut *mut c_char,
+) -> *mut OdcRepo {
+    guarded(error_message, ptr::null_mut(), || {
+        let path = text_arg(path_utf8, "path")?;
+        let repo = Repo::init(Path::new(&path)).map_err(|error| error.to_string())?;
+        Ok(Box::into_raw(Box::new(OdcRepo { repo })))
+    })
+}
+
 /// Close a handle returned by [`odc_repo_open`].
 ///
 /// Passing `NULL` is a no-op.
@@ -2048,5 +2071,78 @@ fn cbor_to_json(value: &CborValue) -> JsonValue {
                 )
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::CString;
+
+    fn c_path(path: &Path) -> CString {
+        CString::new(path.to_str().expect("utf-8 temp path")).expect("no interior NUL")
+    }
+
+    unsafe fn take_error(error: *mut c_char) -> String {
+        assert!(!error.is_null(), "expected an error message");
+        let message = unsafe { CStr::from_ptr(error) }
+            .to_string_lossy()
+            .into_owned();
+        unsafe { odc_string_free(error) };
+        message
+    }
+
+    #[test]
+    fn init_creates_an_open_repository() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("repo");
+        let path_c = c_path(&path);
+        let mut error: *mut c_char = ptr::null_mut();
+
+        let handle = unsafe { odc_repo_init(path_c.as_ptr(), &mut error) };
+
+        assert!(!handle.is_null(), "init returned NULL");
+        assert!(error.is_null(), "success must clear the error slot");
+        assert!(path.join("odc.db").exists(), "repo database missing");
+        let count = unsafe { odc_repo_entry_count(handle, &mut error) };
+        assert_eq!(count, 0, "a new repository has no entries");
+        assert!(error.is_null());
+        unsafe { odc_repo_close(handle) };
+    }
+
+    #[test]
+    fn init_refuses_an_existing_repository() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("repo");
+        let path_c = c_path(&path);
+        let mut error: *mut c_char = ptr::null_mut();
+
+        let first = unsafe { odc_repo_init(path_c.as_ptr(), &mut error) };
+        assert!(!first.is_null());
+        unsafe { odc_repo_close(first) };
+        assert!(error.is_null());
+
+        let second = unsafe { odc_repo_init(path_c.as_ptr(), &mut error) };
+        assert!(second.is_null(), "second init must fail");
+        let message = unsafe { take_error(error) };
+        assert!(
+            message.contains("already initialized"),
+            "unexpected message: {message}"
+        );
+    }
+
+    #[test]
+    fn init_reports_a_bad_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("not-a-directory");
+        std::fs::write(&file, b"occupied").expect("write fixture");
+        let path_c = c_path(&file);
+        let mut error: *mut c_char = ptr::null_mut();
+
+        let handle = unsafe { odc_repo_init(path_c.as_ptr(), &mut error) };
+
+        assert!(handle.is_null(), "init must refuse a regular file");
+        let message = unsafe { take_error(error) };
+        assert!(!message.is_empty(), "error message must be readable");
     }
 }
