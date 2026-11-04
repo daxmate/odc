@@ -11,14 +11,15 @@ use odc_core::cbor::Value as CborValue;
 use odc_core::mdx_scan::{scan, ScanOutcome};
 use odc_core::{Def, Entry, Repo};
 use odc_ffi::{
-    odc_copy_pack_to_repo, odc_import_mdx_to_odc, odc_import_mdx_to_odc_with_mdd,
-    odc_import_mdx_to_odc_with_mdd_progress, odc_import_mdx_to_repo_with_mdd_progress,
-    odc_repo_close, odc_repo_commit_json, odc_repo_discard_json, odc_repo_entries_page_json,
-    odc_repo_entry_count, odc_repo_entry_delete_json, odc_repo_entry_diff_json,
-    odc_repo_entry_json, odc_repo_entry_link_json, odc_repo_entry_link_working_json,
-    odc_repo_entry_put_json, odc_repo_open, odc_repo_resource_copy, odc_repo_resource_count,
-    odc_repo_resource_len, odc_repo_search_json, odc_repo_search_substring_json,
-    odc_repo_working_changes_json, odc_repo_working_status_json, odc_string_free, odc_version,
+    odc_copy_pack_to_repo, odc_html_process_json, odc_import_mdx_to_odc,
+    odc_import_mdx_to_odc_with_mdd, odc_import_mdx_to_odc_with_mdd_progress,
+    odc_import_mdx_to_repo_with_mdd_progress, odc_repo_close, odc_repo_commit_json,
+    odc_repo_discard_json, odc_repo_entries_page_json, odc_repo_entry_count,
+    odc_repo_entry_delete_json, odc_repo_entry_diff_json, odc_repo_entry_json,
+    odc_repo_entry_link_json, odc_repo_entry_link_working_json, odc_repo_entry_put_json,
+    odc_repo_open, odc_repo_resource_copy, odc_repo_resource_count, odc_repo_resource_len,
+    odc_repo_search_json, odc_repo_search_substring_json, odc_repo_working_changes_json,
+    odc_repo_working_status_json, odc_string_free, odc_version,
 };
 use serde_json::Value;
 use tempfile::TempDir;
@@ -1130,4 +1131,91 @@ fn lookup_committed(repo: *const odc_ffi::OdcRepo) -> Value {
     let payload = unsafe { odc_repo_entry_link_json(repo, key.as_ptr(), &mut error) };
     assert!(take_error_if_any(error).is_none(), "committed link failed");
     serde_json::from_str(&take_string(payload)).expect("link json")
+}
+
+fn html_process(html: &CStr, mode: &CStr) -> (serde_json::Value, Option<String>) {
+    let mut error: *mut c_char = ptr::null_mut();
+    // SAFETY: both arguments are NUL-terminated and outlive the call.
+    let payload = unsafe { odc_html_process_json(html.as_ptr(), mode.as_ptr(), &mut error) };
+    let message = take_error_if_any(error);
+    if message.is_some() {
+        assert!(payload.is_null(), "failed call must not return JSON");
+        return (Value::Null, message);
+    }
+    let value = serde_json::from_str(&take_string(payload)).expect("html json");
+    (value, None)
+}
+
+#[test]
+fn html_check_reports_without_rewriting() {
+    let html = CString::new("<p>hi</p><script>alert(1)</script>").expect("html");
+    let mode = CString::new("check").expect("mode");
+    let (value, error) = html_process(&html, &mode);
+    assert!(error.is_none(), "check failed: {error:?}");
+    assert_eq!(value["html"], "<p>hi</p><script>alert(1)</script>");
+    assert_eq!(value["changed"], false);
+    let diagnostics = value["diagnostics"].as_array().expect("diagnostics");
+    assert!(!diagnostics.is_empty(), "script removal must be reported");
+    assert!(diagnostics.iter().all(|item| {
+        item["code"].is_string() && item["message"].is_string() && item.get("detail").is_some()
+    }));
+    assert!(diagnostics
+        .iter()
+        .any(|item| item["code"] == "html.removed_element"));
+}
+
+#[test]
+fn html_format_repairs_and_formats() {
+    let html = CString::new("<p>hi</p><script>alert(1)</script>").expect("html");
+    let mode = CString::new("format").expect("mode");
+    let (value, error) = html_process(&html, &mode);
+    assert!(error.is_none(), "format failed: {error:?}");
+    assert_eq!(value["changed"], true);
+    let repaired = value["html"].as_str().expect("html string");
+    assert!(repaired.contains("hi"), "content must survive: {repaired}");
+    assert!(
+        !repaired.contains("script"),
+        "script must be removed: {repaired}"
+    );
+}
+
+#[test]
+fn html_rejects_unknown_mode() {
+    let html = CString::new("<p>hi</p>").expect("html");
+    let mode = CString::new("bogus").expect("mode");
+    let (value, error) = html_process(&html, &mode);
+    assert!(value.is_null());
+    let message = error.expect("error message");
+    assert!(message.contains("unknown HTML mode"), "{message}");
+}
+
+#[test]
+fn html_check_accepts_an_empty_body() {
+    let html = CString::new("").expect("html");
+    let mode = CString::new("check").expect("mode");
+    let (value, error) = html_process(&html, &mode);
+    assert!(error.is_none(), "check failed: {error:?}");
+    assert_eq!(value["html"], "");
+    assert_eq!(value["changed"], false);
+    assert_eq!(
+        value["diagnostics"].as_array().expect("diagnostics").len(),
+        0
+    );
+}
+
+#[test]
+fn html_rejects_null_and_invalid_utf8() {
+    let mode = CString::new("check").expect("mode");
+    let mut error: *mut c_char = ptr::null_mut();
+    // SAFETY: a NULL body is explicitly rejected before any dereference.
+    let payload = unsafe { odc_html_process_json(ptr::null(), mode.as_ptr(), &mut error) };
+    assert!(payload.is_null());
+    let message = take_error_if_any(error).expect("error message");
+    assert!(message.contains("html must not be NULL"), "{message}");
+
+    let invalid =
+        CString::new(vec![b'<', b'p', b'>', 0xff, b'<', b'/', b'p', b'>']).expect("bytes");
+    let (value, error) = html_process(&invalid, &mode);
+    assert!(value.is_null());
+    assert!(error.expect("error message").contains("not valid UTF-8"));
 }

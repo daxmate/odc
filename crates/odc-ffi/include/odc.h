@@ -374,6 +374,24 @@ int32_t odc_patch_apply_signed(OdcRepo *repo, const char *patch_path_utf8,
                                char **error_message);
 
 /*
+ * Diagnose or repair one HTML body.
+ *
+ * mode_utf8 is "check" (report problems, body unchanged) or "format" (repair,
+ * sanitise and format). Any other value is an error. On success returns a
+ * NUL-terminated JSON object:
+ *
+ *   {"html": "<body>", "changed": false,
+ *    "diagnostics": [{"code": "html.parse_error", "message": "...",
+ *                     "detail": null}]}
+ *
+ * "detail" is null when the diagnostic has no extra context. On failure
+ * returns NULL and stores an error message; release both the JSON and the
+ * error with odc_string_free().
+ */
+char *odc_html_process_json(const char *html_utf8, const char *mode_utf8,
+                            char **error_message);
+
+/*
  * Release a string returned by this library. Passing NULL is a no-op.
  */
 void odc_string_free(char *s);

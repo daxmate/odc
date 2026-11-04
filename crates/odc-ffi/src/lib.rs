@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 use std::ptr;
 
 use odc_core::cbor::Value as CborValue;
+use odc_core::html::{process_html, HtmlMode, HtmlOptions};
 use odc_core::link::LinkResolution;
 use odc_core::pack::PackOptions;
 use odc_core::release::{self, PublishOptions};
@@ -120,6 +121,68 @@ pub unsafe extern "C" fn odc_string_free(s: *mut c_char) {
 pub extern "C" fn odc_version() -> *const c_char {
     const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "\0");
     VERSION.as_ptr().cast()
+}
+
+/// Diagnose or repair one HTML body.
+///
+/// `mode_utf8` is `"check"` (report only, body unchanged) or `"format"`
+/// (repair, sanitise and format). Any other value is rejected.
+///
+/// Returns `NULL` on failure. On success the returned string is a
+/// NUL-terminated JSON object:
+///
+/// ```json
+/// {"html": "...", "changed": false,
+///  "diagnostics": [{"code": "html.parse_error", "message": "...", "detail": null}]}
+/// ```
+///
+/// # Safety
+///
+/// `html_utf8` and `mode_utf8` must be NUL-terminated UTF-8 strings;
+/// `error_message` must be `NULL` or point to writable storage for one
+/// `char *`. The returned string must be released with
+/// [`odc_string_free`].
+#[no_mangle]
+pub unsafe extern "C" fn odc_html_process_json(
+    html_utf8: *const c_char,
+    mode_utf8: *const c_char,
+    error_message: *mut *mut c_char,
+) -> *mut c_char {
+    guarded(error_message, ptr::null_mut(), || {
+        let html = text_arg(html_utf8, "html")?;
+        let mode_name = text_arg(mode_utf8, "mode")?;
+        let mode = match HtmlMode::from_name(&mode_name) {
+            Some(HtmlMode::Check) => HtmlMode::Check,
+            Some(HtmlMode::Format) => HtmlMode::Format,
+            _ => {
+                return Err(format!(
+                    "unknown HTML mode \"{mode_name}\"; expected \"check\" or \"format\""
+                ));
+            }
+        };
+        let options = HtmlOptions {
+            mode,
+            ..HtmlOptions::default()
+        };
+        let outcome = process_html(&html, &options);
+        let diagnostics = outcome
+            .diagnostics
+            .iter()
+            .map(|diagnostic| {
+                json!({
+                    "code": diagnostic.code,
+                    "message": diagnostic.message,
+                    "detail": diagnostic.detail,
+                })
+            })
+            .collect::<Vec<_>>();
+        let payload = json!({
+            "html": outcome.html,
+            "changed": outcome.changed,
+            "diagnostics": diagnostics,
+        });
+        to_c_string(&payload)
+    })
 }
 
 /// Open an existing repository directory.
