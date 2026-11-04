@@ -8,6 +8,19 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 _暂无。_
 
+## [0.14.0] - 2026-11-04
+
+### Changed
+- Import: HTML 排版改用块级结构化格式化器（`block_fmt`），替换
+  `markup_fmt`。换行与缩进只出现在块级元素边界，标签不拆行、文本节点
+  逐字节保留；200 条样本拆行率从 47.85%（80 列）降到 **0.00%**，文本等价
+  与幂等均为 200/200。
+- `HtmlOptions::line_width` 为兼容保留但不再生效（块级排版不按宽度换行）；
+  `format.failed` 的诊断信息改为块级格式化器的错误。
+
+### Removed
+- `markup_fmt` 依赖（已无调用点）。
+
 ## [0.13.0] - 2026-11-04
 
 ### Added

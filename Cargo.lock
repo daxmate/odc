@@ -81,12 +81,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "anyhow"
-version = "1.0.102"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
-
-[[package]]
 name = "arrayvec"
 version = "0.7.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -357,12 +351,6 @@ dependencies = [
  "generic-array",
  "typenum",
 ]
-
-[[package]]
-name = "css_dataset"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25670139e591f1c2869eb8d0d977028f8d05e859132b4c874ecd02a00d3c9174"
 
 [[package]]
 name = "cssparser"
@@ -718,15 +706,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "itertools"
-version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b4baf93f58d4425749ca49a51c50ebab072c5df6994d08fed93541c331481dc"
-dependencies = [
- "either",
-]
-
-[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -779,7 +758,7 @@ dependencies = [
  "data-encoding",
  "getrandom 0.3.4",
  "indexmap",
- "itertools 0.10.5",
+ "itertools",
  "lazy_static",
  "lightningcss-derive",
  "parcel_selectors",
@@ -860,21 +839,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "markup_fmt"
-version = "0.27.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df2c4bb9a66c59714ba02c074187491e30daaf99127dcb287ce2aa8fa0c1a9fe"
-dependencies = [
- "aho-corasick",
- "anyhow",
- "css_dataset",
- "itertools 0.15.0",
- "memchr",
- "regex",
- "tiny_pretty",
-]
-
-[[package]]
 name = "match_token"
 version = "0.35.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -948,7 +912,7 @@ dependencies = [
 
 [[package]]
 name = "odc-cli"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -963,7 +927,7 @@ dependencies = [
 
 [[package]]
 name = "odc-core"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "blake3",
  "ed25519-dalek",
@@ -971,7 +935,6 @@ dependencies = [
  "html5ever",
  "lightningcss",
  "markup5ever_rcdom",
- "markup_fmt",
  "mdictlib",
  "odc-testkit",
  "pkcs8",
@@ -988,7 +951,7 @@ dependencies = [
 
 [[package]]
 name = "odc-ffi"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "odc-core",
  "odc-testkit",
@@ -998,7 +961,7 @@ dependencies = [
 
 [[package]]
 name = "odc-testkit"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "flate2",
  "mdictlib",
@@ -1707,15 +1670,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tiny_pretty"
-version = "0.4.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "58b2d5989bcee0f42e4efffdd6280defe2d0ea91ebbea29c7615412855ef75fa"
-dependencies = [
- "unicode-width",
-]
-
-[[package]]
 name = "tinyvec"
 version = "1.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1783,12 +1737,6 @@ name = "unicode-segmentation"
 version = "1.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f6ccf251212114b54433ec949fd6a7841275f9ada20dddd2f29e9ceea4501493"
-
-[[package]]
-name = "unicode-width"
-version = "0.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca718471876992059f251e33aafc334346ada08042b7661dd1fe313a9bced557"
 
 [[package]]
 name = "utf-8"

@@ -276,8 +276,8 @@ final class ReleaseImportTests: XCTestCase {
             encoding: .utf8
         )
         XCTAssertTrue(
-            cargo.contains("version = \"0.13.0\""),
-            "Cargo.toml workspace version is not 0.13.0"
+            cargo.contains("version = \"0.14.0\""),
+            "Cargo.toml workspace version is not 0.14.0"
         )
 
         let project = try String(
@@ -285,9 +285,9 @@ final class ReleaseImportTests: XCTestCase {
             encoding: .utf8
         )
         XCTAssertEqual(
-            project.components(separatedBy: "CFBundleShortVersionString: \"0.13.0\"").count - 1,
+            project.components(separatedBy: "CFBundleShortVersionString: \"0.14.0\"").count - 1,
             2,
-            "both targets must declare 0.13.0"
+            "both targets must declare 0.14.0"
         )
         XCTAssertEqual(
             project.components(separatedBy: "CFBundleVersion: \"15\"").count - 1,
@@ -304,8 +304,8 @@ final class ReleaseImportTests: XCTestCase {
                 format: nil
             )
             let dictionary = try XCTUnwrap(plist as? [String: Any])
-            XCTAssertEqual(dictionary["CFBundleShortVersionString"] as? String, "0.13.0")
-            XCTAssertEqual(dictionary["CFBundleVersion"] as? String, "15")
+            XCTAssertEqual(dictionary["CFBundleShortVersionString"] as? String, "0.14.0")
+            XCTAssertEqual(dictionary["CFBundleVersion"] as? String, "16")
         }
     }
 }
