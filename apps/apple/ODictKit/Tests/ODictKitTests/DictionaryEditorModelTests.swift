@@ -8,10 +8,16 @@ struct DictionaryEditorModelTests {
     private func makeModel(
         entries: [DictionaryEntry] = [makeEntry("apple"), makeEntry("banana"), makeEntry("cherry")],
         changes: [(String, ChangeKind)] = [],
-        onCommit: (() -> Void)? = nil
+        onCommit: (() -> Void)? = nil,
+        now: @escaping () -> Date = { Date() }
     ) -> (DictionaryEditorModel, FakeEditing) {
         let fake = FakeEditing(entries: entries, changes: changes)
-        let model = DictionaryEditorModel(editing: fake, author: "tester", onCommit: onCommit)
+        let model = DictionaryEditorModel(
+            editing: fake,
+            author: "tester",
+            onCommit: onCommit,
+            now: now
+        )
         return (model, fake)
     }
 
@@ -175,6 +181,321 @@ struct DictionaryEditorModelTests {
         #expect(model.form == nil)
         #expect(model.diff?.kind == .deleted)
     }
+
+    // MARK: - Creating entries
+
+    @Test("creates a placeholder entry, selects it and badges it as added")
+    func createsEntry() {
+        let (model, fake) = makeModel()
+        model.loadIfNeeded()
+
+        #expect(model.createEntry())
+
+        let key = "untitled"
+        #expect(model.selectedKey == key)
+        #expect(model.rows.contains { $0.key == key })
+        #expect(model.rows.first { $0.key == key }?.change == .added)
+        #expect(fake.working[key] != nil)
+        #expect(model.form?.key == key)
+        #expect(model.form?.display == "")
+        #expect(model.form?.definitions.count == 1)
+        #expect(model.canRenameSelectedEntry)
+        #expect(model.isDirty)
+        #expect(model.canUndo)
+    }
+
+    @Test("picks a free placeholder key when untitled is taken")
+    func createsEntryWithFreeKey() {
+        let (model, fake) = makeModel(entries: [makeEntry("untitled")])
+        model.loadIfNeeded()
+
+        #expect(model.createEntry())
+
+        #expect(model.selectedKey == "untitled-2")
+        #expect(fake.working["untitled-2"] != nil)
+    }
+
+    @Test("rejects an empty or duplicate key")
+    func createEntryValidation() {
+        let (model, fake) = makeModel()
+        model.loadIfNeeded()
+
+        #expect(model.createEntry(key: "   ") == false)
+        #expect(model.validationMessage == "key 不能为空。")
+
+        #expect(model.createEntry(key: "apple") == false)
+        #expect(model.validationMessage?.contains("已存在") == true)
+
+        // Keys normalise the way storage does.
+        #expect(model.createEntry(key: "Apple") == false)
+        #expect(fake.working.count == 3)
+    }
+
+    @Test("renames a new entry when saving it")
+    func renamesNewEntryOnSave() {
+        let (model, fake) = makeModel()
+        model.loadIfNeeded()
+        #expect(model.createEntry(key: "zebra"))
+
+        model.updateForm { $0.display = "Zebra" }
+        #expect(model.save())
+
+        #expect(fake.working["zebra"]?.display == "Zebra")
+        #expect(model.selectedKey == "zebra")
+        #expect(model.form?.key == "zebra")
+    }
+
+    @Test("renames a new entry to another key on save")
+    func renamesNewEntryKeyOnSave() {
+        let (model, fake) = makeModel()
+        model.loadIfNeeded()
+        #expect(model.createEntry(key: "zebra"))
+
+        model.updateForm { form in
+            form.key = "zebras"
+            form.display = "Zebras"
+        }
+        #expect(model.save())
+
+        #expect(fake.working["zebra"] == nil)
+        #expect(fake.working["zebras"] != nil)
+        #expect(model.selectedKey == "zebras")
+    }
+
+    @Test("keeps the key locked for entries that already existed")
+    func rejectsRenameOfExistingEntry() {
+        let (model, _) = makeModel()
+        model.loadIfNeeded()
+        model.select("apple")
+
+        model.updateForm { $0.key = "apples" }
+        #expect(model.save() == false)
+        #expect(model.validationMessage?.contains("key 不可") == true)
+    }
+
+    // MARK: - Deleting entries
+
+    @Test("deletes an entry created in this session")
+    func deletesNewEntry() {
+        let (model, fake) = makeModel()
+        model.loadIfNeeded()
+        #expect(model.createEntry(key: "zebra"))
+
+        #expect(model.deleteEntry())
+
+        #expect(fake.working["zebra"] == nil)
+        #expect(!model.rows.contains { $0.key == "zebra" })
+        #expect(!model.hasChanges)
+        #expect(model.selectedKey == "cherry")
+    }
+
+    @Test("stages a deletion for a HEAD entry and moves the selection")
+    func deletesHeadEntry() {
+        let (model, fake) = makeModel()
+        model.loadIfNeeded()
+        model.select("banana")
+
+        #expect(model.deleteEntry())
+
+        #expect(fake.working["banana"] == nil)
+        #expect(model.rows.first { $0.key == "banana" }?.change == .deleted)
+        #expect(model.status.removed == 1)
+        #expect(model.selectedKey == "cherry")
+        #expect(model.form?.key == "cherry")
+    }
+
+    // MARK: - Undo and redo
+
+    @Test("undo restores a field edit and redo reapplies it")
+    func undoRedoFieldEdit() {
+        let (model, _) = makeModel()
+        model.loadIfNeeded()
+        model.select("apple")
+        model.updateForm("display") { $0.display = "Apple 2" }
+
+        #expect(model.isDirty)
+        #expect(model.canUndo)
+
+        #expect(model.undo())
+        #expect(model.form?.display == "Apple")
+        #expect(!model.isDirty)
+        #expect(model.canRedo)
+
+        #expect(model.redo())
+        #expect(model.form?.display == "Apple 2")
+        #expect(model.isDirty)
+    }
+
+    @Test("undo reverts added and removed definitions")
+    func undoDefinitions() {
+        let (model, _) = makeModel()
+        model.loadIfNeeded()
+        model.select("apple")
+        let initial = model.form?.definitions.count ?? 0
+
+        model.addDefinition()
+        #expect(model.form?.definitions.count == initial + 1)
+
+        #expect(model.undo())
+        #expect(model.form?.definitions.count == initial)
+
+        #expect(model.redo())
+        #expect(model.form?.definitions.count == initial + 1)
+
+        let removed = model.form?.definitions.first?.id
+        model.removeDefinition(id: removed ?? UUID())
+        #expect(model.form?.definitions.count == initial)
+
+        #expect(model.undo())
+        #expect(model.form?.definitions.contains { $0.id == removed } == true)
+    }
+
+    @Test("undo removes a created entry and redo brings it back")
+    func undoCreate() {
+        let (model, fake) = makeModel()
+        model.loadIfNeeded()
+        #expect(model.createEntry(key: "zebra"))
+        #expect(fake.working["zebra"] != nil)
+
+        #expect(model.undo())
+        #expect(fake.working["zebra"] == nil)
+        #expect(!model.rows.contains { $0.key == "zebra" })
+        #expect(model.selectedKey == nil)
+
+        #expect(model.redo())
+        #expect(fake.working["zebra"] != nil)
+        #expect(model.rows.contains { $0.key == "zebra" })
+        #expect(model.selectedKey == "zebra")
+    }
+
+    @Test("undo restores a deleted entry")
+    func undoDelete() {
+        let (model, fake) = makeModel()
+        model.loadIfNeeded()
+        model.select("banana")
+        #expect(model.deleteEntry())
+        #expect(fake.working["banana"] == nil)
+
+        #expect(model.undo())
+
+        #expect(fake.working["banana"] != nil)
+        #expect(model.selectedKey == "banana")
+        #expect(model.form?.display == "Banana")
+        #expect(!model.hasChanges)
+        #expect(!model.isDirty)
+    }
+
+    @Test("undo after a save puts the stored entry back")
+    func undoAfterSave() {
+        let (model, fake) = makeModel()
+        model.loadIfNeeded()
+        model.select("apple")
+        model.updateForm("display") { $0.display = "Apple 2" }
+        #expect(model.save())
+        #expect(fake.working["apple"]?.display == "Apple 2")
+
+        #expect(model.undo())
+        #expect(fake.working["apple"]?.display == "Apple")
+        #expect(model.form?.display == "Apple 2")
+
+        #expect(model.undo())
+        #expect(model.form?.display == "Apple")
+    }
+
+    @Test("merges rapid edits of one field into a single step")
+    func coalescesSameField() {
+        let clock = TestClock()
+        let (model, _) = makeModel(now: { clock.now })
+        model.loadIfNeeded()
+        model.select("apple")
+
+        model.updateForm("display") { $0.display = "A" }
+        clock.advance(0.2)
+        model.updateForm("display") { $0.display = "Ap" }
+        clock.advance(0.2)
+        model.updateForm("display") { $0.display = "App" }
+
+        #expect(model.undo())
+        #expect(model.form?.display == "Apple")
+        #expect(!model.canUndo)
+    }
+
+    @Test("starts a new step after the coalescing window or for another field")
+    func splitsEdits() {
+        let clock = TestClock()
+        let (model, _) = makeModel(now: { clock.now })
+        model.loadIfNeeded()
+        model.select("apple")
+
+        model.updateForm("display") { $0.display = "A" }
+        clock.advance(1.0)
+        model.updateForm("display") { $0.display = "AB" }
+        model.updateForm("phoneticText") { $0.phoneticText = "x" }
+
+        #expect(model.undo())
+        #expect(model.form?.phoneticText == "")
+        #expect(model.form?.display == "AB")
+
+        #expect(model.undo())
+        #expect(model.form?.display == "A")
+
+        #expect(model.undo())
+        #expect(model.form?.display == "Apple")
+    }
+
+    @Test("a new edit clears the redo stack")
+    func newEditClearsRedo() {
+        let (model, _) = makeModel()
+        model.loadIfNeeded()
+        model.select("apple")
+        model.updateForm("display") { $0.display = "A" }
+        #expect(model.undo())
+        #expect(model.canRedo)
+
+        model.updateForm("display") { $0.display = "B" }
+
+        #expect(!model.canRedo)
+        #expect(model.redo() == false)
+    }
+
+    @Test("caps the undo stack")
+    func capsUndoStack() {
+        let (model, _) = makeModel()
+        model.loadIfNeeded()
+        model.select("apple")
+
+        for index in 0..<(DictionaryEditorModel.undoLimit + 20) {
+            model.updateForm("field-\(index)") { $0.display = "v\(index)" }
+        }
+
+        var reverted = 0
+        while model.undo() {
+            reverted += 1
+        }
+        #expect(reverted == DictionaryEditorModel.undoLimit)
+    }
+
+    @Test("commit and discard clear the undo history")
+    func clearsHistoryAfterCommitOrDiscard() {
+        let (model, _) = makeModel()
+        model.loadIfNeeded()
+        model.select("apple")
+        model.updateForm("display") { $0.display = "Apple 2" }
+        #expect(model.save())
+        #expect(model.canUndo)
+
+        #expect(model.commit(message: "edit"))
+        #expect(!model.canUndo)
+        #expect(!model.canRedo)
+
+        model.select("apple")
+        model.updateForm("display") { $0.display = "Apple 3" }
+        #expect(model.canUndo)
+
+        #expect(model.discard())
+        #expect(!model.canUndo)
+        #expect(!model.canRedo)
+    }
 }
 
 @Suite("Entry editor form")
@@ -222,5 +543,15 @@ struct EntryEditorFormTests {
         #expect(entry.defs.first?.examples == ["one", "two"])
         #expect(entry.defs.first?.labels == ["x", "y"])
         #expect(entry.rawHTML == nil)
+    }
+}
+
+/// Deterministic clock for the undo coalescing window.
+@MainActor
+private final class TestClock {
+    private(set) var now = Date(timeIntervalSince1970: 1_000)
+
+    func advance(_ seconds: TimeInterval) {
+        now = now.addingTimeInterval(seconds)
     }
 }
