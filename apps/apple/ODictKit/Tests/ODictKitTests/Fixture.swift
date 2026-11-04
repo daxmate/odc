@@ -23,6 +23,27 @@ enum Fixture {
             .appending(path: "Fixtures/sample.odc", directoryHint: .notDirectory)
     }
 
+    /// A minimal workbook: shared strings, numbers, inline strings and blanks.
+    static var sampleXLSX: URL { xlsx("sample.xlsx") }
+
+    /// Three worksheets where the first one is empty.
+    static var multiSheetXLSX: URL { xlsx("multi-sheet.xlsx") }
+
+    /// A worksheet whose first row has a cell but no header text.
+    static var blankHeaderXLSX: URL { xlsx("blank-header.xlsx") }
+
+    /// A workbook whose only worksheet has no cells.
+    static var emptyXLSX: URL { xlsx("empty.xlsx") }
+
+    /// Not a zip archive at all.
+    static var brokenXLSX: URL { xlsx("broken.xlsx") }
+
+    private static func xlsx(_ name: String) -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appending(path: "Fixtures/\(name)", directoryHint: .notDirectory)
+    }
+
     static func temporaryDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appending(path: "ODictKitTests-\(UUID().uuidString)", directoryHint: .isDirectory)

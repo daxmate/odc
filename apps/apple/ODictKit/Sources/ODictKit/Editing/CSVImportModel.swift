@@ -34,6 +34,9 @@ public final class CSVImportModel {
 
     public private(set) var table: CSVTable?
     public private(set) var fileName: String?
+    /// One-line explanation for imported Excel files (for example, that only
+    /// the first non-empty worksheet of a multi-sheet workbook was read).
+    public private(set) var sourceNote: String?
     public var mapping = CSVColumnMapping()
     public private(set) var phase: Phase = .idle
     public private(set) var processedRows = 0
@@ -63,10 +66,20 @@ public final class CSVImportModel {
 
     public func load(url: URL) {
         do {
-            let text = try String(contentsOf: url, encoding: .utf8)
-            let parsed = try CSVTable(parsing: text)
+            let parsed: CSVTable
+            let note: String?
+            if url.pathExtension.lowercased() == "xlsx" {
+                let workbook = try XLSXTable(contentsOf: url)
+                parsed = workbook.table
+                note = workbook.note
+            } else {
+                let text = try String(contentsOf: url, encoding: .utf8)
+                parsed = try CSVTable(parsing: text)
+                note = nil
+            }
             table = parsed
             fileName = url.lastPathComponent
+            sourceNote = note
             mapping = CSVColumnMapping.suggested(for: parsed.header)
             makePlan()
             phase = .ready
@@ -74,6 +87,7 @@ public final class CSVImportModel {
         } catch {
             table = nil
             fileName = url.lastPathComponent
+            sourceNote = nil
             plan = nil
             phase = .idle
             alertMessage = error.localizedDescription

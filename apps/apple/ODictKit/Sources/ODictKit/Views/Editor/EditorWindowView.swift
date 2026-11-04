@@ -117,9 +117,9 @@ struct EditorView: View {
                     importer = model.makeCSVImportModel()
                     isImportPresented = importer != nil
                 } label: {
-                    Label("导入 CSV…", systemImage: "tablecells")
+                    Label("导入 CSV / Excel…", systemImage: "tablecells")
                 }
-                .help("把 CSV 行写入工作区")
+                .help("把 CSV 或 Excel 行写入工作区")
 
                 Button {
                     _ = model.save()

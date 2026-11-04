@@ -12,7 +12,8 @@ alone; `ODictKit` re-exports it, so `import ODictKit` still sees the whole API.
 The readers open a dictionary, search it (prefix, then substring) and render
 entries. **ODict Desktop** also has an editing mode for repository
 directories: paged browsing, structured field editing, field diffs, commit and
-discard, plus CSV import into the working set. Single-file `.odc` packs stay
+discard, plus CSV and Excel import into the working set (`.xlsx` files are
+read from their first non-empty worksheet only). Single-file `.odc` packs stay
 read-only, and the iOS app has no editing entry point.
 
 ## Prerequisites

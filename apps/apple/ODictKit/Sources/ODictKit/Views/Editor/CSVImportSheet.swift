@@ -37,7 +37,7 @@ struct CSVImportSheet: View {
             model.makePlan()
         }
         .alert(
-            "导入 CSV 失败",
+            "导入失败",
             isPresented: Binding(
                 get: { model.alertMessage != nil },
                 set: { if !$0 { model.alertMessage = nil } }
@@ -52,9 +52,9 @@ struct CSVImportSheet: View {
     private var header: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text("导入 CSV")
+                Text("导入 CSV / Excel")
                     .font(.title3.weight(.semibold))
-                Text(model.fileName ?? "选择一份 UTF-8 CSV，同一 key 的多行会合并为多个释义。")
+                Text(model.fileName ?? "选择一份 CSV 或 Excel 文件（.csv / .xlsx），同一 key 的多行会合并为多个释义。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -70,7 +70,7 @@ struct CSVImportSheet: View {
                 .foregroundStyle(.secondary)
             Text("还没有选择文件")
                 .font(.headline)
-            Button("选择 CSV…") { chooseFile() }
+            Button("选择文件…") { chooseFile() }
                 .keyboardShortcut(.defaultAction)
         }
         .frame(maxWidth: .infinity, minHeight: 320)
@@ -123,6 +123,12 @@ struct CSVImportSheet: View {
                     .font(.headline)
                 Spacer()
                 Text("\(model.totalRows) 行数据")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let note = model.sourceNote {
+                Text(note)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -225,9 +231,19 @@ struct CSVImportSheet: View {
         }
     }
 
+    /// `.csv` / `.txt` plus `.xlsx`, looked up by extension so it also works on
+    /// macOS 14, which has no static `UTType` constant for xlsx.
+    private static var importContentTypes: [UTType] {
+        var types: [UTType] = [.commaSeparatedText, .plainText]
+        if let xlsx = UTType(filenameExtension: "xlsx") {
+            types.append(xlsx)
+        }
+        return types
+    }
+
     private func chooseFile() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.commaSeparatedText, .plainText]
+        panel.allowedContentTypes = Self.importContentTypes
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.prompt = "导入"
