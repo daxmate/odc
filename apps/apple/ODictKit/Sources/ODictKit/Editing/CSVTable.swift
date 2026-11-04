@@ -119,7 +119,7 @@ public enum CSVParseError: LocalizedError, Equatable {
 }
 
 /// Which CSV column feeds each entry field. `key` is required.
-public struct CSVColumnMapping: Equatable, Sendable {
+public struct CSVColumnMapping: Codable, Equatable, Sendable {
     public var key: Int?
     public var display: Int?
     public var phonetic: Int?
@@ -170,15 +170,26 @@ public struct CSVColumnMapping: Equatable, Sendable {
 
 /// One row that could not become an entry.
 public struct CSVRowIssue: Equatable, Sendable, Identifiable {
-    /// Data row number, one-based, excluding the header.
+    /// One-based row number in the sheet; the header is row 1.
     public let row: Int
+    /// Header of the column the issue belongs to, when there is one.
+    public let column: String?
     public let reason: String
 
-    public var id: Int { row }
+    public var id: String { "\(row)|\(column ?? "")|\(reason)" }
 
-    public init(row: Int, reason: String) {
+    public init(row: Int, column: String? = nil, reason: String) {
         self.row = row
+        self.column = column
         self.reason = reason
+    }
+
+    /// One line for the report list and the clipboard.
+    public var displayText: String {
+        if let column, !column.isEmpty {
+            return "第 \(row) 行 · 列「\(column)」：\(reason)"
+        }
+        return "第 \(row) 行：\(reason)"
     }
 }
 
@@ -209,9 +220,16 @@ public struct CSVImportPlan: Sendable {
         self.issues = issues
     }
 
-    /// Build entries from a parsed table. Rows sharing a key become one entry
-    /// with one definition per contributing row.
-    public static func make(table: CSVTable, mapping: CSVColumnMapping) -> CSVImportPlan? {
+    /// Build entries from a parsed table.
+    ///
+    /// `duplicatePolicy` decides what happens when several rows share a key:
+    /// `merge` (the default) folds them into one entry, `skip` keeps the first
+    /// row and reports the rest, `overwrite` keeps the last row.
+    public static func make(
+        table: CSVTable,
+        mapping: CSVColumnMapping,
+        duplicatePolicy: CSVDuplicatePolicy = .merge
+    ) -> CSVImportPlan? {
         guard let keyColumn = mapping.key, table.header.indices.contains(keyColumn) else {
             return nil
         }
@@ -233,8 +251,16 @@ public struct CSVImportPlan: Sendable {
             return row[column]
         }
 
+        func columnName(_ column: Int?) -> String? {
+            guard let column, table.header.indices.contains(column) else { return nil }
+            let name = table.header[column].trimmingCharacters(in: .whitespacesAndNewlines)
+            return name.isEmpty ? nil : name
+        }
+
+        let keyName = columnName(keyColumn)
+
         for (offset, row) in table.rows.enumerated() {
-            let rowNumber = offset + 1
+            let rowNumber = offset + 2
             if row.allSatisfy({ $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
                 issues.append(CSVRowIssue(row: rowNumber, reason: "空行"))
                 continue
@@ -242,7 +268,27 @@ public struct CSVImportPlan: Sendable {
 
             let key = cell(row, keyColumn).trimmingCharacters(in: .whitespacesAndNewlines)
             guard !key.isEmpty else {
-                issues.append(CSVRowIssue(row: rowNumber, reason: "key 为空"))
+                issues.append(CSVRowIssue(row: rowNumber, column: keyName, reason: "key 为空"))
+                continue
+            }
+            guard key.count <= CSVImportLimits.maxKeyLength else {
+                issues.append(
+                    CSVRowIssue(
+                        row: rowNumber,
+                        column: keyName,
+                        reason: "key 超过 \(CSVImportLimits.maxKeyLength) 个字符"
+                    )
+                )
+                continue
+            }
+            if let overflow = Self.overflowingColumn(in: row, mapping: mapping) {
+                issues.append(
+                    CSVRowIssue(
+                        row: rowNumber,
+                        column: columnName(overflow),
+                        reason: "字段超过 \(CSVImportLimits.maxFieldLength) 个字符"
+                    )
+                )
                 continue
             }
 
@@ -250,20 +296,35 @@ public struct CSVImportPlan: Sendable {
             let phonetic = Self.splitList(cell(row, mapping.phonetic), separators: ["|"])
             let pos = cell(row, mapping.pos).trimmingCharacters(in: .whitespacesAndNewlines)
             let sense = cell(row, mapping.sense).trimmingCharacters(in: .whitespacesAndNewlines)
-            let examples = Self.splitList(
-                cell(row, mapping.examples),
-                separators: ["\n", "|"]
-            )
+            let examples = Self.splitList(cell(row, mapping.examples), separators: ["\n", "|"])
             let labels = Self.splitList(cell(row, mapping.labels), separators: [",", ";"])
 
+            let isDuplicate = drafts[key] != nil
+            if isDuplicate {
+                switch duplicatePolicy {
+                case .skip:
+                    issues.append(
+                        CSVRowIssue(row: rowNumber, column: keyName, reason: "重复 key「\(key)」，已跳过")
+                    )
+                    continue
+                case .overwrite:
+                    drafts[key] = nil
+                case .merge:
+                    break
+                }
+            }
+
             if drafts[key] == nil {
-                drafts[key] = Draft(key: key, display: display.isEmpty ? key : display)
-                order.append(key)
-            } else if drafts[key]?.display == key, !display.isEmpty {
+                drafts[key] = Draft(key: key, display: display)
+                if !isDuplicate {
+                    order.append(key)
+                }
+            } else if drafts[key]?.display.isEmpty == true, !display.isEmpty {
                 drafts[key]?.display = display
             }
 
             drafts[key]?.rows.append(rowNumber)
+            drafts[key]?.phonetic.append(contentsOf: phonetic)
 
             let hasDefinition = !pos.isEmpty || !sense.isEmpty || !examples.isEmpty || !labels.isEmpty
             if hasDefinition {
@@ -271,31 +332,40 @@ public struct CSVImportPlan: Sendable {
                     Definition(pos: pos, sense: sense, examples: examples, labels: labels)
                 )
             }
-            drafts[key]?.phonetic.append(contentsOf: phonetic.filter { !$0.isEmpty })
         }
 
-        var seenPhonetic: [String: Set<String>] = [:]
-        let groups = order.compactMap { key -> Group? in
-            guard let draft = drafts[key] else { return nil }
-            var unique: [String] = []
-            var seen = seenPhonetic[key] ?? []
-            for value in draft.phonetic where !seen.contains(value) {
-                seen.insert(value)
-                unique.append(value)
-            }
-            seenPhonetic[key] = seen
+        var groups: [Group] = []
+        groups.reserveCapacity(order.count)
+        for key in order {
+            guard let draft = drafts[key] else { continue }
+            var seen = Set<String>()
+            let phonetic = draft.phonetic.filter { seen.insert($0).inserted }
             let entry = DictionaryEntry(
                 key: draft.key,
-                display: draft.display,
-                phonetic: unique,
+                display: draft.display.isEmpty ? draft.key : draft.display,
+                phonetic: phonetic,
                 defs: draft.defs,
                 rawHTML: nil,
                 extra: [:]
             )
-            return Group(entry: entry, sourceRows: draft.rows)
+            groups.append(Group(entry: entry, sourceRows: draft.rows))
         }
 
         return CSVImportPlan(groups: groups, totalRows: table.rows.count, issues: issues)
+    }
+
+    /// Index of the first mapped cell longer than the sanity limit.
+    private static func overflowingColumn(in row: [String], mapping: CSVColumnMapping) -> Int? {
+        let columns = [
+            mapping.key, mapping.display, mapping.phonetic,
+            mapping.pos, mapping.sense, mapping.examples, mapping.labels,
+        ]
+        for column in columns.compactMap({ $0 }).sorted() where row.indices.contains(column) {
+            if row[column].count > CSVImportLimits.maxFieldLength {
+                return column
+            }
+        }
+        return nil
     }
 
     private static func splitList(_ text: String, separators: [Character]) -> [String] {

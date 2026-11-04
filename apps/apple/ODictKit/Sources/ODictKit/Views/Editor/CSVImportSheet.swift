@@ -8,6 +8,7 @@ struct CSVImportSheet: View {
     let onFinished: () -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @State private var isTemplateNamePromptPresented = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -35,6 +36,14 @@ struct CSVImportSheet: View {
         .frame(minWidth: 820, minHeight: 560)
         .onChange(of: model.mapping) { _, _ in
             model.makePlan()
+        }
+        .sheet(
+            isPresented: Binding(
+                get: { model.isPolicyPromptPresented },
+                set: { if !$0 { model.cancelPolicyPrompt() } }
+            )
+        ) {
+            CSVDuplicatePolicySheet(model: model)
         }
         .alert(
             "导入失败",
@@ -84,6 +93,8 @@ struct CSVImportSheet: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
+            templateRow
+
             Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 8) {
                 GridRow {
                     columnPicker("key（必填）", selection: $model.mapping.key)
@@ -103,6 +114,121 @@ struct CSVImportSheet: View {
                 }
             }
         }
+    }
+
+    private var templateRow: some View {
+        HStack(spacing: 8) {
+            Menu {
+                if model.templates.isEmpty {
+                    Text("还没有模板")
+                }
+                ForEach(model.templates) { template in
+                    Button(template.name) {
+                        model.applyTemplate(named: template.name)
+                    }
+                }
+                if let name = model.matchedTemplateName {
+                    Divider()
+                    Button("删除模板「\(name)」", role: .destructive) {
+                        model.deleteTemplate(named: name)
+                    }
+                }
+            } label: {
+                Label(
+                    model.matchedTemplateName.map { "模板：\($0)" } ?? "映射模板",
+                    systemImage: "square.stack.3d.up"
+                )
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+
+            Button("保存为模板…") {
+                model.templateNameDraft = model.matchedTemplateName ?? ""
+                isTemplateNamePromptPresented = true
+            }
+            .disabled(!model.mapping.isValid)
+
+            if let name = model.matchedTemplateName {
+                Text("已套用模板「\(name)」")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .alert("保存映射模板", isPresented: $isTemplateNamePromptPresented) {
+            TextField("模板名称", text: $model.templateNameDraft)
+            Button("保存") {
+                _ = model.saveCurrentMappingAsTemplate(named: model.templateNameDraft)
+            }
+            Button("取消", role: .cancel) {
+                model.templateNameDraft = ""
+            }
+        } message: {
+            Text("同一表头的文件下次导入时会自动套用。")
+        }
+    }
+
+    private var summaryLine: String {
+        var parts = ["新建 \(model.importedEntries) 个词条"]
+        if let encoding = model.encodingLabel {
+            parts.append("编码 \(encoding)")
+        }
+        if model.overwrittenEntries > 0 {
+            parts.append("覆盖 \(model.overwrittenEntries) 个")
+        }
+        if model.mergedEntries > 0 {
+            parts.append("合并 \(model.mergedEntries) 个")
+        }
+        parts.append("跳过 \(model.skippedRows) 行")
+        return "导入完成：" + parts.joined(separator: "，") + "。"
+    }
+
+    private var issueReport: some View {
+        let total = model.rowIssues.count
+        let shown = min(total, 100)
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("问题明细 \(total) 条（显示前 \(shown) 条）")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("复制错误报告") {
+                    copyErrorReport()
+                }
+                .font(.caption)
+            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(Array(model.rowIssues.prefix(100))) { issue in
+                        Text(issue.displayText)
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    if total > 100 {
+                        Text("还有 \(total - 100) 条")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .frame(height: 110)
+            .background(.quinary, in: RoundedRectangle(cornerRadius: 6))
+        }
+    }
+
+    private func copyErrorReport() {
+        var lines = [
+            "ODict 导入错误报告",
+            "文件：\(model.fileName ?? "-")",
+            "编码：\(model.encodingLabel ?? "-")",
+            "问题：\(model.rowIssues.count) 条",
+            "",
+        ]
+        lines.append(contentsOf: model.rowIssues.map(\.displayText))
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(lines.joined(separator: "\n"), forType: .string)
     }
 
     private func columnPicker(_ title: String, selection: Binding<Int?>) -> some View {
@@ -129,6 +255,12 @@ struct CSVImportSheet: View {
 
             if let note = model.sourceNote {
                 Text(note)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let encoding = model.encodingLabel {
+                Text("Encoding: \(encoding)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -178,27 +310,16 @@ struct CSVImportSheet: View {
                     value: Double(model.processedRows),
                     total: Double(max(model.totalRows, 1))
                 )
-                Text("已处理 \(model.processedRows) / \(model.totalRows) 行 · 写入 \(model.importedEntries) 个词条 · 跳过 \(model.skippedRows) 行")
+                Text("已处理 \(model.processedRows) / \(model.totalRows) 行 · 新建 \(model.importedEntries) · 跳过 \(model.skippedRows)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
         case .finished:
             VStack(alignment: .leading, spacing: 6) {
-                Text("导入完成：写入 \(model.importedEntries) 个词条，跳过 \(model.skippedRows) 行。")
+                Text(summaryLine)
                     .font(.headline)
-                ProgressView(
-                    value: Double(model.processedRows),
-                    total: Double(max(model.totalRows, 1))
-                )
-                if !model.issues.isEmpty {
-                    Text("问题明细（前 5 条）：")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    ForEach(Array(model.issues.prefix(5).enumerated()), id: \.offset) { _, issue in
-                        Text(issue)
-                            .font(.caption)
-                            .foregroundStyle(.orange)
-                    }
+                if !model.rowIssues.isEmpty {
+                    issueReport
                 }
             }
         }

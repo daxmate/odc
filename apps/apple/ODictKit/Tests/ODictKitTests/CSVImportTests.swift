@@ -76,7 +76,8 @@ struct CSVImportPlanTests {
             CSVImportPlan.make(table: table, mapping: .suggested(for: table.header))
         )
         #expect(plan.groups.count == 2)
-        #expect(plan.issues.map(\.row) == [2, 3])
+        // Row numbers follow the sheet: the header is row 1.
+        #expect(plan.issues.map(\.row) == [3, 4])
         #expect(plan.totalRows == 4)
     }
 

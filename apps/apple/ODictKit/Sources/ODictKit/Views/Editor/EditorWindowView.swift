@@ -111,7 +111,7 @@ struct EditorView: View {
                 .disabled(!model.canRedo)
 
                 Button {
-                    importer = model.makeCSVImportModel()
+                    importer = model.makeCSVImportModel(libraryKey: libraryKey)
                     isImportPresented = importer != nil
                 } label: {
                     Label("导入 CSV / Excel…", systemImage: "tablecells")

@@ -191,7 +191,7 @@ public final class DictionaryStore {
     /// A CSV importer that writes into the active dictionary's working set.
     public func makeCSVImportModel() -> CSVImportModel? {
         guard let handle = activeHandle else { return nil }
-        return CSVImportModel(editing: handle)
+        return CSVImportModel(editing: handle, libraryKey: activeDictionaryID?.uuidString ?? "")
     }
 
     /// Re-run the reader's query after the editor changed the working set.

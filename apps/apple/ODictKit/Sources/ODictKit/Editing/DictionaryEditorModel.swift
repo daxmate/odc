@@ -228,8 +228,8 @@ public final class DictionaryEditorModel {
     }
 
     /// Importer bound to the same handle; opens with the current status.
-    public func makeCSVImportModel() -> CSVImportModel {
-        CSVImportModel(editing: editing)
+    public func makeCSVImportModel(libraryKey: String = "") -> CSVImportModel {
+        CSVImportModel(editing: editing, libraryKey: libraryKey)
     }
 
     public var visibleDiffFields: [FieldDiff] {
