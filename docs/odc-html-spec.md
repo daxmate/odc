@@ -174,6 +174,9 @@
 | `data-odc-scope` | 作用域 id | sense | 必填；指向 pos-block 或 pv 的 id |
 | `data-odc-orig-class` | 原 class 串 | 任意 | 降级保留，不参与渲染 |
 | `data-odc-orig-anchor` | 原锚点 | 任意 | 排障与链接重写 |
+| `data-odc-orig-tag` | 原标签名 | 任意 | 排障；仅在被替换的私有标签上写 |
+| `data-odc-orig-src` | 原资源引用 | audio / img / source | 排障；解析失败时唯一线索 |
+| `data-odc-orig-target` | 原链接目标 | crossref / homograph | 排障；重写链接时保留 |
 | `data-odc-src` | `odc-resource://…` | audio / img / source | 见 3.5 |
 | `data-odc-missing` | `1` | audio / img / crossref | 资源或目标不可解析 |
 | `data-odc-kind` | 枚举 | ref / hw-alt / inflection | 块或变体类型 |
