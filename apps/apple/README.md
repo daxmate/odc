@@ -13,8 +13,11 @@ The readers open a dictionary, search it (prefix, then substring) and render
 entries. **ODict Desktop** also has an editing mode for repository
 directories: paged browsing, structured field editing, field diffs, commit and
 discard, plus CSV and Excel import into the working set (`.xlsx` files are
-read from their first non-empty worksheet only). Single-file `.odc` packs stay
-read-only, and the iOS app has no editing entry point.
+read from their first non-empty worksheet only). The editor also checks and
+repairs the selected entry's HTML on demand (「检查 HTML」/「修复 HTML」), using
+the same `process_html` core as `odc check-html`; a repair is one undoable
+form edit and is not written to the working set until you save. Single-file
+`.odc` packs stay read-only, and the iOS app has no editing entry point.
 
 ## Prerequisites
 

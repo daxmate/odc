@@ -151,6 +151,13 @@ public final class DictionaryEditorModel {
     public var validationMessage: String?
     public var alertMessage: String?
     public private(set) var noticeMessage: String?
+
+    /// Diagnostics from the last HTML check of the selected entry.
+    public private(set) var htmlDiagnostics: [HtmlDiagnostic] = []
+    /// Whether the last check ran (so the empty state is not a guess).
+    public private(set) var htmlChecked = false
+    /// Short status line: "没有发现问题" / "已修复" / "这个词条没有 HTML 内容".
+    public private(set) var htmlCheckMessage: String?
     public private(set) var committed = false
     public var author: String
 
@@ -173,16 +180,19 @@ public final class DictionaryEditorModel {
     @ObservationIgnored private var lastCoalescedKey: String?
     @ObservationIgnored private var lastCoalescedAt: Date?
     @ObservationIgnored private let now: () -> Date
+    @ObservationIgnored private let htmlProcessor: ODCHTMLProcessing
 
     public init(
         editing: ODCEditing,
         author: String = NSUserName(),
         onCommit: (() -> Void)? = nil,
+        htmlProcessor: ODCHTMLProcessing = ODCHTMLProcessor(),
         now: @escaping () -> Date = { Date() }
     ) {
         self.editing = editing
         self.author = author
         self.onCommitHandler = onCommit
+        self.htmlProcessor = htmlProcessor
         self.now = now
         self.status = WorkingStatus(
             added: 0,
@@ -234,6 +244,7 @@ public final class DictionaryEditorModel {
     public func reload() {
         isLoaded = false
         clearUndoHistory()
+        resetHTMLCheck()
         if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             loadFirstPage()
         } else {
@@ -317,6 +328,7 @@ public final class DictionaryEditorModel {
     public func select(_ key: String?) {
         selectedKey = key
         validationMessage = nil
+        resetHTMLCheck()
         guard let key else {
             form = nil
             original = nil
@@ -449,6 +461,61 @@ public final class DictionaryEditorModel {
             alertMessage = error.localizedDescription
             return false
         }
+    }
+
+    // MARK: - HTML check and repair
+
+    /// Check the selected entry's `raw_html` without changing it.
+    public func checkSelectedEntryHTML() {
+        guard let rawHTML = form?.rawHTML else { return }
+        htmlDiagnostics = []
+        htmlChecked = false
+        guard !rawHTML.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            htmlChecked = true
+            htmlCheckMessage = "这个词条没有 HTML 内容。"
+            return
+        }
+        do {
+            let result = try htmlProcessor.processHTML(rawHTML, mode: .check)
+            htmlDiagnostics = result.diagnostics
+            htmlChecked = true
+            htmlCheckMessage = result.diagnostics.isEmpty ? "没有发现问题。" : nil
+        } catch {
+            htmlCheckMessage = nil
+            alertMessage = error.localizedDescription
+        }
+    }
+
+    /// Repair the selected entry's `raw_html` through `format`.
+    ///
+    /// The result goes through `updateForm`, so it is one undo step and
+    /// nothing reaches the working set until the user saves.
+    @discardableResult
+    public func applyHTMLFix() -> Bool {
+        guard let rawHTML = form?.rawHTML else { return false }
+        do {
+            let result = try htmlProcessor.processHTML(rawHTML, mode: .format)
+            if result.changed {
+                updateForm { $0.rawHTML = result.html }
+            }
+            htmlDiagnostics = []
+            htmlChecked = true
+            htmlCheckMessage = result.changed
+                ? "已修复 HTML，保存到工作区后生效。"
+                : "没有需要修复的问题。"
+            return true
+        } catch {
+            htmlCheckMessage = nil
+            alertMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    /// Drop stale diagnostics when the form is replaced.
+    private func resetHTMLCheck() {
+        htmlDiagnostics = []
+        htmlChecked = false
+        htmlCheckMessage = nil
     }
 
     // MARK: - Undo and redo
@@ -594,6 +661,7 @@ public final class DictionaryEditorModel {
         original = snapshot.original
         diff = snapshot.selectedKey.flatMap { try? editing.entryDiff($0) }
         validationMessage = nil
+        resetHTMLCheck()
         rebuildRows()
         if backendChanged {
             onCommitHandler?()

@@ -165,13 +165,18 @@ final class FakeEditing: ODCEditing {
     }
 }
 
-func makeEntry(_ key: String, display: String? = nil, sense: String = "sense") -> DictionaryEntry {
+func makeEntry(
+    _ key: String,
+    display: String? = nil,
+    sense: String = "sense",
+    rawHTML: String? = nil
+) -> DictionaryEntry {
     DictionaryEntry(
         key: key,
         display: display ?? key.capitalized,
         phonetic: [],
         defs: [Definition(pos: "noun", sense: sense)],
-        rawHTML: nil,
+        rawHTML: rawHTML,
         extra: [:]
     )
 }

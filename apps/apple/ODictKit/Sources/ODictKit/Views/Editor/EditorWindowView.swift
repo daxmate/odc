@@ -508,6 +508,38 @@ private struct EntryFormView: View {
                         RoundedRectangle(cornerRadius: 6)
                             .stroke(.quaternary)
                     }
+
+                HStack(spacing: 8) {
+                    Button("检查 HTML") {
+                        model.checkSelectedEntryHTML()
+                    }
+                    .help("检查这段 HTML 的解析错误与不安全内容")
+
+                    if !model.htmlDiagnostics.isEmpty {
+                        Button("修复 HTML") {
+                            model.applyHTMLFix()
+                        }
+                        .help("修复、净化并格式化 HTML，可撤销")
+                    }
+                }
+
+                if let message = model.htmlCheckMessage {
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                ForEach(Array(model.htmlDiagnostics.enumerated()), id: \.offset) { _, diagnostic in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(diagnostic.code) — \(diagnostic.message)")
+                            .font(.caption.weight(.semibold))
+                        if let detail = diagnostic.detail, !detail.isEmpty {
+                            Text(detail)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
             }
 
             if let message = model.validationMessage {

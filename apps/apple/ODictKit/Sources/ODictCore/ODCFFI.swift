@@ -11,6 +11,8 @@ public enum OdcError: LocalizedError, Equatable {
     case entryFailed(String)
     /// An editing call (`put`, `delete`, `commit`, `diff`, `discard`) failed.
     case editFailed(String)
+    /// `odc_html_process_json` failed.
+    case htmlFailed(String)
     /// `odc_repo_resource_len` / `odc_repo_resource_copy` failed.
     case resourceFailed(String)
     /// `limit` was outside the range the C ABI accepts.
@@ -44,6 +46,8 @@ public enum OdcError: LocalizedError, Equatable {
             return "读取词条失败：\(detail)"
         case .editFailed(let detail):
             return "编辑词条失败：\(detail)"
+        case .htmlFailed(let detail):
+            return "HTML 处理失败：\(detail)"
         case .invalidLimit(let limit):
             return "搜索数量 \(limit) 超出 1…200 的范围。"
         case .invalidPageLimit(let limit):
