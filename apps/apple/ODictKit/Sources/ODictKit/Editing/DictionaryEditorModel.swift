@@ -151,6 +151,8 @@ public final class DictionaryEditorModel {
     public var validationMessage: String?
     public var alertMessage: String?
     public private(set) var noticeMessage: String?
+    /// Whether another process moved HEAD while this session has local work.
+    public private(set) var hasPendingExternalChange = false
 
     /// Diagnostics from the last HTML check of the selected entry.
     public private(set) var htmlDiagnostics: [HtmlDiagnostic] = []
@@ -169,6 +171,7 @@ public final class DictionaryEditorModel {
     @ObservationIgnored private let onCommitHandler: (() -> Void)?
     @ObservationIgnored private var loadedEntries: [DictionaryEntry] = []
     @ObservationIgnored private var deletedRows: [Row] = []
+    @ObservationIgnored private var externalDetector = ExternalChangeDetector()
     @ObservationIgnored private var changeKinds: [String: ChangeKind] = [:]
     @ObservationIgnored private var lastLoadedKey: String?
     @ObservationIgnored private var searching = false
@@ -257,6 +260,11 @@ public final class DictionaryEditorModel {
         defer { isLoading = false }
         do {
             status = try editing.workingStatus()
+            if !isLoaded {
+                // First load (or an explicit reload) defines the HEAD this
+                // session compares against later.
+                externalDetector.adopt(head: status.head)
+            }
             try refreshChanges()
             loadedEntries = try editing.entriesPage(after: nil, limit: Self.pageSize)
             lastLoadedKey = loadedEntries.last?.key
@@ -834,6 +842,7 @@ public final class DictionaryEditorModel {
             try refreshChanges()
             rebuildRows()
             diff = selectedKey.flatMap { try? editing.entryDiff($0) }
+            externalDetector.adopt(head: status.head)
             noticeMessage = "已提交。"
             committed = true
             clearUndoHistory()
@@ -874,6 +883,74 @@ public final class DictionaryEditorModel {
 
     public func clearValidation() {
         validationMessage = nil
+    }
+
+    // MARK: - Changes panel and external updates
+
+    /// Builds the changes panel model for this editor session.
+    ///
+    /// The panel reads the repository directly so it can show every change,
+    /// not just the page the entry list happens to hold.
+    public func makeWorkingChangesModel() -> WorkingChangesModel {
+        WorkingChangesModel(editing: editing, author: author)
+    }
+
+    /// Records a commit made from the changes panel: reload the list and show
+    /// the short hash in the status bar.
+    public func didCommit(hash: String) {
+        noticeMessage = "已提交 \(WorkingChangesModel.shortHash(hash))"
+        committed = true
+        externalDetector.adopt(head: hash)
+        reload()
+    }
+
+    /// Re-reads HEAD and decides whether another process moved the repository
+    /// under this session.
+    ///
+    /// A clean working set reloads silently; a dirty one only raises
+    /// `hasPendingExternalChange` so the user chooses what happens to their
+    /// work. Nothing is ever overwritten without that choice.
+    public func checkForExternalChanges() {
+        guard isLoaded else { return }
+        do {
+            let current = try editing.workingStatus()
+            let hasLocal = current.added + current.modified + current.removed > 0
+            status = current
+            switch externalDetector.evaluate(head: current.head, hasLocalChanges: hasLocal) {
+            case .inSync:
+                break
+            case .reloaded:
+                reload()
+                noticeMessage = "库已被其他进程更新，已重新加载。"
+            case .conflict:
+                hasPendingExternalChange = true
+            }
+        } catch {
+            alertMessage = error.localizedDescription
+        }
+    }
+
+    /// The conflict prompt was dismissed without a decision; the next
+    /// activation asks again.
+    public func pendingExternalChangeDismissed() {
+        hasPendingExternalChange = false
+    }
+
+    /// Keeps this session's uncommitted work and stops prompting about the
+    /// foreign commit.
+    public func keepLocalChanges() {
+        hasPendingExternalChange = false
+        externalDetector.adopt(head: status.head)
+        noticeMessage = "已保留本地更改；之后的提交会写在新版本之上。"
+    }
+
+    /// Throws the local work away and adopts what the other process wrote.
+    public func discardLocalChangesAfterExternalChange() {
+        hasPendingExternalChange = false
+        if discard() {
+            externalDetector.adopt(head: status.head)
+            noticeMessage = "已放弃本地更改并载入最新版本。"
+        }
     }
 
     // MARK: - Rows

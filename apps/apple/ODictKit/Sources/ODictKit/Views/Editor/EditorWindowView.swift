@@ -8,7 +8,6 @@ import SwiftUI
 public struct EditorWindowView: View {
     private let store: DictionaryStore
     @State private var model: DictionaryEditorModel?
-    @Environment(\.dismissWindow) private var dismissWindow
 
     public init(store: DictionaryStore) {
         self.store = store
@@ -27,9 +26,7 @@ public struct EditorWindowView: View {
                     model: model,
                     repoPath: store.documentURL?.path,
                     libraryKey: store.activeDictionaryID?.uuidString ?? ""
-                ) {
-                    dismissWindow(id: "editor")
-                }
+                )
             } else {
                 ContentUnavailableView(
                     "这个词典不能编辑",
@@ -52,9 +49,9 @@ struct EditorView: View {
     let repoPath: String?
     /// Stable identifier used for the per-library publish record.
     let libraryKey: String
-    let onCommitted: () -> Void
 
-    @State private var isCommitPresented = false
+    @State private var isChangesPresented = false
+    @State private var changesModel: WorkingChangesModel?
     @State private var isImportPresented = false
     @State private var isDiscardPresented = false
     @State private var isDeletePresented = false
@@ -130,6 +127,15 @@ struct EditorView: View {
                 .disabled(model.form == nil)
 
                 Button {
+                    presentChanges()
+                } label: {
+                    Label("变更…", systemImage: "list.bullet.rectangle")
+                }
+                .keyboardShortcut("k", modifiers: [.command, .shift])
+                .help("查看工作区相对 HEAD 的改动并提交")
+                .disabled(!model.isLoaded)
+
+                Button {
                     presentPublish()
                 } label: {
                     Label("发布…", systemImage: "shippingbox")
@@ -146,9 +152,11 @@ struct EditorView: View {
                 .disabled(repoPath == nil)
             }
         }
-        .sheet(isPresented: $isCommitPresented) {
-            CommitSheet(model: model) {
-                onCommitted()
+        .sheet(isPresented: $isChangesPresented, onDismiss: {
+            changesModel = nil
+        }) {
+            if let changesModel {
+                ChangesSheet(model: changesModel, editor: model)
             }
         }
         .sheet(isPresented: $isImportPresented, onDismiss: {
@@ -219,6 +227,41 @@ struct EditorView: View {
         } message: {
             Text(model.alertMessage ?? "")
         }
+        .confirmationDialog(
+            "库已被其他进程更新",
+            isPresented: externalChangeBinding,
+            titleVisibility: .visible
+        ) {
+            Button("保留我的更改") { model.keepLocalChanges() }
+            Button("放弃并重新加载", role: .destructive) {
+                model.discardLocalChangesAfterExternalChange()
+            }
+        } message: {
+            Text("另一个进程提交了新的版本，而本地还有未提交的改动。请选择如何处理这些改动。")
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            model.checkForExternalChanges()
+        }
+    }
+
+    /// The conflict dialog is driven by the model, not a view-local flag, so a
+    /// silent reload never has to flash a dialog.
+    private var externalChangeBinding: Binding<Bool> {
+        Binding(
+            get: { model.hasPendingExternalChange },
+            set: { if !$0 { model.pendingExternalChangeDismissed() } }
+        )
+    }
+
+    // MARK: - Changes panel
+
+    private func presentChanges() {
+        model.checkForExternalChanges()
+        // A pending conflict has to be resolved first; otherwise the dialog
+        // and the sheet would fight over the same window.
+        guard !model.hasPendingExternalChange else { return }
+        changesModel = model.makeWorkingChangesModel()
+        isChangesPresented = true
     }
 
     // MARK: - Publishing
@@ -343,7 +386,7 @@ struct EditorView: View {
 
             Button("提交…") {
                 if model.hasChanges {
-                    isCommitPresented = true
+                    presentChanges()
                 } else {
                     model.alertMessage = "工作区没有改动，不需要提交。"
                 }
@@ -719,46 +762,4 @@ private struct DiffKindBadge: View {
     }
 }
 
-private struct CommitSheet: View {
-    @Bindable var model: DictionaryEditorModel
-    let onCommitted: () -> Void
-
-    @Environment(\.dismiss) private var dismiss
-    @State private var message = ""
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("提交改动")
-                .font(.title3.weight(.semibold))
-            Text("新增 \(model.status.added) · 修改 \(model.status.modified) · 删除 \(model.status.removed)")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-            TextField("提交信息", text: $message)
-                .textFieldStyle(.roundedBorder)
-                .onSubmit(commit)
-            if let errorText = model.alertMessage {
-                Text(errorText)
-                    .font(.callout)
-                    .foregroundStyle(.red)
-            }
-            HStack {
-                Spacer()
-                Button("取消") { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                Button("提交") { commit() }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-        }
-        .padding(20)
-        .frame(width: 420)
-    }
-
-    private func commit() {
-        if model.commit(message: message) {
-            dismiss()
-            onCommitted()
-        }
-    }
-}
 #endif

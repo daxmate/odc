@@ -8,6 +8,8 @@ final class FakeEditing: ODCEditing {
     var working: [String: DictionaryEntry]
     var diffs: [String: EntryDiff] = [:]
     var failOnKeys: Set<String> = []
+    /// Keys whose field-level diff throws, to exercise error handling.
+    var diffFailures: Set<String> = []
     /// Keys that live in storage but are never returned by `entriesPage`,
     /// i.e. entries sitting on pages the editor has not loaded yet.
     var unloadedKeys: Set<String> = []
@@ -16,6 +18,11 @@ final class FakeEditing: ODCEditing {
     var commitMessage: String?
     var commitAuthor: String?
     var discardCount = 0
+    /// HEAD reported by `workingStatus`; tests move it to fake a foreign
+    /// process committing while a session is open.
+    var headRef: String? = "head"
+    /// Hash the next commit reports, and the HEAD it leaves behind.
+    var commitHash = "0123456789abcdef"
 
     init(entries: [DictionaryEntry], changes: [(String, ChangeKind)] = []) {
         self.head = Dictionary(uniqueKeysWithValues: entries.map { ($0.key, $0) })
@@ -106,7 +113,7 @@ final class FakeEditing: ODCEditing {
             total: working.count,
             entries: working.count,
             blocks: 0,
-            head: "head"
+            head: headRef
         )
     }
 
@@ -130,6 +137,9 @@ final class FakeEditing: ODCEditing {
     }
 
     func entryDiff(_ key: String) throws -> EntryDiff {
+        if diffFailures.contains(key) {
+            throw OdcError.editFailed("repository unavailable")
+        }
         if let diff = diffs[key] {
             return diff
         }
@@ -146,8 +156,9 @@ final class FakeEditing: ODCEditing {
         commitMessage = message
         commitAuthor = author
         head = working
+        headRef = commitHash
         return CommitResult(
-            hash: "commit",
+            hash: commitHash,
             entryCount: working.count,
             ts: 0,
             author: author,
