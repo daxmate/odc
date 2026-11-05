@@ -156,7 +156,7 @@ pub fn entry_from_record(record: &MdxRecord) -> Result<Entry> {
 ///
 /// [`entry_from_record`] is the same call with
 /// [`DEFAULT_MAX_RECORD_BYTES`]; the importer passes
-/// [`MdxImportOptions::max_record_bytes`] instead.
+/// [`MdxImportOptions::max_record_bytes`](crate::mdx_import::MdxImportOptions::max_record_bytes) instead.
 ///
 /// # Errors
 ///

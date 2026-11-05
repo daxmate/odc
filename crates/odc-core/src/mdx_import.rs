@@ -34,7 +34,7 @@ pub struct MdxImportOptions {
     /// Largest record body accepted, in bytes.
     ///
     /// Defaults to [`DEFAULT_MAX_RECORD_BYTES`] (4 MiB) and may be raised up
-    /// to [`HARD_MAX_RECORD_BYTES`] (16 MiB). Records above the limit are
+    /// to [`HARD_MAX_RECORD_BYTES`](crate::mdx::HARD_MAX_RECORD_BYTES) (16 MiB). Records above the limit are
     /// skipped and listed in
     /// [`MdxImportReport::skipped_oversized_samples`].
     pub max_record_bytes: usize,
