@@ -1,7 +1,12 @@
 //! MDX adapter tests: synthetic fixtures, error codes and key allocation.
 
 use odc_core::error::Error;
-use odc_core::mdx::{entry_from_record, MdxKeys, MdxRecord, MdxSource, MAX_RECORD_BYTES};
+#[allow(deprecated)]
+use odc_core::mdx::MAX_RECORD_BYTES;
+use odc_core::mdx::{
+    entry_from_record, entry_from_record_with_limit, validate_max_record_bytes, MdxKeys, MdxRecord,
+    MdxSource, DEFAULT_MAX_RECORD_BYTES, HARD_MAX_RECORD_BYTES,
+};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -101,11 +106,72 @@ fn duplicate_keys_get_a_suffix_in_file_order() {
 fn oversized_records_are_rejected_with_a_stable_code() {
     let record = MdxRecord {
         key: "huge".to_string(),
-        html: "x".repeat(MAX_RECORD_BYTES + 1),
+        html: "x".repeat(DEFAULT_MAX_RECORD_BYTES + 1),
     };
     let error = entry_from_record(&record).expect_err("oversized record");
     assert_eq!(error.code(), "ODC-E022");
-    assert!(matches!(error, Error::EntryTooLarge { .. }));
+    assert!(matches!(
+        error,
+        Error::EntryTooLarge { bytes, limit, .. }
+            if bytes == DEFAULT_MAX_RECORD_BYTES + 1 && limit == DEFAULT_MAX_RECORD_BYTES
+    ));
+}
+
+#[test]
+fn a_record_exactly_at_the_default_limit_is_accepted() {
+    let record = MdxRecord {
+        key: "exact".to_string(),
+        html: "x".repeat(DEFAULT_MAX_RECORD_BYTES),
+    };
+    let entry = entry_from_record(&record).expect("4 MiB fits exactly");
+    assert_eq!(entry.raw_html.as_deref(), Some(record.html.as_str()));
+}
+
+#[test]
+fn one_byte_over_the_limit_is_rejected() {
+    let record = MdxRecord {
+        key: "over".to_string(),
+        html: "x".repeat(DEFAULT_MAX_RECORD_BYTES + 1),
+    };
+    let error = entry_from_record_with_limit(&record, DEFAULT_MAX_RECORD_BYTES)
+        .expect_err("one byte over the limit");
+    assert_eq!(error.code(), "ODC-E022");
+}
+
+#[test]
+fn a_raised_limit_accepts_a_five_mib_record() {
+    let record = MdxRecord {
+        key: "big".to_string(),
+        html: "x".repeat(5 * 1024 * 1024),
+    };
+    let error = entry_from_record(&record).expect_err("above the default limit");
+    assert_eq!(error.code(), "ODC-E022");
+    let entry =
+        entry_from_record_with_limit(&record, 8 * 1024 * 1024).expect("an 8 MiB limit fits");
+    assert_eq!(
+        entry.raw_html.as_deref().map(str::len),
+        Some(5 * 1024 * 1024)
+    );
+}
+
+#[test]
+fn record_limits_outside_the_supported_range_are_rejected() {
+    assert!(validate_max_record_bytes(1).is_ok());
+    assert!(validate_max_record_bytes(HARD_MAX_RECORD_BYTES).is_ok());
+    let zero = validate_max_record_bytes(0).expect_err("zero is invalid");
+    assert_eq!(zero.code(), "ODC-E016");
+    let too_big = validate_max_record_bytes(HARD_MAX_RECORD_BYTES + 1).expect_err("over 16 MiB");
+    assert_eq!(too_big.code(), "ODC-E016");
+    assert!(
+        too_big.to_string().contains("max_record_bytes"),
+        "{too_big}"
+    );
+}
+
+#[test]
+#[allow(deprecated)]
+fn the_legacy_constant_tracks_the_default() {
+    assert_eq!(MAX_RECORD_BYTES, DEFAULT_MAX_RECORD_BYTES);
 }
 
 #[test]

@@ -13,8 +13,8 @@ use odc_core::{Def, Entry, Repo};
 use odc_ffi::{
     odc_copy_pack_to_repo, odc_html_process_json, odc_import_mdx_to_odc,
     odc_import_mdx_to_odc_with_mdd, odc_import_mdx_to_odc_with_mdd_progress,
-    odc_import_mdx_to_repo_with_mdd_progress, odc_repo_close, odc_repo_commit_json,
-    odc_repo_discard_json, odc_repo_entries_page_json, odc_repo_entry_count,
+    odc_import_mdx_to_repo_with_mdd_progress, odc_import_mdx_to_repo_with_options, odc_repo_close,
+    odc_repo_commit_json, odc_repo_discard_json, odc_repo_entries_page_json, odc_repo_entry_count,
     odc_repo_entry_delete_json, odc_repo_entry_diff_json, odc_repo_entry_json,
     odc_repo_entry_link_json, odc_repo_entry_link_working_json, odc_repo_entry_put_json,
     odc_repo_open, odc_repo_resource_copy, odc_repo_resource_count, odc_repo_resource_len,
@@ -1218,4 +1218,129 @@ fn html_rejects_null_and_invalid_utf8() {
     let (value, error) = html_process(&invalid, &mode);
     assert!(value.is_null());
     assert!(error.expect("error message").contains("not valid UTF-8"));
+}
+
+// --- record size limit ---------------------------------------------------
+
+fn write_size_fixture(mdx: &Path, rows: &[(&str, &str)]) {
+    odc_testkit::write_v2_mdx(mdx, rows).expect("write fixture");
+}
+
+fn repo_import_legacy(mdx: &Path, repo_dir: &Path) -> (i32, Option<String>, Option<String>) {
+    let mdx_text = CString::new(mdx.to_str().expect("mdx path")).expect("mdx cstring");
+    let repo_text = CString::new(repo_dir.to_str().expect("repo path")).expect("repo cstring");
+    let mut report: *mut c_char = ptr::null_mut();
+    let mut error: *mut c_char = ptr::null_mut();
+    // SAFETY: the strings are live for the call, no callback is passed and the
+    // out slots are writable.
+    let code = unsafe {
+        odc_import_mdx_to_repo_with_mdd_progress(
+            mdx_text.as_ptr(),
+            repo_text.as_ptr(),
+            ptr::null(),
+            None,
+            ptr::null_mut(),
+            &mut report,
+            &mut error,
+        )
+    };
+    (code, take_error_if_any(report), take_error_if_any(error))
+}
+
+fn repo_import_with_options(
+    mdx: &Path,
+    repo_dir: &Path,
+    options: &CStr,
+) -> (i32, Option<String>, Option<String>) {
+    let mdx_text = CString::new(mdx.to_str().expect("mdx path")).expect("mdx cstring");
+    let repo_text = CString::new(repo_dir.to_str().expect("repo path")).expect("repo cstring");
+    let mut report: *mut c_char = ptr::null_mut();
+    let mut error: *mut c_char = ptr::null_mut();
+    // SAFETY: every pointer is live for the call and the out slots are
+    // writable.
+    let code = unsafe {
+        odc_import_mdx_to_repo_with_options(
+            mdx_text.as_ptr(),
+            repo_text.as_ptr(),
+            ptr::null(),
+            options.as_ptr(),
+            None,
+            ptr::null_mut(),
+            &mut report,
+            &mut error,
+        )
+    };
+    (code, take_error_if_any(report), take_error_if_any(error))
+}
+
+#[test]
+fn repo_import_legacy_entry_uses_the_four_mib_default() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mdx = dir.path().join("fixture.mdx");
+    let fits = "f".repeat(2 * 1024 * 1024);
+    let over = "o".repeat(4 * 1024 * 1024 + 1);
+    write_size_fixture(
+        &mdx,
+        &[("alpha_fits", fits.as_str()), ("bravo_over", over.as_str())],
+    );
+    let (code, report, error) = repo_import_legacy(&mdx, &dir.path().join("library.odc"));
+    assert_eq!(code, 0, "import failed: {error:?}");
+    let report: Value = serde_json::from_str(&report.expect("report")).expect("report json");
+    assert_eq!(
+        report["imported_entries"], 1,
+        "2 MiB fits the 4 MiB default"
+    );
+    assert_eq!(report["skipped_oversized"], 1);
+    assert_eq!(report["skipped_oversized_samples"][0]["key"], "bravo_over");
+    assert_eq!(report["skipped_oversized_samples"][0]["bytes"], 4_194_305);
+}
+
+#[test]
+fn repo_import_options_raise_the_record_limit() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mdx = dir.path().join("fixture.mdx");
+    let big = "b".repeat(5 * 1024 * 1024);
+    write_size_fixture(&mdx, &[("big", big.as_str())]);
+    let options = CString::new("{\"max_record_bytes\": 8388608}").expect("options");
+    let (code, report, error) =
+        repo_import_with_options(&mdx, &dir.path().join("library.odc"), &options);
+    assert_eq!(code, 0, "import failed: {error:?}");
+    let report: Value = serde_json::from_str(&report.expect("report")).expect("report json");
+    assert_eq!(report["imported_entries"], 1);
+    assert_eq!(report["skipped_oversized"], 0);
+    assert_eq!(
+        report["skipped_oversized_samples"].as_array().map(Vec::len),
+        Some(0)
+    );
+}
+
+#[test]
+fn repo_import_options_reject_limits_above_the_hard_cap() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mdx = dir.path().join("fixture.mdx");
+    write_size_fixture(&mdx, &[("alpha", "<p>a</p>")]);
+    let options = CString::new("{\"max_record_bytes\": 16777217}").expect("options");
+    let (code, report, error) =
+        repo_import_with_options(&mdx, &dir.path().join("library.odc"), &options);
+    assert_eq!(code, -1);
+    assert!(report.is_none(), "a failed import leaves no report");
+    let message = error.expect("error message");
+    assert!(message.contains("max_record_bytes"), "{message}");
+    assert!(message.contains("16777216"), "{message}");
+}
+
+#[test]
+fn repo_import_options_reject_unknown_keys() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mdx = dir.path().join("fixture.mdx");
+    write_size_fixture(&mdx, &[("alpha", "<p>a</p>")]);
+    let options = CString::new("{\"max_record_bytes\": 8388608, \"depth\": 2}").expect("options");
+    let (code, _report, error) =
+        repo_import_with_options(&mdx, &dir.path().join("library.odc"), &options);
+    assert_eq!(code, -1);
+    let message = error.expect("error message");
+    assert!(
+        message.contains("unknown import option: depth"),
+        "{message}"
+    );
 }

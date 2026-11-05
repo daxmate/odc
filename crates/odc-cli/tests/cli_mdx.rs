@@ -313,3 +313,103 @@ fn trailing_bytes_fall_back_to_the_plain_import_with_a_warning() {
     let status = stdout_of(odc(repo_dir.path()).arg("status"));
     assert!(status.contains("working set: 4 entries"), "{status}");
 }
+
+fn big_fixture(dir: &Path, body_bytes: usize) -> PathBuf {
+    let path = dir.join("big.mdx");
+    let body = "x".repeat(body_bytes);
+    let rows = [("bigword", body.as_str())];
+    odc_testkit::write_v2_mdx(&path, &rows).expect("big fixture");
+    path
+}
+
+fn init_repo(dir: &Path) {
+    stdout_of(odc(dir).arg("init"));
+}
+
+#[test]
+fn import_skips_records_above_the_default_limit_and_lists_them() {
+    let repo = TempDir::new().expect("tempdir");
+    let source = TempDir::new().expect("tempdir");
+    let mdx = big_fixture(source.path(), 5 * 1024 * 1024);
+    init_repo(repo.path());
+    let output = stdout_of(
+        odc(repo.path())
+            .arg("import")
+            .arg(&mdx)
+            .arg("--format")
+            .arg("mdx")
+            .arg("--html")
+            .arg("off"),
+    );
+    assert!(output.contains("1 oversized skipped"), "{output}");
+    assert!(
+        output
+            .contains("skipped oversized record \"bigword\" (5242880 bytes, limit 4194304 bytes)"),
+        "{output}"
+    );
+    assert!(output.contains("working set = 0"), "{output}");
+}
+
+#[test]
+fn max_record_bytes_raises_the_limit() {
+    let repo = TempDir::new().expect("tempdir");
+    let source = TempDir::new().expect("tempdir");
+    let mdx = big_fixture(source.path(), 5 * 1024 * 1024);
+    init_repo(repo.path());
+    let output = stdout_of(
+        odc(repo.path())
+            .arg("import")
+            .arg(&mdx)
+            .arg("--format")
+            .arg("mdx")
+            .arg("--html")
+            .arg("off")
+            .arg("--max-record-bytes")
+            .arg("8388608"),
+    );
+    assert!(output.contains("working set = 1"), "{output}");
+    assert!(!output.contains("oversized"), "{output}");
+}
+
+#[test]
+fn max_record_bytes_rejects_out_of_range_values() {
+    let repo = TempDir::new().expect("tempdir");
+    let source = TempDir::new().expect("tempdir");
+    let mdx = big_fixture(source.path(), 1024);
+    init_repo(repo.path());
+    for value in ["0", "16777217"] {
+        let output = odc(repo.path())
+            .arg("import")
+            .arg(&mdx)
+            .arg("--format")
+            .arg("mdx")
+            .arg("--max-record-bytes")
+            .arg(value)
+            .output()
+            .expect("run odc");
+        assert!(!output.status.success(), "{value} must be refused");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("max_record_bytes must be between 1 and 16777216"),
+            "{value}: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn max_record_bytes_rejects_a_non_integer() {
+    let repo = TempDir::new().expect("tempdir");
+    let source = TempDir::new().expect("tempdir");
+    let mdx = big_fixture(source.path(), 1024);
+    init_repo(repo.path());
+    odc(repo.path())
+        .arg("import")
+        .arg(&mdx)
+        .arg("--format")
+        .arg("mdx")
+        .arg("--max-record-bytes")
+        .arg("4MiB")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid value"));
+}

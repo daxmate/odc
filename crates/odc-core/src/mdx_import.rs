@@ -12,7 +12,10 @@ use std::time::{Duration, Instant};
 use crate::error::{Error, Result};
 use crate::html::{self, HtmlImportSummary, HtmlMode, HtmlOptions};
 use crate::mdd_import::{self, MddImportReport, MddScan, MddVolumeReport};
-use crate::mdx::{entry_from_record, MdxHeader, MdxKeys, MdxSource};
+use crate::mdx::{
+    entry_from_record_with_limit, validate_max_record_bytes, MdxHeader, MdxKeys, MdxSource,
+    DEFAULT_MAX_RECORD_BYTES,
+};
 use crate::mdx_scan::{self, CorruptBlock};
 use crate::repo::Repo;
 use crate::stylesheets;
@@ -28,6 +31,13 @@ pub struct MdxImportOptions {
     pub prune: bool,
     /// Stop after this many accepted entries.
     pub limit: Option<usize>,
+    /// Largest record body accepted, in bytes.
+    ///
+    /// Defaults to [`DEFAULT_MAX_RECORD_BYTES`] (4 MiB) and may be raised up
+    /// to [`HARD_MAX_RECORD_BYTES`] (16 MiB). Records above the limit are
+    /// skipped and listed in
+    /// [`MdxImportReport::skipped_oversized_samples`].
+    pub max_record_bytes: usize,
     /// How entry bodies are repaired, sanitised and formatted.
     ///
     /// Defaults to [`HtmlMode::Format`]: MDX imports normalise HTML unless the
@@ -60,6 +70,7 @@ impl Default for MdxImportOptions {
             skip_corrupt_blocks: true,
             prune: false,
             limit: None,
+            max_record_bytes: DEFAULT_MAX_RECORD_BYTES,
             html: HtmlOptions::default(),
             progress: None,
             import_mdd: true,
@@ -75,6 +86,7 @@ impl std::fmt::Debug for MdxImportOptions {
             .field("skip_corrupt_blocks", &self.skip_corrupt_blocks)
             .field("prune", &self.prune)
             .field("limit", &self.limit)
+            .field("max_record_bytes", &self.max_record_bytes)
             .field("progress", &self.progress.is_some())
             .field("import_mdd", &self.import_mdd)
             .field("mdd_volumes", &self.mdd_volumes)
@@ -206,6 +218,20 @@ impl ProgressSink {
     }
 }
 
+/// One record dropped because its body exceeded `max_record_bytes`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OversizedRecord {
+    /// Key of the skipped record, trimmed as stored in the file.
+    pub key: String,
+    /// Body size in bytes, as read from the file.
+    pub bytes: usize,
+}
+
+/// How many oversized records are listed in
+/// [`MdxImportReport::skipped_oversized_samples`].
+///
+/// [`MdxImportReport::skipped_oversized`] still carries the full count.
+pub const SKIPPED_OVERSIZED_LIST_LIMIT: usize = 100;
 /// Outcome of one `import_mdx` call.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MdxImportReport {
@@ -228,6 +254,9 @@ pub struct MdxImportReport {
     pub skipped_empty: usize,
     /// Records dropped because they exceeded the record size limit.
     pub skipped_oversized: usize,
+    /// Details of the oversized records, at most
+    /// [`SKIPPED_OVERSIZED_LIST_LIMIT`] entries in file order.
+    pub skipped_oversized_samples: Vec<OversizedRecord>,
     /// Working set size after the import.
     pub working_set: usize,
     /// Header metadata of the imported file.
@@ -268,11 +297,13 @@ pub fn import_mdx(
         skip_corrupt_blocks,
         prune,
         limit,
+        max_record_bytes,
         progress,
         import_mdd,
         mdd_volumes,
         html,
     } = options;
+    validate_max_record_bytes(max_record_bytes)?;
     let mut reporter = ProgressSink::new(progress);
     let mut html_summary = HtmlImportSummary::default();
 
@@ -333,6 +364,7 @@ pub fn import_mdx(
     let mut taken = 0_usize;
     let mut skipped_empty = 0_usize;
     let mut skipped_oversized = 0_usize;
+    let mut skipped_oversized_samples: Vec<OversizedRecord> = Vec::new();
     let mut skipped_entries = 0_usize;
     let mut deduplicated = 0_usize;
     let mut processed = 0_u64;
@@ -375,10 +407,13 @@ pub fn import_mdx(
                 }
                 html_summary.record(record.key.trim(), &outcome, changed, html.max_samples);
             }
-            let mut entry = match entry_from_record(&record) {
+            let mut entry = match entry_from_record_with_limit(&record, max_record_bytes) {
                 Ok(entry) => entry,
-                Err(Error::EntryTooLarge { .. }) => {
+                Err(Error::EntryTooLarge { word, bytes, .. }) => {
                     skipped_oversized += 1;
+                    if skipped_oversized_samples.len() < SKIPPED_OVERSIZED_LIST_LIMIT {
+                        skipped_oversized_samples.push(OversizedRecord { key: word, bytes });
+                    }
                     continue;
                 }
                 Err(error) => return Err(error),
@@ -440,6 +475,7 @@ pub fn import_mdx(
         deduplicated,
         skipped_empty,
         skipped_oversized,
+        skipped_oversized_samples,
         working_set: report.total,
         header,
         scan_warning,

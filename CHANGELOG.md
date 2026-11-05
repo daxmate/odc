@@ -6,7 +6,22 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ## [Unreleased]
 
-_暂无。_
+### Added
+- Import: ``odc import --format mdx --max-record-bytes BYTES`` and
+  `MdxImportOptions::max_record_bytes` raise the single-record limit
+  (default 4 MiB, hard cap 16 MiB). Oversized records are listed by key and
+  size — first 100 in the report, all in the count — instead of only being
+  counted.
+- FFI: `odc_import_mdx_to_repo_with_options` takes
+  `options_json = {"max_record_bytes": N}`. The existing entry point keeps
+  its ABI and semantics, now with the 4 MiB default.
+
+### Changed
+- Import: the MDX record limit grows from 1 MiB to 4 MiB by default, so large
+  entries such as LDOCE6 `go` (1.48 MB) are imported instead of dropped.
+  `MAX_RECORD_BYTES` is deprecated in favour of
+  `DEFAULT_MAX_RECORD_BYTES`; `HARD_MAX_RECORD_BYTES` caps configuration at
+  16 MiB.
 
 ## [0.14.0] - 2026-11-04
 

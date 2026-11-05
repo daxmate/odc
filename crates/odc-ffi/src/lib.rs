@@ -41,7 +41,10 @@ use serde_json::{json, Map, Value as JsonValue};
 
 mod mdx_dir;
 
-pub use mdx_dir::{odc_copy_pack_to_repo, odc_import_mdx_to_repo_with_mdd_progress};
+pub use mdx_dir::{
+    odc_copy_pack_to_repo, odc_import_mdx_to_repo_with_mdd_progress,
+    odc_import_mdx_to_repo_with_options,
+};
 
 /// Largest accepted `limit` for [`odc_repo_search_json`].
 const MAX_SEARCH_LIMIT: i32 = 200;
@@ -1138,6 +1141,11 @@ fn import_report_to_json(report: &MdxImportReport, output_bytes: u64) -> JsonVal
         "deduplicated": report.deduplicated,
         "skipped_empty": report.skipped_empty,
         "skipped_oversized": report.skipped_oversized,
+        "skipped_oversized_samples": report
+            .skipped_oversized_samples
+            .iter()
+            .map(|record| json!({"key": record.key, "bytes": record.bytes}))
+            .collect::<Vec<JsonValue>>(),
         "working_set": report.working_set,
         "scan_warning": report.scan_warning.as_deref(),
         "mdd_files": volumes,

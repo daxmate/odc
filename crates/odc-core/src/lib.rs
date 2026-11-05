@@ -45,7 +45,11 @@ pub mod varint;
 pub use entry::{Def, Entry};
 pub use error::{Error, Result};
 pub use mdd_import::{MddImportReport, MddProgress, MddScan, MddVolumeReport};
-pub use mdx_import::{import_mdx, ImportProgress, ImportStage, MdxImportOptions, MdxImportReport};
+pub use mdx::{validate_max_record_bytes, DEFAULT_MAX_RECORD_BYTES, HARD_MAX_RECORD_BYTES};
+pub use mdx_import::{
+    import_mdx, ImportProgress, ImportStage, MdxImportOptions, MdxImportReport, OversizedRecord,
+    SKIPPED_OVERSIZED_LIST_LIMIT,
+};
 pub use mdx_repo_import::{
     copy_pack_to_repo, import_mdx_to_repo, MdxRepoImportReport, PackRepoConversion,
 };

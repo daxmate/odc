@@ -297,12 +297,29 @@ int32_t odc_import_mdx_to_odc_with_mdd_progress(
  * On failure a directory created by this call is removed again.
  *
  * The report carries the same fields as odc_import_mdx_to_odc plus
- * repo_path, commit and is_directory.
+ * repo_path, commit and is_directory. The record limit defaults to 4 MiB;
+ * use odc_import_mdx_to_repo_with_options to change it.
  */
 int32_t odc_import_mdx_to_repo_with_mdd_progress(
     const char *mdx_path, const char *repo_dir, const char *mdd_paths_json,
     odc_import_progress_fn callback, void *context, char **report_json_out,
     char **error_message);
+
+/*
+ * Import an MDX file into a new directory repository with explicit options.
+ *
+ * Same contract as odc_import_mdx_to_repo_with_mdd_progress. options_json is
+ * NULL, empty, or a JSON object such as {"max_record_bytes": 8388608};
+ * unknown keys are rejected. max_record_bytes defaults to 4194304 (4 MiB)
+ * and may not exceed 16777216 (16 MiB); a larger value fails with ODC-E016.
+ *
+ * The report adds "skipped_oversized_samples": [{"key", "bytes"}], capped
+ * at 100 entries, while "skipped_oversized" carries the full count.
+ */
+int32_t odc_import_mdx_to_repo_with_options(
+    const char *mdx_path, const char *repo_dir, const char *mdd_paths_json,
+    const char *options_json, odc_import_progress_fn callback, void *context,
+    char **report_json_out, char **error_message);
 
 /*
  * Copy a single-file pack into a new directory repository without touching

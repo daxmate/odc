@@ -12,11 +12,43 @@ use mdictlib::{ChecksumPolicy, MdxFile, OpenOptions};
 use std::collections::HashSet;
 use std::path::Path;
 
-/// Largest HTML record accepted from an MDX file, in bytes.
+/// Default maximum size of one HTML record, in bytes (4 MiB).
 ///
-/// Real dictionaries stay well below this (LDOCE6 peaks at 640 KiB); the cap
-/// keeps a corrupt or hostile file from exhausting memory.
-pub const MAX_RECORD_BYTES: usize = 1024 * 1024;
+/// This is the limit used by `MdxImportOptions::default()`, by
+/// `odc import --format mdx` without `--max-record-bytes`, and by the
+/// legacy FFI entry points. 4 MiB covers real dictionaries whose tail
+/// entries are far larger than the typical record (LDOCE6 ships `go` at
+/// 1.48 MiB) while still keeping a corrupt or hostile file from exhausting
+/// memory.
+pub const DEFAULT_MAX_RECORD_BYTES: usize = 4 * 1024 * 1024;
+
+/// Hard upper bound for a configured record limit, in bytes (16 MiB).
+///
+/// A larger `max_record_bytes` is refused with `ODC-E016` so a bad
+/// configuration cannot turn one record into an unbounded allocation.
+pub const HARD_MAX_RECORD_BYTES: usize = 16 * 1024 * 1024;
+
+/// Historical 1 MiB cap, kept as an alias of [`DEFAULT_MAX_RECORD_BYTES`].
+#[deprecated(
+    since = "0.14.0",
+    note = "use DEFAULT_MAX_RECORD_BYTES or MdxImportOptions::max_record_bytes"
+)]
+pub const MAX_RECORD_BYTES: usize = DEFAULT_MAX_RECORD_BYTES;
+
+/// Check a caller-supplied record limit.
+///
+/// # Errors
+///
+/// * [`Error::InvalidArgument`] when `value` is 0 or above
+///   [`HARD_MAX_RECORD_BYTES`].
+pub fn validate_max_record_bytes(value: usize) -> Result<()> {
+    if value == 0 || value > HARD_MAX_RECORD_BYTES {
+        return Err(Error::InvalidArgument(format!(
+            "max_record_bytes must be between 1 and {HARD_MAX_RECORD_BYTES} bytes, got {value}"
+        )));
+    }
+    Ok(())
+}
 
 /// Separator used to disambiguate normalised-key collisions (`U+001F`).
 pub const COLLISION_SEPARATOR: char = '\u{1f}';
@@ -115,19 +147,33 @@ impl MdxSource {
 /// # Errors
 ///
 /// * [`Error::InvalidArgument`] when the key is empty once trimmed.
-/// * [`Error::EntryTooLarge`] when the body exceeds [`MAX_RECORD_BYTES`].
+/// * [`Error::EntryTooLarge`] when the body exceeds [`DEFAULT_MAX_RECORD_BYTES`].
 pub fn entry_from_record(record: &MdxRecord) -> Result<Entry> {
+    entry_from_record_with_limit(record, DEFAULT_MAX_RECORD_BYTES)
+}
+
+/// Convert one MDX record into an ODC entry with an explicit size limit.
+///
+/// [`entry_from_record`] is the same call with
+/// [`DEFAULT_MAX_RECORD_BYTES`]; the importer passes
+/// [`MdxImportOptions::max_record_bytes`] instead.
+///
+/// # Errors
+///
+/// * [`Error::InvalidArgument`] when the key is empty once trimmed.
+/// * [`Error::EntryTooLarge`] when the body exceeds `max_record_bytes`.
+pub fn entry_from_record_with_limit(record: &MdxRecord, max_record_bytes: usize) -> Result<Entry> {
     let key = record.key.trim();
     if key.is_empty() {
         return Err(Error::InvalidArgument(
             "MDX record with an empty key".to_string(),
         ));
     }
-    if record.html.len() > MAX_RECORD_BYTES {
+    if record.html.len() > max_record_bytes {
         return Err(Error::EntryTooLarge {
             word: key.to_string(),
             bytes: record.html.len(),
-            limit: MAX_RECORD_BYTES,
+            limit: max_record_bytes,
         });
     }
     let mut entry = Entry::new(record.key.clone());

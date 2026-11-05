@@ -45,8 +45,33 @@
 * **键归一化**：与 ODC 其他入口一致（NFKC + casefold，见 spec §4.1）。
 * **重复键**：同一次导入内归一化键重复时，第一次保留原键，后续按文件顺序
   追加 `U+001F<n>`（n = 2、3…），`display` 始终保留原词形。
-* **跳过规则**：空键（trim 后为空）与超过 1 MiB 的记录被跳过并计数；
-  `odc import --format mdx` 会输出跳过/去重统计。
+* **跳过规则**：空键（trim 后为空）与超过记录上限（默认 4 MiB，见下节）的记录被跳过并计数；
+  `odc import --format mdx` 会输出跳过/去重统计与被跳过记录的明细。
+
+## 记录上限
+
+单条记录的正文大小有上限，防止损坏或恶意文件把内存吃光：
+
+| 项 | 值 |
+| --- | --- |
+| 默认上限 | 4 MiB（4 194 304 字节，`DEFAULT_MAX_RECORD_BYTES`） |
+| 硬上限 | 16 MiB（16 777 216 字节，`HARD_MAX_RECORD_BYTES`） |
+| 单条超限 | `ODC-E022`（`EntryTooLarge`，携带 word / bytes / limit） |
+| 配置越界 | `ODC-E016`（`InvalidArgument`，要求 1 ≤ 值 ≤ 16 MiB） |
+
+* 恰好等于上限的记录接受；多 1 字节即跳过。
+* 0.13 及更早版本固定为 1 MiB，LDOCE6++ 有 13 条核心词超限（`go` 1.48 MB）被静默丢弃；0.14 起默认 4 MiB，老常量 `MAX_RECORD_BYTES` 保留为 deprecated 别名（= 默认值）。
+* 上限只影响单条正文，不看整个文件大小。
+
+配置入口：
+
+* CLI：`odc import FILE --format mdx --max-record-bytes 8388608`（整数，帮助里写明默认 4 MiB / 上限 16 MiB）。
+* 核心 API：`MdxImportOptions { max_record_bytes, .. }`，或 `entry_from_record_with_limit`。
+* FFI：`odc_import_mdx_to_repo_with_options(..., options_json, ...)`，`options_json = {"max_record_bytes": 8388608}`；`NULL` 或空串用默认值，未知键被拒绝。老入口 `odc_import_mdx_to_repo_with_mdd_progress` 的 ABI 与语义不变（默认 4 MiB）。
+
+被跳过的记录可追溯：`MdxImportReport::skipped_oversized` 是总数，`skipped_oversized_samples` 按文件顺序给出前 100 条（key + bytes）。CLI 逐条打印
+`mdx: skipped oversized record "go" (1551892 bytes, limit 4194304 bytes)`，
+FFI 报告 JSON 增加 `skipped_oversized_samples` 数组（同样最多 100 条）。
 
 ## HTML 规范化与警告
 

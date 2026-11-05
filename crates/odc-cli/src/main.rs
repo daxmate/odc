@@ -48,6 +48,12 @@ enum Command {
         /// Stop after this many entries (MDX only).
         #[arg(short = 'n', long)]
         limit: Option<usize>,
+        /// Largest record body accepted, in bytes (MDX only).
+        ///
+        /// Defaults to 4194304 (4 MiB); values above 16777216 (16 MiB) are
+        /// refused.
+        #[arg(long, value_name = "BYTES")]
+        max_record_bytes: Option<usize>,
         /// Print progress to stderr (MDX only).
         #[arg(long)]
         progress: bool,
@@ -426,12 +432,21 @@ fn run() -> odc_core::Result<ExitCode> {
             format,
             prune,
             limit,
+            max_record_bytes,
             progress,
             html,
         } => {
             let mut repo = Repo::open(&cli.repo)?;
             if format == "mdx" {
-                return import_mdx(&mut repo, &file, prune, limit, progress, &html);
+                return import_mdx(
+                    &mut repo,
+                    &file,
+                    prune,
+                    limit,
+                    max_record_bytes,
+                    progress,
+                    &html,
+                );
             }
             let entries = if format == "csv" {
                 read_csv(&file)?
@@ -1266,6 +1281,7 @@ fn import_mdx(
     path: &std::path::Path,
     prune: bool,
     limit: Option<usize>,
+    max_record_bytes: Option<usize>,
     progress: bool,
     html: &str,
 ) -> odc_core::Result<ExitCode> {
@@ -1292,10 +1308,12 @@ fn import_mdx(
 
     let mut tally = ProgressTally::default();
     let html = HtmlMode::from_name(html).unwrap_or(HtmlMode::Format);
+    let max_record_bytes = max_record_bytes.unwrap_or(odc_core::DEFAULT_MAX_RECORD_BYTES);
     let options = MdxImportOptions {
         skip_corrupt_blocks: true,
         prune,
         limit,
+        max_record_bytes,
         html: HtmlOptions {
             mode: html,
             ..HtmlOptions::default()
@@ -1340,6 +1358,18 @@ fn import_mdx(
         println!(
             "mdx: {} duplicate keys suffixed, {} empty skipped, {} oversized skipped",
             report.deduplicated, report.skipped_empty, report.skipped_oversized
+        );
+    }
+    for record in &report.skipped_oversized_samples {
+        println!(
+            "mdx: skipped oversized record {:?} ({} bytes, limit {} bytes)",
+            record.key, record.bytes, max_record_bytes
+        );
+    }
+    if report.skipped_oversized > report.skipped_oversized_samples.len() {
+        println!(
+            "mdx: ... and {} more oversized records not listed",
+            report.skipped_oversized - report.skipped_oversized_samples.len()
         );
     }
     for volume in &report.mdd_files {
