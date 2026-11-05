@@ -131,3 +131,55 @@ fn malformed_markup_is_reported() {
     assert!(format_blocks("<div class=\"x>y</div>").is_err());
     assert!(format_blocks("<div").is_err());
 }
+
+/// Layout has to be a fixed point of `format_blocks`: a second pass over the
+/// formatter's own output must be byte-identical, otherwise every import
+/// rewrites the body and the stored hash changes for reasons unrelated to the
+/// content.
+fn assert_layout_is_stable(html: &str) {
+    let first = format_blocks(html).expect("format");
+    let second = format_blocks(&first).expect("format");
+    assert_eq!(
+        first, second,
+        "second pass changed the layout\nfirst:\n{first}\nsecond:\n{second}"
+    );
+    assert_eq!(
+        second,
+        format_blocks(&second).expect("format"),
+        "layout keeps drifting after the second pass"
+    );
+}
+
+#[test]
+fn nested_lists_are_idempotent() {
+    // Single line source: the layout is created by the first pass.
+    assert_layout_is_stable("<ul><li>one<ul><li>two<ul><li>three</li></ul></li></ul></li></ul>");
+    // Already laid out source: every list item ends with a newline, so a
+    // formatter that extends the existing indentation drifts one level per
+    // pass. That was the reported `-ware` defect.
+    assert_layout_is_stable(
+        "<ul>\n  <li>one\n    <ul>\n      <li>two\n      </li>\n    </ul>\n  </li>\n</ul>",
+    );
+}
+
+#[test]
+fn indentation_is_derived_from_depth() {
+    let canonical =
+        "<ul>\n  <li>one\n    <ul>\n      <li>two\n      </li>\n    </ul>\n  </li>\n</ul>";
+    let padded = "<ul>\n        <li>one\n                <ul>\n                        <li>two\n                        </li>\n                </ul>\n        </li>\n</ul>";
+    assert_eq!(format_blocks(padded).expect("format"), canonical);
+    assert_layout_is_stable(padded);
+}
+
+/// Real `-ware` subtree (LDOCE6++ En-Cn V2-19), truncated to the list that used
+/// to drift: the closing `</li>` follows a text node that ends with a newline.
+#[test]
+fn ldoce6_ware_list_is_idempotent() {
+    let body = include_str!("fixtures/ldoce6_ware_list.html");
+    assert_layout_is_stable(body);
+    let formatted = format_blocks(body).expect("format");
+    assert!(
+        formatted.contains("\n    </li>\n  </ul>\n</div>\n"),
+        "closing tags must sit at the depth-derived indentation:\n{formatted}"
+    );
+}

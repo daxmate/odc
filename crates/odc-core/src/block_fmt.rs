@@ -342,12 +342,7 @@ impl Writer {
 
     fn line_break(&mut self) {
         if !self.line_has_content {
-            // Drop layout whitespace from a previous pass so indentation does
-            // not accumulate. Content whitespace (a line with text) is kept:
-            // text nodes are never rewritten.
-            while self.out.ends_with(' ') {
-                self.out.pop();
-            }
+            self.trim_layout_whitespace();
         }
         if self.out.ends_with('\n') {
             self.line_has_content = false;
@@ -361,6 +356,7 @@ impl Writer {
 
     fn write(&mut self, raw: &str) {
         if !self.line_has_content && !raw.starts_with('\n') {
+            self.trim_layout_whitespace();
             for _ in 0..self.depth {
                 self.out.push_str(INDENT);
             }
@@ -369,6 +365,22 @@ impl Writer {
         match raw.rsplit_once('\n') {
             Some((_, tail)) => self.line_has_content = !tail.trim().is_empty(),
             None => self.line_has_content |= !raw.trim().is_empty(),
+        }
+    }
+
+    /// Drop the layout whitespace that already sits at the start of the
+    /// current line.
+    ///
+    /// Indentation is derived from the writer's nesting depth alone.
+    /// Whitespace in front of a token that starts a line can only come from
+    /// the source or from an earlier formatting pass (a line with content
+    /// keeps `line_has_content` set), so it must be replaced, never extended:
+    /// keeping it is what made nested lists drift one level further on every
+    /// pass. Text that shares a line with content is left untouched, so text
+    /// nodes still survive layout byte for byte.
+    fn trim_layout_whitespace(&mut self) {
+        while self.out.ends_with(' ') || self.out.ends_with('\t') {
+            self.out.pop();
         }
     }
 
