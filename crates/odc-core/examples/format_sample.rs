@@ -21,7 +21,7 @@ use html5ever::tendril::TendrilSink;
 use html5ever::{local_name, ns, QualName};
 use markup5ever_rcdom::{Handle, Node, NodeData, RcDom};
 use odc_core::html::{process_html, repair_sanitize, HtmlMode, HtmlOptions};
-use odc_core::mdx::{MdxRecord, MdxSource, MAX_RECORD_BYTES};
+use odc_core::mdx::{MdxRecord, MdxSource, DEFAULT_MAX_RECORD_BYTES};
 use serde_json::{json, Map, Value};
 
 const DEFAULT_SAMPLE: usize = 200;
@@ -253,7 +253,7 @@ fn collect_records(source: &MdxSource, sample_size: usize) -> (Vec<MdxRecord>, u
 
 fn eligible_record(record: &MdxRecord) -> bool {
     let body = record.html.as_str();
-    !body.trim().is_empty() && body.contains('<') && body.len() <= MAX_RECORD_BYTES
+    !body.trim().is_empty() && body.contains('<') && body.len() <= DEFAULT_MAX_RECORD_BYTES
 }
 
 struct Lcg(u64);
