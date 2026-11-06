@@ -60,6 +60,29 @@ const INLINE_BOXES: &str = concat!(
     "<span class=\"collo\"><span class=\"collocate\">make</span></span></span>",
     "</span></span></span></div>",
 );
+/// `back` (adverb): the grammar box sits in the sense flow (between sense 1
+/// and sense 2), and the thesaurus popup panel keeps its internal title.
+const BODY_GRAMMAR_BOX: &str = concat!(
+    "<div><span class=\"entry\"><span class=\"entryhead\"><span class=\"hwd\">back</span>",
+    "<span class=\"pos\">adverb</span>",
+    "<span class=\"buttons\"><span class=\"popup-button\">Thesaurus<atl></atl></span>",
+    "<div class=\"at-link\"><span class=\"entry\">",
+    "<span class=\"popheader popthes\">Longman Language Activator</span>",
+    "<span class=\"section\"><span class=\"secheading\">return</span></span>",
+    "</span></div></span></span>",
+    "<span class=\"sense newline\"><span class=\"sensenum\">1</span>",
+    "<span class=\"signpost\"><signen>return to place</signen><sign>回原处</sign></span>",
+    "<span class=\"def\"><en>to the place you came from</en><tran>回原处</tran></span>",
+    "<span class=\"example\"><exaen>We went back home.</exaen><example>我们回家了。</example></span>",
+    "<span class=\"grambox\"><span class=\"heading\">GRAMMAR</span><span class=\"expl\">",
+    "<gramen>You go <span class=\"expr\">back to</span> a place</gramen>",
+    "<gram>可以用go back to表示回到某个地方</gram>",
+    "<span class=\"example\"><exaen><span class=\"cross\">✗</span>Don't say: <span class=\"badexa\">go back to home</span></exaen><example>不要说</example></span>",
+    "</span></span></span>",
+    "<span class=\"sense newline\"><span class=\"sensenum\">2</span>",
+    "<span class=\"def\"><en>as before</en><tran>和以前一样</tran></span></span>",
+    "</span></div>",
+);
 /// A phrasal verb sub-entry with its own head and sense.
 const PHRASAL: &str = concat!(
     "<div><span class=\"entry\"><span class=\"entryhead\"><span class=\"hwd\">make</span>",
@@ -290,7 +313,7 @@ fn inline_reference_boxes_share_the_toolbar() {
         "boxes outside the toolbar: {out}"
     );
     assert!(
-        out.contains("<summary class=\"odc-refbar__label\">THESAURUS</summary>"),
+        out.contains("<summary class=\"odc-refbar__label\">Thesaurus</summary>"),
         "{out}"
     );
     assert!(
@@ -302,6 +325,54 @@ fn inline_reference_boxes_share_the_toolbar() {
         "{out}"
     );
 }
+#[test]
+fn grammar_box_stays_in_the_sense_flow() {
+    let out = parse(BODY_GRAMMAR_BOX, "back");
+    let pos = out.find("data-odc-pos=\"adverb\"").expect("adverb pos");
+    let s1 = out.find("id=\"back-adverb-s1\"").expect("sense 1");
+    let s2 = out.find("id=\"back-adverb-s2\"").expect("sense 2");
+    let grammar = out
+        .find("<span class=\"odc-usage-note\" data-odc-kind=\"grammar\">")
+        .expect("grammar box in the sense flow");
+    assert!(pos < s1 && s1 < grammar && grammar < s2, "{out}");
+    assert!(
+        out[grammar..].starts_with("<span class=\"odc-usage-note\" data-odc-kind=\"grammar\">"),
+        "{out}"
+    );
+    assert!(out.contains("✗"), "cross mark kept: {out}");
+    assert!(out.contains("Don't say"), "bad example kept: {out}");
+    assert!(out.contains("可以用go back to表示回到某个地方"), "{out}");
+    assert!(
+        !out.contains("<details class=\"odc-refbar__item\" data-odc-kind=\"grammar\">"),
+        "{out}"
+    );
+}
+
+#[test]
+fn thesaurus_uses_the_toolbar_label_not_the_panel_title() {
+    let out = parse(BODY_GRAMMAR_BOX, "back");
+    assert!(
+        out.contains("<summary class=\"odc-refbar__label\">Thesaurus</summary>"),
+        "{out}"
+    );
+    assert!(
+        !out.contains("<summary class=\"odc-refbar__label\">Longman Language Activator</summary>"),
+        "{out}"
+    );
+}
+
+#[test]
+fn thesaurus_is_ordered_before_collocations() {
+    let out = parse(INLINE_BOXES, "make");
+    let thes = out
+        .find("<summary class=\"odc-refbar__label\">Thesaurus</summary>")
+        .expect("Thesaurus label");
+    let collo = out
+        .find("<summary class=\"odc-refbar__label\">Collocations</summary>")
+        .expect("Collocations label");
+    assert!(thes < collo, "thesaurus before collocations: {out}");
+}
+
 #[test]
 fn verb_table_gets_its_own_toolbar_entry() {
     let out = parse(VERB_TABLE, "go");

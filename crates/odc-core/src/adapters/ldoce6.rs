@@ -728,15 +728,12 @@ impl<'a> Builder<'a> {
         if name == "a" && self.mute_images > 0 {
             self.mute_images -= 1;
         }
-        if let Some(last) = self.inline.last() {
-            if last.src == name {
-                let inline = self.inline.pop().expect("inline frame");
-                self.emit("</");
-                self.emit(&inline.out);
-                self.emit(">");
-                if inline.role == "def" {
-                    self.def_depth = self.def_depth.saturating_sub(1);
-                }
+        if let Some(inline) = self.inline.pop_if(|last| last.src == name) {
+            self.emit("</");
+            self.emit(&inline.out);
+            self.emit(">");
+            if inline.role == "def" {
+                self.def_depth = self.def_depth.saturating_sub(1);
             }
         }
     }
@@ -963,13 +960,24 @@ impl<'a> Builder<'a> {
         if has("tail") {
             return;
         }
-        if has("thesbox") || has("collobox") || has("grambox") {
+        if has("grambox") {
+            // The grammar box belongs to the sense flow (it sits between two
+            // senses), so it stays inline instead of moving into the toolbar.
+            // Close the running example list first: the box is a sibling of the
+            // examples, not one more example.
+            self.close_from(7);
+            self.inline_open(
+                "<span class=\"odc-usage-note\" data-odc-kind=\"grammar\">",
+                name,
+                "span",
+            );
+            return;
+        }
+        if has("thesbox") || has("collobox") {
             let kind = if has("thesbox") {
                 "thesaurus"
-            } else if has("collobox") {
-                "collocation"
             } else {
-                "grammar"
+                "collocation"
             };
             self.open_inline_ref(kind);
             return;
@@ -1073,8 +1081,8 @@ impl<'a> Builder<'a> {
         }
     }
 
-    /// Inline reference box (`thesbox`, `collobox`, `grambox`) that the source
-    /// nests inside the entry body rather than in a popup.
+    /// Inline reference box (`thesbox`, `collobox`) that the source nests
+    /// inside the entry body rather than in a popup.
     fn open_inline_ref(&mut self, kind: &'static str) {
         self.capturing = true;
         if self.has_open("ref") {
@@ -1526,11 +1534,12 @@ struct RefGroup {
 }
 
 /// Toolbar order for the kinds the source dictionary promotes to buttons.
-const REF_ORDER: [&str; 6] = [
+const REF_ORDER: [&str; 7] = [
     "toc",
     "word-origin",
     "verb-table",
     "examples-other",
+    "thesaurus",
     "collocation",
     "phrase-index",
 ];
@@ -1687,6 +1696,7 @@ fn ref_label(kind: &str, title: &str) -> String {
         "word-origin" => String::from("Word Origin"),
         "verb-table" => String::from("Verb Table"),
         "examples-other" => String::from("Examples"),
+        "thesaurus" => String::from("Thesaurus"),
         "collocation" => String::from("Collocations"),
         "phrase-index" => String::from("Phrases"),
         _ if !title.is_empty() => String::from(title),
@@ -1829,8 +1839,8 @@ impl Ldoce6 {
 /// Full text of the first element carrying `class`, including nested elements.
 fn element_text(tokens: &[Tok], from: usize, class: &str) -> String {
     let mut start = None;
-    for index in from..tokens.len() {
-        if let Tok::Start { attrs, .. } = &tokens[index] {
+    for (index, token) in tokens.iter().enumerate().skip(from) {
+        if let Tok::Start { attrs, .. } = token {
             if tokens::has_class(attrs, class) {
                 start = Some(index);
                 break;

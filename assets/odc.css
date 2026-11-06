@@ -16,6 +16,7 @@
   --odc-fg-muted: #5c5f66;
   --odc-fg-faint: #85888f;
   --odc-accent: #1f5d99;
+  --odc-accent-soft: #f2f7fd;
   --odc-accent-line: #cfdfee;
   --odc-rule: #e3e3e7;
   --odc-rule-strong: #ccccd2;
@@ -58,6 +59,7 @@
     --odc-fg-muted: #a5a9b2;
     --odc-fg-faint: #7b7f88;
     --odc-accent: #82b3e6;
+    --odc-accent-soft: #182430;
     --odc-accent-line: #2d3f52;
     --odc-rule: #2a2c31;
     --odc-rule-strong: #3a3d44;
@@ -500,6 +502,34 @@ nav.odc-refbar {
   font-size: 13px;
   font-style: italic;
   color: var(--odc-fg-muted);
+}
+
+/* LDOCE grambox：整块语法说明，留在义项流里 */
+.odc-usage-note[data-odc-kind="grammar"] {
+  display: block;
+  margin: 14px 0;
+  padding: 8px 12px 10px;
+  border: 1px solid var(--odc-accent-line);
+  border-left: 3px solid var(--odc-accent);
+  border-radius: 4px;
+  background: var(--odc-accent-soft);
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--odc-fg);
+}
+
+.odc-usage-note[data-odc-kind="grammar"] > span:first-child {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--odc-accent);
+}
+
+.odc-usage-note[data-odc-kind="grammar"] .odc-examples {
+  margin: 2px 0 0;
 }
 
 .odc-collocation {

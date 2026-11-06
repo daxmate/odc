@@ -300,7 +300,7 @@
 | `odc-phrase-index` | 短语索引（**只有链接，无释义**） | 链接项+ | 0..N | source | ldoce6ec/make@521716（go 632 条） |
 | `odc-grammar` | 语法模式 | 行内/模式串 | 0..N | — | ldoce6ec/make@679713；oald9cn/make@36169；mwaled/make@1085 |
 | `odc-collocation` | 搭配（可分组、多来源） | 行内/子列表 | 0..N | source | ldoce6ec/make@688928；oald9cn/make@7944 |
-| `odc-usage-note` | 用法说明/学习盒 | 段落、列表 | 0..N | kind（HELP/SYN/NOTE/OPP/ORIGIN） | oald9cn/make@15152；mwaled/make@33724 |
+| `odc-usage-note` | 用法说明/学习盒 | 段落、列表 | 0..N | kind（HELP/SYN/NOTE/OPP/ORIGIN/GRAMMAR） | oald9cn/make@15152；mwaled/make@33724；ldoce6ec/back（grambox） |
 | `odc-crossref` | 交叉引用（带目标锚点） | 文本 | 0..N | target、missing? | ldoce6ec/make@682700；oald9cn/make@1505；mwaled/make@35223 |
 | `odc-label` | 语域/学科标签（literary 等） | 文本 | 0..N | kind | mwaled/make@33724；ldoce6ec `registerlab` |
 | `odc-citation` | 书证（中文特有） | 引文、出处 | 0..N | source | hanyu/打@239 |
@@ -609,7 +609,7 @@ LDOCE6++ 的 `span.entryhead` / `span.buttons` 在 MDX 里**永不闭合**，后
 | grammar | `span.gram` | `gram` | `sgram` | — |
 | collocation | `collo`/`colloexa` | `cf-blk`/`cf` | — | — |
 | thesaurus | `thespropform` | `SYN` 盒 | — | — |
-| usage-note | `usagebox`/`errorbox` | `unbox`+`boxtag` | `ssla` | — |
+| usage-note | `usagebox`/`errorbox`/`grambox` | `unbox`+`boxtag` | `ssla` | ldoce6ec `grambox` 整块留在义项流内，kind=GRAMMAR |
 | word-family | `WORD FAMILY` 块 | — | — | — |
 | word-origin | `WORD ORIGIN` | `ORIGIN` 盒 | — | — |
 | crossref | `crossref`/`refhwd` | `xr-gs` | `dx`/`dx_link` | TODO(evidence)：2.3 摘要列为 `entry://`，落点待核 |
