@@ -664,6 +664,31 @@
         "move": "children"
       },
       "rationale": "ldoce6.rs:941-950: inflections becomes span.odc-inflection; data-odc-kind needs inflection_kind() text sniffing, which the DSL cannot do."
+    },
+    {
+      "id": "structure.head",
+      "stage": "structure",
+      "priority": 95,
+      "op": "segment",
+      "match": {
+        "selector": "section.odc-entry"
+      },
+      "boundary": {
+        "start": "h1.odc-hw",
+        "until": [
+          "section.odc-pos-block",
+          "div.odc-sense",
+          "article.odc-pv"
+        ],
+        "max_depth": 1
+      },
+      "emit": {
+        "element": "header",
+        "classes": [
+          "odc-head"
+        ]
+      },
+      "rationale": "ldoce6.rs:656-682 keeps the head open (ensure_head/close_head) until the first span.pos; the same run of siblings becomes header.odc-head."
     }
   ]
 }
