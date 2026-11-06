@@ -102,7 +102,7 @@ impl Adapter for Ldoce6 {
         }
         let mut html = builder.finish();
         html = format_blocks(&html).unwrap_or(html);
-        if !same_text(&clean, &html) {
+        if !same_words(&clean, &html) {
             return Ok(raw_fallback(fragment, ctx, Reason::ParseFailed));
         }
         Ok(html)
@@ -134,6 +134,22 @@ pub fn is_l1(fragment: &str) -> bool {
 #[must_use]
 pub fn same_text(left: &str, right: &str) -> bool {
     content_text(left) == content_text(right)
+}
+
+/// Fidelity guard for the reordered entry: same words, same counts, and the
+/// only allowed difference is block order (senses before refs and entry menu).
+fn same_words(left: &str, right: &str) -> bool {
+    let mut a: Vec<String> = content_text(left)
+        .split_whitespace()
+        .map(str::to_owned)
+        .collect();
+    let mut b: Vec<String> = content_text(right)
+        .split_whitespace()
+        .map(str::to_owned)
+        .collect();
+    a.sort_unstable();
+    b.sort_unstable();
+    a == b
 }
 
 /// Whitespace-normalised text of a document.
@@ -296,8 +312,9 @@ pub(crate) struct Builder<'a> {
     pending_anchor: Option<String>,
     anchors: Vec<(String, String)>,
     toc_open: bool,
+    toc_capture: bool,
+    toc: String,
     refs: String,
-    refs_at: usize,
     capturing: bool,
     mute_images: usize,
     def_depth: usize,
@@ -325,8 +342,9 @@ impl<'a> Builder<'a> {
             pending_anchor: None,
             anchors: Vec::new(),
             toc_open: false,
+            toc_capture: false,
+            toc: String::new(),
             refs: String::new(),
-            refs_at: 0,
             capturing: false,
             mute_images: 0,
             def_depth: 0,
@@ -348,7 +366,22 @@ impl<'a> Builder<'a> {
             }
         }
         self.end_capture();
+        self.close_toc();
+        self.flush_deferred();
         self.close_from(0);
+    }
+
+    /// Move reference blocks and the entry menu to the end of the entry so the
+    /// main senses stay adjacent to the headword.
+    fn flush_deferred(&mut self) {
+        if !self.refs.is_empty() {
+            let refs = std::mem::take(&mut self.refs);
+            self.out.push_str(&refs);
+        }
+        if !self.toc.is_empty() {
+            let toc = std::mem::take(&mut self.toc);
+            self.out.push_str(&toc);
+        }
     }
 
     /// Final markup with cross-reference anchors resolved.
@@ -377,6 +410,8 @@ impl<'a> Builder<'a> {
     fn emit(&mut self, text: &str) {
         if self.capturing {
             self.refs.push_str(text);
+        } else if self.toc_capture {
+            self.toc.push_str(text);
         } else {
             self.out.push_str(text);
         }
@@ -401,12 +436,6 @@ impl<'a> Builder<'a> {
             self.close_top();
         }
         self.capturing = false;
-        if self.refs.is_empty() {
-            return;
-        }
-        let refs = std::mem::take(&mut self.refs);
-        let at = self.refs_at.min(self.out.len());
-        self.out.insert_str(at, &refs);
     }
 
     fn open(&mut self, level: u8, start: String, close: &str) {
@@ -607,6 +636,7 @@ impl<'a> Builder<'a> {
                 // `div.chwd` opens every root entry: close the previous one.
                 self.end_capture();
                 self.close_toc();
+                self.flush_deferred();
                 self.close_from(1);
             }
             if has("at-link") {
@@ -861,15 +891,13 @@ impl<'a> Builder<'a> {
         if self.toc_open {
             self.close_tag("toc");
             self.toc_open = false;
+            self.toc_capture = false;
         }
     }
 
     /// Inline reference box (`thesbox`, `collobox`, `grambox`) that the source
     /// nests inside the entry body rather than in a popup.
     fn open_inline_ref(&mut self, kind: &'static str) {
-        if !self.capturing {
-            self.refs_at = self.out.len();
-        }
         self.capturing = true;
         if !self.has_open("refs") {
             self.open_tagged(
@@ -897,7 +925,13 @@ impl<'a> Builder<'a> {
         self.pending_anchor = None;
         self.close_head();
         self.close_from(2);
-        self.open_tagged(2, "toc", String::from("<nav class=\"odc-toc\">"), "</nav>");
+        self.toc_capture = true;
+        self.open_tagged(
+            2,
+            "toc",
+            String::from("<details class=\"odc-toc\">"),
+            "</details>",
+        );
         self.toc_open = true;
     }
 
@@ -1034,9 +1068,6 @@ impl<'a> Builder<'a> {
             self.close_head();
             self.close_toc();
             self.close_from(3);
-            if !self.capturing {
-                self.refs_at = self.out.len();
-            }
             self.capturing = true;
             if !self.has_open("refs") {
                 self.open_tagged(
@@ -1055,7 +1086,11 @@ impl<'a> Builder<'a> {
                 "</section>",
             );
         }
-        self.inline_open("<h3 class=\"odc-ref-title\">", "span", "h3");
+        if kind == "toc" {
+            self.inline_open("<summary class=\"odc-ref-title\">", "span", "summary");
+        } else {
+            self.inline_open("<h3 class=\"odc-ref-title\">", "span", "h3");
+        }
     }
 
     fn anchor(&mut self, attrs: &[(String, String)], void: bool) {

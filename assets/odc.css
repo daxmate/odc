@@ -177,8 +177,38 @@
   color: var(--odc-fg-faint);
 }
 
+details.odc-toc {
+  margin: 22px 0 0;
+  padding: 6px 0 10px;
+  border-top: 1px solid var(--odc-rule);
+  border-bottom: 0;
+}
+
 .odc-toc > * {
   display: block;
+}
+
+.odc-toc > summary {
+  cursor: pointer;
+  margin: 0;
+  padding: 2px 0;
+}
+
+.odc-toc > summary::-webkit-details-marker {
+  display: none;
+}
+
+.odc-toc > summary::before {
+  content: "▸ ";
+  color: var(--odc-fg-faint);
+}
+
+.odc-toc[open] > summary::before {
+  content: "▾ ";
+}
+
+.odc-toc > summary + * {
+  margin-top: 6px;
 }
 
 .odc-toc .odc-hw {

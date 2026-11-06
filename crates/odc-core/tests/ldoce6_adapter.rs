@@ -193,6 +193,45 @@ fn parse_is_idempotent() {
     assert_eq!(once, twice);
 }
 
+/// Entry with a popup entry menu, one sense and a thesaurus box: the menu and
+/// reference blocks must follow the main senses in reading order.
+const MENU: &str = concat!(
+    "<div><span class=\"entry\"><span class=\"entryhead\"><span class=\"hwd\">make</span>",
+    "<span class=\"pos\">verb</span>",
+    "<span class=\"buttons\"><span class=\"popup-button\">Entry menu<atl></atl></span>",
+    "<div class=\"at-link\"><span class=\"entry\">",
+    "<span class=\"popheader pope_menu\">MENU FOR make</span>",
+    "<span class=\"entrymenu\"><span class=\"hwd\">make</span>",
+    "<span class=\"menuitem\"><span class=\"sensenum\">1</span> ",
+    "<span class=\"signpost\"><signen>produce</signen><sign>制作</sign></span></span>",
+    "</span></span></div></span>",
+    "<span class=\"sense newline\"><span class=\"sensenum\">1</span>",
+    "<span class=\"def\"><en>to produce something</en><tran>制造</tran></span>",
+    "<span class=\"example\"><en>make a box</en><tran>做个箱子</tran></span>",
+    "</span>",
+    "<span class=\"thesbox\"><span class=\"popheader popthes\">THESAURUS</span>",
+    "<span class=\"thes item\">create</span></span>",
+    "</span></span></div>",
+);
+
+#[test]
+fn main_senses_come_before_refs_and_collapsed_menu() {
+    let out = parse(MENU, "make");
+    let sense = out.find("class=\"odc-sense\"").expect("sense block");
+    let refs = out.find("class=\"odc-refs\"").expect("refs block");
+    assert!(sense < refs, "sense at {sense}, refs at {refs}: {out}");
+    let toc = out
+        .find("<details class=\"odc-toc\">")
+        .expect("toc details");
+    assert!(refs < toc, "refs at {refs}, toc at {toc}: {out}");
+    assert!(
+        out.contains("<summary class=\"odc-ref-title\">MENU FOR make</summary>"),
+        "{out}"
+    );
+    assert!(!out.contains("<details class=\"odc-toc\" open"), "{out}");
+    assert!(!out.contains("<nav class=\"odc-toc\""), "{out}");
+}
+
 #[test]
 fn probe_claims_ldoce_and_rejects_other_markup() {
     let probe = Ldoce6.probe(SENSE).expect("ldoce probe");
