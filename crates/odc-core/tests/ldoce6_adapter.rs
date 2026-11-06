@@ -48,6 +48,18 @@ const SENSE: &str = concat!(
     "</span><exat></exat></span></span></span></div>",
 );
 
+/// Two inline reference boxes in one sense (source nests them as siblings).
+const INLINE_BOXES: &str = concat!(
+    "<div><span class=\"entry\"><span class=\"entryhead\"><span class=\"hwd\">make</span>",
+    "<span class=\"pos\">verb</span></span>",
+    "<span class=\"sense\"><span class=\"sensenum\">1</span>",
+    "<span class=\"def\">to create</span>",
+    "<span class=\"thesbox\"><span class=\"heading\">THESAURUS</span>",
+    "<span class=\"section\"><span class=\"secheading\">to make</span></span></span>",
+    "<span class=\"collobox\"><span class=\"heading\">COLLOCATIONS</span>",
+    "<span class=\"collo\"><span class=\"collocate\">make</span></span></span>",
+    "</span></span></span></div>",
+);
 /// A phrasal verb sub-entry with its own head and sense.
 const PHRASAL: &str = concat!(
     "<div><span class=\"entry\"><span class=\"entryhead\"><span class=\"hwd\">make</span>",
@@ -168,14 +180,39 @@ fn reference_block_keeps_kind_and_source() {
     let out = parse(REF, "make");
     assert!(out.contains("<section class=\"odc-refs\">"), "{out}");
     assert!(
-        out.contains("class=\"odc-ref\" data-odc-kind=\"collocation\" data-odc-source=\"corpus\""),
+        out.contains(
+            "<details class=\"odc-ref\" data-odc-kind=\"collocation\" data-odc-source=\"corpus\">"
+        ),
         "{out}"
     );
     assert!(
-        out.contains("<h3 class=\"odc-ref-title\">COLLOCATIONS FROM THE CORPUS</h3>"),
+        out.contains("<summary class=\"odc-ref-title\">COLLOCATIONS FROM THE CORPUS</summary>"),
         "{out}"
     );
+    assert!(!out.contains("<details class=\"odc-ref\" open"), "{out}");
     assert!(out.contains("class=\"odc-collocation\""), "{out}");
+}
+
+#[test]
+fn inline_reference_boxes_are_collapsed_and_siblings() {
+    let out = parse(INLINE_BOXES, "make");
+    let thes = out
+        .find("<details class=\"odc-ref\" data-odc-kind=\"thesaurus\" data-odc-source=\"entry\">")
+        .expect("thesaurus box");
+    let collo = out
+        .find("<details class=\"odc-ref\" data-odc-kind=\"collocation\" data-odc-source=\"entry\">")
+        .expect("collocation box");
+    assert!(thes < collo, "{out}");
+    let close = out[thes..].find("</details>").expect("closed box");
+    assert!(thes + close < collo, "boxes must not nest: {out}");
+    assert!(
+        out.contains("<summary class=\"odc-ref-title\">THESAURUS</summary>"),
+        "{out}"
+    );
+    assert!(
+        out.contains("<summary class=\"odc-ref-title\">COLLOCATIONS</summary>"),
+        "{out}"
+    );
 }
 
 #[test]

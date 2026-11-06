@@ -316,6 +316,9 @@ pub(crate) struct Builder<'a> {
     toc: String,
     refs: String,
     capturing: bool,
+    ref_summary: bool,
+    span_depth: usize,
+    ref_box_depth: Option<usize>,
     mute_images: usize,
     def_depth: usize,
     adapted: bool,
@@ -346,8 +349,11 @@ impl<'a> Builder<'a> {
             toc: String::new(),
             refs: String::new(),
             capturing: false,
+            span_depth: 0,
+            ref_box_depth: None,
             mute_images: 0,
             def_depth: 0,
+            ref_summary: false,
             adapted: false,
         }
     }
@@ -472,6 +478,9 @@ impl<'a> Builder<'a> {
     }
 
     fn close_from(&mut self, level: u8) {
+        if level <= 3 {
+            self.ref_box_depth = None;
+        }
         while self.frames.last().is_some_and(|frame| frame.level >= level) {
             self.close_top();
         }
@@ -559,6 +568,15 @@ impl<'a> Builder<'a> {
     }
 
     fn end(&mut self, name: &str) {
+        if name == "span" {
+            self.span_depth = self.span_depth.saturating_sub(1);
+            if self.ref_box_depth == Some(self.span_depth + 1) {
+                self.ref_box_depth = None;
+                if self.has_open("ref") {
+                    self.close_from(3);
+                }
+            }
+        }
         if name == "a" && self.mute_images > 0 {
             self.mute_images -= 1;
         }
@@ -586,6 +604,9 @@ impl<'a> Builder<'a> {
     ) {
         let has = |class: &str| tokens::has_class(attrs, class);
 
+        if name == "span" {
+            self.span_depth += 1;
+        }
         if matches!(
             name,
             "link" | "script" | "style" | "meta" | "head" | "html" | "body"
@@ -802,8 +823,14 @@ impl<'a> Builder<'a> {
             self.open_inline_ref(kind);
             return;
         }
+        if has("heading") && self.has_open("ref") && !self.ref_summary {
+            self.ref_summary = true;
+            self.inline_open("<summary class=\"odc-ref-title\">", "span", "summary");
+            return;
+        }
         if has("colloboxheading") {
-            self.inline_open("<h3 class=\"odc-ref-title\">", "span", "h3");
+            self.ref_summary = true;
+            self.inline_open("<summary class=\"odc-ref-title\">", "span", "summary");
             return;
         }
         if has("subsense") {
@@ -899,6 +926,11 @@ impl<'a> Builder<'a> {
     /// nests inside the entry body rather than in a popup.
     fn open_inline_ref(&mut self, kind: &'static str) {
         self.capturing = true;
+        if self.has_open("ref") {
+            return;
+        }
+        self.ref_summary = false;
+        self.ref_box_depth = Some(self.span_depth);
         if !self.has_open("refs") {
             self.open_tagged(
                 2,
@@ -911,9 +943,9 @@ impl<'a> Builder<'a> {
             3,
             "ref",
             format!(
-                "<section class=\"odc-ref\" data-odc-kind=\"{kind}\" data-odc-source=\"entry\">"
+                "<details class=\"odc-ref\" data-odc-kind=\"{kind}\" data-odc-source=\"entry\">"
             ),
-            "</section>",
+            "</details>",
         );
     }
 
@@ -1081,16 +1113,13 @@ impl<'a> Builder<'a> {
                 3,
                 "ref",
                 format!(
-                    "<section class=\"odc-ref\" data-odc-kind=\"{kind}\" data-odc-source=\"{source}\">"
+                    "<details class=\"odc-ref\" data-odc-kind=\"{kind}\" data-odc-source=\"{source}\">"
                 ),
-                "</section>",
+                "</details>",
             );
         }
-        if kind == "toc" {
-            self.inline_open("<summary class=\"odc-ref-title\">", "span", "summary");
-        } else {
-            self.inline_open("<h3 class=\"odc-ref-title\">", "span", "h3");
-        }
+        self.ref_summary = true;
+        self.inline_open("<summary class=\"odc-ref-title\">", "span", "summary");
     }
 
     fn anchor(&mut self, attrs: &[(String, String)], void: bool) {

@@ -39,6 +39,7 @@ const BLOCK_TAGS: &[&str] = &[
     "p",
     "pre",
     "section",
+    "summary",
     "table",
     "tbody",
     "td",

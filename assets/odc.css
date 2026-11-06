@@ -504,9 +504,15 @@ details.odc-toc {
   line-height: 1.55;
 }
 
-.odc-ref {
+details.odc-ref {
   display: block;
-  margin: 0 0 16px;
+  margin: 0;
+  padding: 5px 0;
+  border-top: 1px solid var(--odc-rule);
+}
+
+.odc-refs > .odc-ref:first-child {
+  border-top: 0;
 }
 
 .odc-ref-title {
@@ -517,6 +523,32 @@ details.odc-toc {
   letter-spacing: 0.09em;
   text-transform: uppercase;
   color: var(--odc-fg-faint);
+}
+
+/* 参考块默认折叠：只留一行工具条式标题，点击展开 */
+.odc-ref > summary.odc-ref-title {
+  margin: 0;
+  padding: 1px 0;
+  line-height: 1.35;
+  cursor: pointer;
+  list-style: none;
+}
+
+.odc-ref > summary.odc-ref-title::-webkit-details-marker {
+  display: none;
+}
+
+.odc-ref > summary.odc-ref-title::before {
+  content: "▸ ";
+  color: var(--odc-fg-faint);
+}
+
+.odc-ref[open] > summary.odc-ref-title {
+  margin-bottom: 7px;
+}
+
+.odc-ref[open] > summary.odc-ref-title::before {
+  content: "▾ ";
 }
 
 /* --------------------------------------------------------------------------
