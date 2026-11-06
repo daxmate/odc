@@ -49,31 +49,14 @@
       "rationale": "The adapter never copies source attributes; onclick handlers and inline styles are presentation only."
     },
     {
-      "id": "structure.refbar",
-      "stage": "structure",
-      "priority": 90,
-      "op": "map",
-      "match": {
-        "selector": "div.chwd"
-      },
-      "emit": {
-        "element": "nav",
-        "classes": [
-          "odc-refbar"
-        ],
-        "move": "children"
-      },
-      "rationale": "ldoce6.rs:808-819 consumes div.chwd as the homograph boundary and 440 rebuilds the same i-children as nav.odc-refbar; mapping keeps the bar text in place."
-    },
-    {
       "id": "cleanup.popup-trigger",
       "stage": "cleanup",
       "priority": 90,
-      "op": "unwrap",
+      "op": "drop",
       "match": {
         "selector": "span.popup-button"
       },
-      "rationale": "ldoce6.rs:748-752 mutes the popup trigger while it is emitted, but strip_popup_buttons only removes the wrapper before the fidelity check, so the frozen panes still carry the trigger label. Unwrapping reproduces the frozen text order."
+      "rationale": "ldoce6.rs:755-760 drops the popup button label: it is UI chrome (P4), never entry text; the payload itself is the following div.at-link."
     },
     {
       "id": "cleanup.version-tag",
@@ -134,6 +117,163 @@
         "selector": "div.at-link > span.entry"
       },
       "rationale": "The adapter renders popup payloads as inline ref panels (ldoce6.rs:983-985, open_inline_ref). Unwrapping keeps their text in document order; the ref-panel wrapper itself cannot be expressed with the current operators."
+    },
+    {
+      "id": "structure.ref-block",
+      "stage": "structure",
+      "priority": 88,
+      "op": "map",
+      "match": {
+        "selector": "div.at-link"
+      },
+      "emit": {
+        "element": "div",
+        "classes": [
+          "odc-ref-block"
+        ],
+        "move": "children"
+      },
+      "rationale": "ldoce6.rs:430-440 buffers every popup payload as a reference block and rebuilds it under nav.odc-refbar; the engine owns the chrome, the profile only declares the block."
+    },
+    {
+      "id": "ref.title.pope_menu",
+      "stage": "structure",
+      "priority": 86,
+      "op": "map",
+      "match": {
+        "selector": "span.pope_menu"
+      },
+      "emit": {
+        "element": "span",
+        "classes": [
+          "odc-ref-title"
+        ],
+        "data": {
+          "odc-kind": "toc"
+        },
+        "move": "children"
+      },
+      "rationale": "ldoce6.rs:1425-1435 classifies popup panels by their popheader class; the kind is semantics, the details chrome is the engine's."
+    },
+    {
+      "id": "ref.title.popetym",
+      "stage": "structure",
+      "priority": 86,
+      "op": "map",
+      "match": {
+        "selector": "span.popetym"
+      },
+      "emit": {
+        "element": "span",
+        "classes": [
+          "odc-ref-title"
+        ],
+        "data": {
+          "odc-kind": "word-origin"
+        },
+        "move": "children"
+      },
+      "rationale": "ldoce6.rs:1425-1435 classifies popup panels by their popheader class; the kind is semantics, the details chrome is the engine's."
+    },
+    {
+      "id": "ref.title.popexa",
+      "stage": "structure",
+      "priority": 86,
+      "op": "map",
+      "match": {
+        "selector": "span.popexa"
+      },
+      "emit": {
+        "element": "span",
+        "classes": [
+          "odc-ref-title"
+        ],
+        "data": {
+          "odc-kind": "examples-other"
+        },
+        "move": "children"
+      },
+      "rationale": "ldoce6.rs:1425-1435 classifies popup panels by their popheader class; the kind is semantics, the details chrome is the engine's."
+    },
+    {
+      "id": "ref.title.popthes",
+      "stage": "structure",
+      "priority": 86,
+      "op": "map",
+      "match": {
+        "selector": "span.popthes"
+      },
+      "emit": {
+        "element": "span",
+        "classes": [
+          "odc-ref-title"
+        ],
+        "data": {
+          "odc-kind": "thesaurus"
+        },
+        "move": "children"
+      },
+      "rationale": "ldoce6.rs:1425-1435 classifies popup panels by their popheader class; the kind is semantics, the details chrome is the engine's."
+    },
+    {
+      "id": "ref.title.popcollo",
+      "stage": "structure",
+      "priority": 86,
+      "op": "map",
+      "match": {
+        "selector": "span.popcollo"
+      },
+      "emit": {
+        "element": "span",
+        "classes": [
+          "odc-ref-title"
+        ],
+        "data": {
+          "odc-kind": "collocation"
+        },
+        "move": "children"
+      },
+      "rationale": "ldoce6.rs:1425-1435 classifies popup panels by their popheader class; the kind is semantics, the details chrome is the engine's."
+    },
+    {
+      "id": "ref.title.popphrase",
+      "stage": "structure",
+      "priority": 86,
+      "op": "map",
+      "match": {
+        "selector": "span.popphrase"
+      },
+      "emit": {
+        "element": "span",
+        "classes": [
+          "odc-ref-title"
+        ],
+        "data": {
+          "odc-kind": "phrase-index"
+        },
+        "move": "children"
+      },
+      "rationale": "ldoce6.rs:1425-1435 classifies popup panels by their popheader class; the kind is semantics, the details chrome is the engine's."
+    },
+    {
+      "id": "ref.title.popwf",
+      "stage": "structure",
+      "priority": 86,
+      "op": "map",
+      "match": {
+        "selector": "span.popwf"
+      },
+      "emit": {
+        "element": "span",
+        "classes": [
+          "odc-ref-title"
+        ],
+        "data": {
+          "odc-kind": "word-family"
+        },
+        "move": "children"
+      },
+      "rationale": "ldoce6.rs:1425-1435 classifies popup panels by their popheader class; the kind is semantics, the details chrome is the engine's."
     },
     {
       "id": "root.entry",
@@ -567,13 +707,13 @@
       "priority": 70,
       "op": "map",
       "match": {
-        "selector": "en, signen, sign, cnt, collt"
+        "selector": "en, signen, sign, cnt, collt, .gloss, .object, .lexunit, .phrasetext, .pron"
       },
       "emit": {
         "element": "span",
         "move": "children"
       },
-      "rationale": "ldoce6.rs:781-783 opens a bare span for en/signen/sign/cnt/collt."
+      "rationale": "ldoce6.rs:1069-1074 renders these wrappers as a bare span: they are pure typography, so neither the class nor a data-odc-orig-class survives."
     },
     {
       "id": "example.translation",

@@ -15,6 +15,7 @@ use html5ever::{ns, Attribute, LocalName, ParseOpts, QualName};
 use markup5ever_rcdom::{Handle, Node, NodeData, RcDom, SerializableHandle};
 
 use crate::adapters::ParseContext;
+use crate::doc::{element, make_attr, remove_at, remove_attr, replace_at, set_attr, take_children};
 use crate::profile::schema::{
     Boundary, MatchSpec, MoveMode, Op, Profile, Rule, Scope, SplitBy, Stage,
 };
@@ -72,6 +73,7 @@ pub fn apply(profile: &Profile, fragment: &str, ctx: &ParseContext) -> Outcome {
     let dom = parse_fragment(&clean);
     let root = dom.document.clone();
     normalize_document(&root);
+    crate::presentation::capture(&root);
     let mut stats = RunStats::default();
 
     for stage in Stage::ORDER {
@@ -92,6 +94,7 @@ pub fn apply(profile: &Profile, fragment: &str, ctx: &ParseContext) -> Outcome {
         }
     }
 
+    stats.presentation = crate::presentation::apply(&root, ctx);
     trim_document_edges(&root);
     canonical_whitespace(&root);
     let html = serialize(&root);
@@ -329,6 +332,10 @@ fn walk(
         if !selector::is_element(child) {
             continue;
         }
+        if crate::presentation::locked(child) {
+            // Engine-owned nodes are invisible to rule packs (D3).
+            continue;
+        }
         let prev = children[..index]
             .iter()
             .rev()
@@ -348,6 +355,10 @@ fn walk(
 }
 
 /// Whether the element sits inside every scope of the chain, outermost first.
+fn has_class(node: &Handle, class: &str) -> bool {
+    selector::class_list(node).iter().any(|c| c == class)
+}
+
 fn scope_ok(_node: &Handle, ancestors: &[Handle], scope: &[Scope]) -> bool {
     let mut need = scope.len();
     for ancestor in ancestors.iter().rev() {
@@ -359,70 +370,6 @@ fn scope_ok(_node: &Handle, ancestors: &[Handle], scope: &[Scope]) -> bool {
         }
     }
     need == 0
-}
-
-fn has_class(node: &Handle, class: &str) -> bool {
-    selector::class_list(node).iter().any(|c| c == class)
-}
-
-fn element(name: &str, attrs: Vec<Attribute>) -> Handle {
-    Node::new(NodeData::Element {
-        name: QualName::new(None, ns!(html), LocalName::from(name)),
-        attrs: RefCell::new(attrs),
-        template_contents: RefCell::new(None),
-        mathml_annotation_xml_integration_point: false,
-    })
-}
-
-fn make_attr(name: &str, value: &str) -> Attribute {
-    Attribute {
-        name: QualName::new(None, ns!(), LocalName::from(name)),
-        value: StrTendril::from(value),
-    }
-}
-
-fn set_attr(node: &Handle, name: &str, value: &str) {
-    let NodeData::Element { attrs, .. } = &node.data else {
-        return;
-    };
-    let mut attrs = attrs.borrow_mut();
-    if let Some(existing) = attrs
-        .iter_mut()
-        .find(|a| a.name.local.as_ref().eq_ignore_ascii_case(name))
-    {
-        existing.value = StrTendril::from(value);
-    } else {
-        attrs.push(make_attr(name, value));
-    }
-}
-
-fn remove_attr(node: &Handle, name: &str) {
-    let NodeData::Element { attrs, .. } = &node.data else {
-        return;
-    };
-    attrs
-        .borrow_mut()
-        .retain(|a| !a.name.local.as_ref().eq_ignore_ascii_case(name));
-}
-
-fn replace_at(parent: &Handle, index: usize, new: Handle) {
-    let mut children = parent.children.borrow_mut();
-    if index < children.len() {
-        children[index] = new;
-    }
-}
-
-fn remove_at(parent: &Handle, index: usize) -> Option<Handle> {
-    let mut children = parent.children.borrow_mut();
-    if index < children.len() {
-        Some(children.remove(index))
-    } else {
-        None
-    }
-}
-
-fn take_children(node: &Handle) -> Vec<Handle> {
-    std::mem::take(&mut *node.children.borrow_mut())
 }
 
 /// Expand '@key', '@dict', '@lang' and '@text' placeholders.
@@ -485,6 +432,18 @@ fn build_element(
     }
     for (key, value) in extra {
         attrs.push(make_attr(key, value));
+    }
+    // The engine stamps anchors before the rules run; a rename must keep them.
+    if let NodeData::Element {
+        attrs: source_attrs,
+        ..
+    } = &source.data
+    {
+        for attribute in source_attrs.borrow().iter() {
+            if attribute.name.local.as_ref() == "data-odc-anchor" {
+                attrs.push(attribute.clone());
+            }
+        }
     }
     attrs.push(make_attr("data-odc-rule", &rule.id));
     element(&name, attrs)

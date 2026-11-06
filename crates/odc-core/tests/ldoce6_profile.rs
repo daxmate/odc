@@ -60,12 +60,13 @@ fn root_entry_carries_context_attributes() {
 }
 
 #[test]
-fn popup_chrome_keeps_its_label_but_drops_the_trigger_markup() {
+fn popup_trigger_label_is_chrome_and_never_reaches_the_text() {
     let html = r#"<div><span class="entry"><span class="hwd">alpha</span>
         <span class="buttons"><span class="popup-button">Word Origin<atl></atl></span></span>
         <script>var x = 1;</script></span>"#;
     let out = apply(html);
-    assert!(out.contains("Word Origin"), "{out}");
+    // P4: the trigger caption is UI chrome; only the payload survives.
+    assert!(!out.contains("Word Origin"), "{out}");
     assert!(!out.contains("popup-button\""), "{out}");
     assert!(!out.contains("<script"), "{out}");
     assert!(!out.contains("var x"), "{out}");
@@ -107,11 +108,13 @@ fn examples_become_list_items() {
 }
 
 #[test]
-fn homograph_bar_becomes_the_reference_bar() {
+fn homograph_bar_stays_inside_the_entry() {
     let html = r#"<div><div class="chwd"><i>noun</i> | <i>verb</i></div>
         <span class="entry"><span class="hwd">alpha</span></span></div>"#;
     let out = apply(html);
-    assert!(out.contains(r#"<nav class="odc-refbar""#), "{out}");
+    // The bar is entry content, not chrome: it stays a lead block of the entry.
+    assert!(out.contains(r#"data-odc-orig-class="chwd""#), "{out}");
+    assert!(!out.contains(r#"<nav class="odc-refbar""#), "{out}");
     assert!(out.contains("noun"), "{out}");
 }
 

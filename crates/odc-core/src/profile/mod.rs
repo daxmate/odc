@@ -86,6 +86,8 @@ pub struct RunStats {
     pub warnings: Vec<String>,
     /// Rules that could not run at all.
     pub errors: Vec<String>,
+    /// Presentation self-check (P8).
+    pub presentation: crate::presentation::CheckReport,
 }
 
 impl RunStats {

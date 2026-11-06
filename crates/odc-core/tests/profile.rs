@@ -81,14 +81,15 @@ fn wrap_and_rename_keep_text() {
              "emit":{"element":"strong"}}"#,
     );
     let out = apply(&p, r#"<p class="note">x</p><b class="strong">y</b>"#);
+    // A source class that survives the rules becomes provenance (P5).
     assert!(
         out.contains(
-            "<aside class=\"odc-note\" data-odc-rule=\"w\"><p class=\"note\">x</p></aside>"
+            "<aside class=\"odc-note\" data-odc-rule=\"w\"><p data-odc-orig-class=\"note\">x</p></aside>"
         ),
         "{out}"
     );
     assert!(
-        out.contains("<strong class=\"strong\" data-odc-rule=\"r\">y</strong>"),
+        out.contains("<strong data-odc-rule=\"r\" data-odc-orig-class=\"strong\">y</strong>"),
         "{out}"
     );
 }
