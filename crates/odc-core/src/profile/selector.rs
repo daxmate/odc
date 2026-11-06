@@ -4,13 +4,18 @@
 //!
 //! * tag names and '*',
 //! * '.class', '#id',
-//! * '[attr]' and '[attr=value]' (quoted or bare value),
+//! * '[attr]', '[attr=value]' (quoted or bare value) and the CSS substring
+//!   operators '[attr^=value]' (prefix), '[attr$=value]' (suffix),
+//!   '[attr*=value]' (substring) and '[attr~=value]' (whitespace-separated
+//!   word),
 //! * the descendant (space), child ('>') and adjacent sibling ('+')
 //!   combinators,
 //! * comma-separated lists.
 //!
-//! XPath, pseudo-classes, attribute operators other than equality and any
-//! scriptable extension are rejected at parse time. Matching runs directly on
+//! XPath, pseudo-classes, ':not' and any scriptable extension are rejected at
+//! parse time. An attribute test without a value ('[attr]') only asks whether
+//! the attribute exists; a substring operator with an empty value is a parse
+//! error, because it would silently match every element. Matching runs directly on
 //! the 'markup5ever_rcdom' tree the rest of the crate uses, so there is no
 //! second HTML implementation.
 
@@ -22,7 +27,46 @@ struct Compound {
     tag: Option<String>,
     ids: Vec<String>,
     classes: Vec<String>,
-    attrs: Vec<(String, Option<String>)>,
+    attrs: Vec<(String, AttrMatch)>,
+}
+
+/// How an attribute selector compares the value it found.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AttrOp {
+    /// '[attr]': presence only.
+    Exists,
+    /// '[attr=value]'.
+    Equals,
+    /// '[attr^=value]': prefix.
+    Prefix,
+    /// '[attr$=value]': suffix.
+    Suffix,
+    /// '[attr*=value]': substring.
+    Contains,
+    /// '[attr~=value]': one of the whitespace-separated words.
+    Includes,
+}
+
+/// One '[attr…]' test.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AttrMatch {
+    op: AttrOp,
+    value: String,
+}
+
+impl AttrMatch {
+    fn matches(&self, actual: &str) -> bool {
+        match self.op {
+            AttrOp::Exists => true,
+            // An empty needle is rejected at parse time, so the substring tests
+            // cannot turn into "matches everything" here.
+            AttrOp::Equals => actual == self.value,
+            AttrOp::Prefix => actual.starts_with(&self.value),
+            AttrOp::Suffix => actual.ends_with(&self.value),
+            AttrOp::Contains => actual.contains(&self.value),
+            AttrOp::Includes => actual.split_whitespace().any(|word| word == self.value),
+        }
+    }
 }
 
 /// How two compound selectors are joined.
@@ -162,14 +206,12 @@ impl Compound {
                 return false;
             }
         }
-        for (name, value) in &self.attrs {
+        for (name, test) in &self.attrs {
             let Some(actual) = attr(node, name) else {
                 return false;
             };
-            if let Some(want) = value {
-                if &actual != want {
-                    return false;
-                }
+            if !test.matches(&actual) {
+                return false;
             }
         }
         true
@@ -265,7 +307,7 @@ fn parse_compound(text: &str) -> Result<Compound, &'static str> {
     Ok(compound)
 }
 
-fn parse_attribute(inner: &str) -> Result<(String, Option<String>), &'static str> {
+fn parse_attribute(inner: &str) -> Result<(String, AttrMatch), &'static str> {
     let inner = inner.trim();
     if inner.is_empty() {
         return Err("empty attribute selector");
@@ -274,22 +316,58 @@ fn parse_attribute(inner: &str) -> Result<(String, Option<String>), &'static str
         if !inner.bytes().all(is_ident_byte) {
             return Err("unsupported attribute name");
         }
-        return Ok((inner.to_ascii_lowercase(), None));
+        return Ok((
+            inner.to_ascii_lowercase(),
+            AttrMatch {
+                op: AttrOp::Exists,
+                value: String::new(),
+            },
+        ));
     };
-    let name = name.trim();
+    let (name, op) = split_operator(name.trim());
     if name.is_empty() || !name.bytes().all(is_ident_byte) {
         return Err("unsupported attribute name");
     }
-    let value = raw.trim();
-    let value = value
+    let value = unquote(raw.trim())?;
+    if value.is_empty() {
+        return Err("empty attribute value");
+    }
+    Ok((
+        name.to_ascii_lowercase(),
+        AttrMatch {
+            op,
+            value: String::from(value),
+        },
+    ))
+}
+
+/// Operator of an attribute selector: the last character before '=' when it is
+/// one of the CSS substrings, otherwise plain equality.
+fn split_operator(name: &str) -> (&str, AttrOp) {
+    for (marker, op) in [
+        ("^", AttrOp::Prefix),
+        ("$", AttrOp::Suffix),
+        ("*", AttrOp::Contains),
+        ("~", AttrOp::Includes),
+    ] {
+        if let Some(rest) = name.strip_suffix(marker) {
+            return (rest, op);
+        }
+    }
+    (name, AttrOp::Equals)
+}
+
+/// Strip one matching pair of quotes around an attribute value.
+fn unquote(raw: &str) -> Result<&str, &'static str> {
+    let value = raw
         .strip_prefix('"')
         .and_then(|v| v.strip_suffix('"'))
-        .or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
-        .unwrap_or(value);
+        .or_else(|| raw.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
+        .unwrap_or(raw);
     if value.contains(['"', '\'']) {
         return Err("unsupported attribute value");
     }
-    Ok((name.to_ascii_lowercase(), Some(String::from(value))))
+    Ok(value)
 }
 
 fn ident(text: &str, start: usize) -> Result<(String, usize), &'static str> {
@@ -365,4 +443,104 @@ fn collect_text(node: &Handle, out: &mut String) {
 #[must_use]
 pub fn collapse_ws(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn first_element(html: &str, tag_name: &str) -> Handle {
+        fn walk(node: &Handle, tag_name: &str) -> Option<Handle> {
+            for child in node.children.borrow().clone() {
+                if element_name(&child).as_deref() == Some(tag_name) {
+                    return Some(child);
+                }
+                if let Some(found) = walk(&child, tag_name) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        let dom = crate::profile::exec::parse_fragment(html);
+        walk(&dom.document, tag_name).unwrap_or_else(|| panic!("no <{tag_name}> in {html}"))
+    }
+
+    fn matches(html: &str, selector: &str) -> bool {
+        let node = first_element(html, "div");
+        let list = SelectorList::parse(selector).unwrap_or_else(|error| panic!("{error}"));
+        list.matches(&node, &[], None)
+    }
+
+    #[test]
+    fn presence_and_equality_still_work() {
+        let html = r#"<div data-x="alpha beta"></div>"#;
+        assert!(matches(html, "div[data-x]"));
+        assert!(!matches(html, "div[data-missing]"));
+        assert!(matches(html, r#"div[data-x="alpha beta"]"#));
+        assert!(!matches(html, r#"div[data-x="alpha"]"#));
+    }
+
+    #[test]
+    fn the_prefix_operator_matches_the_start_of_the_value() {
+        let html = r#"<div data-x="alpha beta"></div>"#;
+        assert!(matches(html, "div[data-x^=al]"));
+        assert!(matches(html, r#"div[data-x^="alpha"]"#));
+        assert!(!matches(html, "div[data-x^=beta]"));
+    }
+
+    #[test]
+    fn the_suffix_operator_matches_the_end_of_the_value() {
+        let html = r#"<div data-y="report.html"></div>"#;
+        assert!(matches(html, r#"div[data-y$=".html"]"#));
+        assert!(matches(html, "div[data-y$=html]"));
+        assert!(!matches(html, r#"div[data-y$="report"]"#));
+    }
+
+    #[test]
+    fn the_substring_operator_matches_anywhere_in_the_value() {
+        let html = r#"<div data-x="alpha beta"></div>"#;
+        assert!(matches(html, "div[data-x*=ph]"));
+        assert!(matches(html, r#"div[data-x*="a b"]"#));
+        assert!(!matches(html, "div[data-x*=gamma]"));
+    }
+
+    #[test]
+    fn the_word_operator_matches_one_whitespace_separated_word() {
+        let html = r#"<div data-x="alpha beta"></div>"#;
+        assert!(matches(html, "div[data-x~=beta]"));
+        assert!(matches(html, "div[data-x~=alpha]"));
+        assert!(!matches(html, "div[data-x~=alph]"));
+        assert!(!matches(html, r#"div[data-x~="alpha beta"]"#));
+    }
+
+    #[test]
+    fn an_empty_value_is_a_clear_parse_error() {
+        for selector in [
+            r#"div[data-x^=""]"#,
+            "div[data-x$=]",
+            "div[data-x*=]",
+            "div[data-x~=]",
+        ] {
+            let error = SelectorList::parse(selector).unwrap_err();
+            assert!(
+                error.reason.contains("empty attribute value"),
+                "{selector}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_malformed_attribute_selector_is_rejected_without_panicking() {
+        for selector in [
+            "div[data-x^]",
+            "div[^=x]",
+            "div[data-x!==y]",
+            "div[data-x=]",
+        ] {
+            assert!(
+                SelectorList::parse(selector).is_err(),
+                "{selector} must be rejected"
+            );
+        }
+    }
 }
