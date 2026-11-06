@@ -1,0 +1,212 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://odc.dev/schema/profile-v0.json",
+  "title": "ODC dictionary adaptation profile v0",
+  "description": "A profile translates one dictionary's source HTML into the ODC L1 vocabulary. Rules are data: the executor only understands the operator list below and never runs code.",
+  "type": "object",
+  "required": ["schema_version", "profile_id", "dict", "engine", "rules"],
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": { "const": "odc.profile/v0" },
+    "schema": { "const": "odc.profile/v0", "deprecated": true },
+    "profile_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": { "type": "string" },
+        "slot_registry": { "type": "string" },
+        "registry_sha256": { "type": "string" }
+      }
+    },
+    "dict": {
+      "type": "object",
+      "required": ["name", "lang"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "edition": { "type": "string" },
+        "lang": { "type": "string", "minLength": 2 },
+        "variant": { "type": "string" },
+        "source": {
+          "type": "object",
+          "required": ["format"],
+          "additionalProperties": false,
+          "properties": {
+            "format": { "enum": ["mdx", "jsonl", "html", "mdd"] },
+            "sha256": { "type": "string" },
+            "records": { "type": "integer", "minimum": 0 },
+            "aliases": { "type": "integer", "minimum": 0 },
+            "entries": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "fingerprint": {
+      "type": "object",
+      "required": ["algorithm", "sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "algorithm": { "const": "odc-fingerprint/1" },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "samples": { "type": "integer", "minimum": 0 },
+        "tag_histogram": {
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 0 }
+        },
+        "class_histogram": {
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 0 }
+        },
+        "sample_ids": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "probe": { "$ref": "#/$defs/fingerprintAlias" },
+    "engine": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "prompt_version": { "type": "string" },
+        "temperature": { "type": "number", "minimum": 0, "maximum": 2 },
+        "seed": { "type": "integer" },
+        "host": { "type": "string" }
+      }
+    },
+    "rules": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/rule" }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "source": { "type": "string" },
+        "note": { "type": "string" },
+        "reviewer": { "type": "string" },
+        "reviewed_on": { "type": "string" }
+      }
+    }
+  },
+  "$defs": {
+    "fingerprintAlias": {
+      "type": "object",
+      "deprecated": true,
+      "description": "Draft name for fingerprint; accepted as an alias."
+    },
+    "rule": {
+      "type": "object",
+      "required": ["id", "stage", "op", "match"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9]+(\\.[a-z0-9-]+)+$" },
+        "stage": {
+          "enum": ["root", "split", "segment", "slot", "numbering", "structure", "resource", "cleanup"]
+        },
+        "priority": { "type": "integer", "default": 50 },
+        "op": {
+          "enum": ["map", "wrap", "unwrap", "rename", "drop", "attr", "move", "split", "segment", "number", "redirect"]
+        },
+        "match": { "$ref": "#/$defs/match" },
+        "emit": { "$ref": "#/$defs/emit" },
+        "boundary": {
+          "type": "object",
+          "required": ["start"],
+          "additionalProperties": false,
+          "properties": {
+            "start": { "type": "string" },
+            "until": { "type": "array", "items": { "type": "string" } },
+            "max_depth": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "split_by": {
+          "type": "object",
+          "required": ["selector"],
+          "additionalProperties": false,
+          "properties": {
+            "selector": { "type": "string" },
+            "keep_selector": { "type": "boolean", "default": false }
+          }
+        },
+        "reset_on": { "type": "array", "items": { "$ref": "#/$defs/scope" } },
+        "children": { "type": "array", "items": { "$ref": "#/$defs/rule" } },
+        "attributes": { "type": "array", "items": { "type": "string" } },
+        "rationale": { "type": "string" },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "status": { "enum": ["proposed", "approved", "rejected"] },
+        "provenance": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "source": { "type": "string" },
+            "model": { "type": "string" },
+            "samples": { "type": "array", "items": { "type": "string" } },
+            "note": { "type": "string" },
+            "rationale": { "type": "string" }
+          }
+        }
+      }
+    },
+    "scope": { "enum": ["entry", "pos-block", "sense", "subsense", "group"] },
+    "match": {
+      "type": "object",
+      "required": ["selector"],
+      "additionalProperties": false,
+      "properties": {
+        "selector": {
+          "type": "string",
+          "description": "CSS subset: tag, .class, #id, [attr], [attr=value], descendant, child, adjacent, comma lists."
+        },
+        "scope": { "type": "array", "items": { "$ref": "#/$defs/scope" } },
+        "text": { "type": "string" },
+        "attr": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "cardinality": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "min": { "type": "integer", "minimum": 0, "default": 0 },
+            "max": { "type": ["integer", "null"], "minimum": 0 }
+          }
+        },
+        "min_count": { "type": "integer", "minimum": 0 },
+        "css_display": { "type": "string" }
+      }
+    },
+    "emit": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "element": { "type": "string" },
+        "tag": { "type": "string", "deprecated": true },
+        "classes": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "class": { "type": ["string", "array"], "deprecated": true },
+        "data": {
+          "type": "object",
+          "description": "Keys are written with a data- prefix unless already present. Values support @key, @dict, @lang, @text.",
+          "additionalProperties": { "type": "string" }
+        },
+        "attributes": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "attribute": { "type": "string" },
+        "numbering": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "start": { "type": "integer" } }
+        },
+        "target": { "type": "string" },
+        "value": { "type": "string" },
+        "move": { "enum": ["children", "element", "none"] }
+      }
+    }
+  }
+}
