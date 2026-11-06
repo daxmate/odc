@@ -103,10 +103,7 @@
     </section>
   </section>
 
-  <section class="odc-pos-block" data-odc-pos="noun" data-odc-homograph="2" id="make-noun">
-    <span class="odc-hw-alt" data-odc-kind="homograph-headword">make<sup>2</sup></span>
-    …
-  </section>
+  <!-- 同形词不并入本根：第二个词条是同级 <section class="odc-entry">，见下方与 7.6 -->
 
   <section class="odc-refs">
     <section class="odc-ref" data-odc-kind="collocation" data-odc-source="corpus">…</section>
@@ -116,6 +113,20 @@
   <nav class="odc-crossrefs">
     <a class="odc-crossref" href="#odc-time-noun-s1" data-odc-target="time-noun-s1">time</a>
   </nav>
+</section>
+
+<!-- 同形词：make² 是同级条目，自己的 head / refbar / pos-block -->
+<section class="odc-entry" data-odc-dict="ldoce6encn" data-odc-key="make" data-odc-homograph="2" data-odc-lang="en">
+  <header class="odc-entry-head">
+    <h1 class="odc-hw">make</h1>
+    <span class="odc-hw-alt" data-odc-kind="homograph">2</span>
+  </header>
+
+  <nav class="odc-refbar">…只含本词条的引用块，不与 make¹ 合并…</nav>
+
+  <section class="odc-pos-block" data-odc-pos="noun" id="make-noun">
+    …
+  </section>
 </section>
 ```
 
@@ -133,7 +144,7 @@
 - 未消解时：`data-odc-target` 存目标 key；容器**无 sense、无编号、无正文**；不参与 8.2 的槽位统计与 8.1 文本保真比较（目标串不是正文）。
 - 渲染器把 `odc-entry--redirect` 当跳转处理，不渲染空正文、不显示「未适配」标记。
 
-**同形词（一条源记录含多个词条）**：LDOCE6++ 的 `make` 一个 key 内含 `make1` + `make2`，合并为一个根 + 多个 `.odc-pos-block`；每个词性段的 `data-odc-homograph` 从 1 起编号，第 2 个及以后的词头用 `span.odc-hw-alt[data-odc-kind="homograph-headword"]` 放在该 pos-block 开头。规则细节见 7.6。
+**同形词（一条源记录含多个词条）**：LDOCE6++ 的 `make` 一个 key 内含 `make1` + `make2`，输出为**同级**的多个 `section.odc-entry`；每个根上的 `data-odc-homograph` 从 1 起编号，各自带独立的 `header`、`nav.odc-refbar` 与 `.odc-pos-block`。词头一律写作 `h1.odc-hw`，不再有浮在 pos-block 外的 homograph-headword。规则细节见 7.6。
 
 ### 3.2 元素与嵌套骨架（白名单）
 
@@ -155,7 +166,7 @@
 | `.odc-crossref` / `.odc-homograph` | crossrefs / homographs | 文本 | 0..N |
 | `.odc-entry--redirect` | 根上的修饰类（与正文互斥） | 无（空元素） | 0..1/词条 |
 | `.odc-unmapped` | entry / pos-block / ref | 原文子节点与文本 | 0..N |
-| `.odc-hw-alt`（`data-odc-kind="homograph-headword"`） | pos-block 开头 | 文本 | 0..1/词性段 |
+| `.odc-entry[data-odc-homograph]` | 片段根（多条并列） | 与其他 `.odc-entry` 同级 | 0..N/记录 |
 
 
 ### 3.3 空白与文本保真
@@ -463,9 +474,12 @@ LDOCE6++ 的 `span.entryhead` / `span.buttons` 在 MDX 里**永不闭合**，后
 
 ### 7.6 同形词
 
-- 同形异条**不合并**，但有两种形态，分别处理：
+- 同形异条**不合并**，两种形态都用「一个词条一个根」的同一口径：
   - **独立 key**（`Time` vs `time`；`ldoce6` 的 `back1` / `back2` / `back3`）：各自一个 `.odc-entry` 根，根上 `data-odc-homograph="<n>"` 标注组内序号；组内互链放 `.odc-crossrefs` 下的 `.odc-homograph`。
-  - **同一 key 内多个词条**（`ldoce6encn` 的 `make`：`make1` verb + `make2` noun）：**合并为一个根**，每个词性一个 `.odc-pos-block`，块上 `data-odc-homograph="<n>"`（从 1 起）；第 2 个及以后的词头输出为 `span.odc-hw-alt[data-odc-kind="homograph-headword"]`，放在对应 pos-block 的开头（3.2）。
+  - **同一 key 内多个词条**（`ldoce6encn` 的 `make`：`make1` verb + `make2` noun；`come`：verb + 44 个短语动词 + noun）：输出**多个同级** `section.odc-entry`，每个根各带自己的 `header`（`h1.odc-hw` + 音标 + POS）、`nav.odc-refbar` 与 `.odc-pos-block` 子树；根上 `data-odc-homograph` 从 1 起编号，`data-odc-key` 仍用源 key。
+- **引用块按词条分组**：每个 entry 的 popup / at-link 引用块只进它自己的 `nav.odc-refbar`，不得串到相邻 entry。
+- **词性切换条**（源 `div.chwd`）保留在该 entry 自己的 header 附近，链接指向同组其他 entry。
+- **id 唯一**：多个 entry 的 HTML id 不得冲突（同词性同形词由适配器加序号区分）。
 - **口径必须点名到文件**：`ldoce6`（按词性拆条）与 `ldoce6encn`（整条，**一条记录可含多个词性**）是两套口径；同一库内只允许一种，由适配器声明。§2/§3 中任何「一词性一条」的假设只对 `ldoce6` 成立，对 `ldoce6encn` 不成立。
 - 混用两套 LDOCE（`ldoce6` 拆条 + `ldoce6encn` 整条）会产生重复词条：**同一库内只允许一种口径**，由适配器声明。
 
@@ -656,6 +670,14 @@ LDOCE6++ 的 `span.entryhead` / `span.buttons` 在 MDX 里**永不闭合**，后
 | P2 数量 | 纪要 10.2 列 6 项（含 `example-lazy`） | 5 项，`lazy` 降为 `data-odc-lazy` 属性 | 与多义词报告 §4 的 28 槽位表对齐；lazy 是渲染属性不是结构槽位；v0.1 另加 redirect / unmapped，共 30 |
 
 ## 变更记录
+
+### v0.2（2026-11-06）
+
+| # | 问题 | 修改 | 位置 |
+|---|---|---|---|
+| 1 | 同记录多同形词条被塞进一个根 | `come` / `make` 改为输出多个**同级** `section.odc-entry`：各自 head、refbar、pos-block；根上 `data-odc-homograph` 从 1 编号 | 3.1 / 3.2 / 7.6 |
+| 2 | 浮动的 `homograph-headword` | 取消 `span.odc-hw-alt[data-odc-kind="homograph-headword"]`；第 2 个及以后的词头同样用 `h1.odc-hw` | 3.1 / 3.2 / 7.6 |
+| 3 | 引用块跨词条混串 | refbar 改为按 entry 分组，只收本词条的 popup / at-link | 7.6 |
 
 ### v0.1（2026-11-05）
 

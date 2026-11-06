@@ -99,6 +99,65 @@ const VERB_TABLE: &str = concat!(
     "</span></div></span></span></span></div>",
 );
 
+/// Two homograph entries in one record (`come` verb + `come` noun): the
+/// second `div.chwd` bar starts a sibling entry, not another pos-block.
+const HOMOGRAPHS: &str = concat!(
+    "<div><div class=\"chwd\"><a href=\"entry://#come_1\"><i>verb</i></a> | ",
+    "<a href=\"entry://#come_2\"><i>noun</i></a></div>",
+    "<span class=\"entry\"><span class=\"entryhead\"><span class=\"hwd\">come</span>",
+    "<span class=\"homnum\">1</span><span class=\"pos\">verb</span></span>",
+    "<span class=\"sense\"><span class=\"sensenum\">1</span>",
+    "<span class=\"def\">to move towards</span></span>",
+    "<span class=\"popup-button\">Word Origin</span>",
+    "<div class=\"at-link\"><span class=\"entry\">",
+    "<span class=\"popheader popetym\">WORD ORIGIN</span><span class=\"homnum\">1</span></span>",
+    "<div class=\"etymology\"><b>Origin:</b></div>",
+    "<span class=\"etymsense\"><span class=\"etymorigin\">cuman</span></span></div>",
+    "<span class=\"popup-button\">Collocations</span>",
+    "<div class=\"at-link\"><span class=\"entry\">",
+    "<span class=\"popheader popcoll\">COLLOCATIONS</span></span>",
+    "<span class=\"collobox\"><span class=\"heading\">COLLOCATIONS</span>",
+    "<span class=\"collo\"><span class=\"collocate\">come</span></span></span></div></span>",
+    "<div class=\"chwd\"><a href=\"entry://#come_1\"><i>verb</i></a> | ",
+    "<a href=\"entry://#come_2\"><i>noun</i></a></div>",
+    "<span class=\"entry\"><span class=\"entryhead\"><span class=\"hwd\">come</span>",
+    "<span class=\"homnum\">2</span><span class=\"pos\">noun</span></span>",
+    "<span class=\"sense\"><span class=\"sensenum\">1</span>",
+    "<span class=\"def\">the act of arriving</span></span>",
+    "<span class=\"popup-button\">Word Origin</span>",
+    "<div class=\"at-link\"><span class=\"entry\">",
+    "<span class=\"popheader popetym\">WORD ORIGIN</span><span class=\"homnum\">2</span></span>",
+    "<div class=\"etymology\"><b>Origin:</b></div>",
+    "<span class=\"etymsense\"><span class=\"etymorigin\">cuman</span></span></div>",
+    "</span></div>",
+);
+
+#[test]
+fn homographs_become_sibling_entries() {
+    let out = parse(HOMOGRAPHS, "come");
+    assert_eq!(
+        out.matches("<section class=\"odc-entry\"").count(),
+        2,
+        "{out}"
+    );
+    assert!(out.contains("data-odc-homograph=\"1\""), "{out}");
+    assert!(out.contains("data-odc-homograph=\"2\""), "{out}");
+    assert_eq!(out.matches("<header class=\"odc-head\">").count(), 2);
+    assert_eq!(out.matches("<nav class=\"odc-refbar\">").count(), 2);
+    assert_eq!(out.matches("<h1 class=\"odc-hw\">come</h1>").count(), 2);
+    assert!(!out.contains("homograph-headword"), "{out}");
+
+    let mut parts = out.split("<section class=\"odc-entry\"");
+    parts.next();
+    let verb = parts.next().expect("verb entry");
+    let noun = parts.next().expect("noun entry");
+    assert!(verb.contains("COLLOCATIONS"), "{verb}");
+    assert!(noun.contains("WORD ORIGIN"), "{noun}");
+    assert!(!noun.contains("COLLOCATIONS"), "{noun}");
+    assert!(!verb.contains("the act of arriving"), "{verb}");
+    assert!(same_words(HOMOGRAPHS, &out));
+}
+
 #[test]
 fn head_maps_to_hw_phon_pos_block() {
     let out = parse(HEAD, "make");

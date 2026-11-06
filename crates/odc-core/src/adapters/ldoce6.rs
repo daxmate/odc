@@ -329,9 +329,12 @@ pub(crate) struct Builder<'a> {
     mute_spans: Vec<usize>,
     head_open: bool,
     head_done: bool,
-    entry_count: usize,
-    secondary: bool,
-    pos_index: usize,
+    /// 1-based index of the homograph entry currently being built.
+    homograph: usize,
+    /// True when the record holds more than one entry (a homograph group).
+    homograph_group: bool,
+    /// Pos-block ids already emitted, so homographs never reuse one.
+    pos_ids: Vec<String>,
     pos_slug: String,
     scope_id: String,
     sense_seq: u32,
@@ -371,9 +374,9 @@ impl<'a> Builder<'a> {
             mute_spans: Vec::new(),
             head_open: false,
             head_done: false,
-            entry_count: 0,
-            secondary: false,
-            pos_index: 0,
+            homograph: 0,
+            homograph_group: false,
+            pos_ids: Vec::new(),
             pos_slug: String::new(),
             scope_id: String::new(),
             sense_seq: 0,
@@ -402,6 +405,9 @@ impl<'a> Builder<'a> {
 
     /// Run the whole fragment through the rewriter.
     pub(crate) fn build(&mut self, html: &str) {
+        // Every root entry opens with its own `div.chwd` bar, so more than one
+        // bar means this record holds a homograph group.
+        self.homograph_group = html.matches("class=\"chwd\"").count() > 1;
         let tokens = tokens::tokenize(html);
         self.open_entry();
         for (index, tok) in tokens.iter().enumerate() {
@@ -494,13 +500,56 @@ impl<'a> Builder<'a> {
     }
 
     fn open_entry(&mut self) {
+        self.homograph += 1;
+        let homograph = if self.homograph_group {
+            format!(" data-odc-homograph=\"{}\"", self.homograph)
+        } else {
+            String::new()
+        };
         let start = format!(
-            "<section class=\"odc-entry\" data-odc-dict=\"{}\" data-odc-key=\"{}\" data-odc-lang=\"{}\">",
+            "<section class=\"odc-entry\" data-odc-dict=\"{}\" data-odc-key=\"{}\"{homograph} data-odc-lang=\"{}\">",
             escape_attr(&self.ctx.dict),
             escape_attr(&self.ctx.key),
             escape_attr(&self.ctx.lang)
         );
         self.open(0, start, "</section>");
+    }
+
+    /// Close the entry being built and start the next homograph as its
+    /// sibling, so every entry keeps its own head, toolbar and senses.
+    fn next_entry(&mut self) {
+        self.end_capture();
+        self.close_toc();
+        self.flush_deferred();
+        self.close_from(0);
+        self.ref_blocks.clear();
+        self.loose.clear();
+        self.reset_entry();
+        self.open_entry();
+    }
+
+    /// Per-entry state that must not leak into the next homograph.
+    fn reset_entry(&mut self) {
+        self.head_open = false;
+        self.head_done = false;
+        self.phon_index = 0;
+        self.pos_slug.clear();
+        self.scope_id.clear();
+        self.sense_seq = 0;
+        self.sense_n.clear();
+        self.pending_anchor = None;
+        self.toc_open = false;
+        self.toc_capture = false;
+        self.toc.clear();
+        self.refs.clear();
+        self.refbar_pos = None;
+        self.refbar_at = None;
+        self.capturing = false;
+        self.span_depth = 0;
+        self.ref_box_depth = None;
+        self.def_depth = 0;
+        self.ref_summary = false;
+        self.mute_spans.clear();
     }
 
     fn emit(&mut self, text: &str) {
@@ -605,7 +654,7 @@ impl<'a> Builder<'a> {
     }
 
     fn ensure_head(&mut self) {
-        if self.secondary || self.head_done || self.in_pv() {
+        if self.head_done || self.in_pv() {
             return;
         }
         if !self.head_open {
@@ -758,11 +807,16 @@ impl<'a> Builder<'a> {
         }
         if name == "div" {
             if has("chwd") {
-                // `div.chwd` opens every root entry: close the previous one.
-                self.end_capture();
-                self.close_toc();
-                self.flush_deferred();
-                self.close_from(1);
+                // `div.chwd` opens every root entry. The first bar belongs to
+                // the entry already open; later bars start a sibling homograph.
+                if self.head_done {
+                    self.next_entry();
+                } else {
+                    self.end_capture();
+                    self.close_toc();
+                    self.flush_deferred();
+                    self.close_from(1);
+                }
             }
             if has("at-link") {
                 self.close_head();
@@ -779,11 +833,12 @@ impl<'a> Builder<'a> {
         }
 
         if has("entry") {
-            if self.in_ref() {
+            // `span.entry` also wraps popup payloads (word origin, verb tables,
+            // the entry menu), so it never decides an entry boundary by itself:
+            // homographs are separated by their `div.chwd` bars.
+            if self.in_ref() || self.capturing {
                 return;
             }
-            self.entry_count += 1;
-            self.secondary = self.entry_count > 1;
             self.adapted = true;
             return;
         }
@@ -791,16 +846,8 @@ impl<'a> Builder<'a> {
             return;
         }
         if has("hwd") {
-            if self.secondary {
-                self.inline_open(
-                    "<span class=\"odc-hw-alt\" data-odc-kind=\"homograph-headword\">",
-                    "span",
-                    "span",
-                );
-            } else {
-                self.ensure_head();
-                self.inline_open("<h1 class=\"odc-hw\">", "span", "h1");
-            }
+            self.ensure_head();
+            self.inline_open("<h1 class=\"odc-hw\">", "span", "h1");
             self.adapted = true;
             return;
         }
@@ -869,15 +916,15 @@ impl<'a> Builder<'a> {
             self.close_toc();
             self.close_head();
             self.close_from(2);
-            self.pos_index += 1;
             let label = inline_text(tokens, index);
             self.pos_slug = pos_slug(&label);
             let base = format!("{}-{}", entry_slug(&self.ctx.key), self.pos_slug);
-            let id = if self.pos_index > 1 {
-                format!("{base}-{}", self.pos_index)
+            let id = if self.pos_ids.contains(&base) {
+                format!("{base}-{}", self.homograph)
             } else {
                 base
             };
+            self.pos_ids.push(id.clone());
             self.scope_id = id.clone();
             self.sense_seq = 0;
             self.sense_n.clear();
