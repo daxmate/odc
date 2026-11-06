@@ -1,0 +1,293 @@
+{
+  "schema_version": "odc.profile/v0",
+  "profile_id": "mwaled.en",
+  "spec": {
+    "version": "odc-html-spec/0.1",
+    "slot_registry": "odc-slots/0.1"
+  },
+  "dict": {
+    "name": "Merriam-Webster's Advanced Learner's English Dictionary",
+    "edition": "2nd",
+    "lang": "en",
+    "variant": "en",
+    "source": {
+      "format": "mdx",
+      "records": 202,
+      "aliases": 111,
+      "entries": 91
+    }
+  },
+  "fingerprint": {
+    "algorithm": "odc-fingerprint/1",
+    "sha256": "c1c3c16335c8e981d40e21ee5aa900f0029d07fcead8f2b77ca970256639d0ed",
+    "samples": 91,
+    "tag_histogram": {
+      "a": 126,
+      "div": 2462,
+      "em": 425,
+      "h2": 80,
+      "head": 91,
+      "img": 1,
+      "li": 398,
+      "link": 91,
+      "span": 1484,
+      "strong": 129,
+      "sup": 31,
+      "ul": 218
+    }
+  },
+  "engine": {
+    "name": "human",
+    "temperature": 0.0,
+    "host": "local"
+  },
+  "provenance": {
+    "source": "human",
+    "note": "T1 baseline profile written by hand from the mwaled dialect survey; T2 compares an inferred profile against it."
+  },
+  "coverage": {
+    "odc-entry": { "status": "present", "rule": "root.entry", "evidence": "91/91" },
+    "odc-entry-head": { "status": "present", "rule": "head.block", "evidence": "91/91" },
+    "odc-pos-block": { "status": "present", "rule": "segment.sblocks", "evidence": "91/91" },
+    "odc-sense": { "status": "present", "rule": "sense.block", "evidence": "91/91" },
+    "odc-sense-number": { "status": "present", "rule": "sense.number", "evidence": "31/91" },
+    "odc-def": { "status": "present", "rule": "def.text", "evidence": "87/91" },
+    "odc-def-trans": { "status": "absent", "reason": "monolingual source", "evidence": "no zh text in 91 samples" },
+    "odc-example": { "status": "present", "rule": "example.item", "evidence": "66/91" },
+    "odc-phrasal-verb": { "status": "present", "rule": "pv.line", "evidence": "11/91" }
+  },
+  "rules": [
+    {
+      "id": "cleanup.forbidden",
+      "stage": "cleanup",
+      "priority": 100,
+      "op": "drop",
+      "match": { "selector": "script, style, head, link, a.play_pron" },
+      "rationale": "Source ships a stylesheet link per record and empty sound-play anchors; none of them carry entry text."
+    },
+    {
+      "id": "cleanup.attrs",
+      "stage": "cleanup",
+      "priority": 90,
+      "op": "drop",
+      "match": { "selector": "*" },
+      "attributes": ["style", "on*"],
+      "rationale": "Inline styles and event handlers are presentation, never content."
+    },
+    {
+      "id": "root.entry",
+      "stage": "root",
+      "priority": 100,
+      "op": "map",
+      "match": {
+        "selector": "div.all-entry",
+        "cardinality": { "min": 1, "max": 1 }
+      },
+      "emit": {
+        "element": "section",
+        "classes": ["odc-entry"],
+        "move": "children",
+        "data": {
+          "odc-dict": "@dict",
+          "odc-key": "@key",
+          "odc-lang": "@lang"
+        }
+      },
+      "confidence": 1.0,
+      "status": "approved",
+      "rationale": "Every mwaled record is one div.all-entry wrapper around one or more div.entry homographs."
+    },
+    {
+      "id": "split.homograph",
+      "stage": "split",
+      "priority": 100,
+      "op": "split",
+      "match": { "selector": "section.odc-entry", "min_count": 2 },
+      "split_by": { "selector": "div.entry", "keep_selector": true },
+      "emit": { "element": "section", "attribute": "data-odc-homograph", "numbering": { "start": 1 } },
+      "confidence": 0.99,
+      "status": "approved",
+      "rationale": "A record such as kit contains two div.entry siblings (hw_0, hw_1); the spec wants sibling entries."
+    },
+    {
+      "id": "root.unwrap-entry",
+      "stage": "split",
+      "priority": 40,
+      "op": "unwrap",
+      "match": { "selector": "div.entry" },
+      "rationale": "After the split each entry wrapper is redundant: its children are the L1 body."
+    },
+    {
+      "id": "segment.sblocks",
+      "stage": "segment",
+      "priority": 100,
+      "op": "map",
+      "match": { "selector": "div.sblocks", "scope": ["entry"] },
+      "emit": { "element": "section", "classes": ["odc-pos-block"], "move": "children" },
+      "rationale": "div.sblocks already groups every sense of one part of speech, so it can be re-tagged instead of cut out of a flat sibling run."
+    },
+    {
+      "id": "segment.dros",
+      "stage": "segment",
+      "priority": 90,
+      "op": "map",
+      "match": { "selector": "div.dros", "scope": ["entry"] },
+      "emit": { "element": "section", "classes": ["odc-pos-block"], "move": "children" },
+      "rationale": "Phrasal-verb homographs live in div.dros instead of div.sblocks and need their own block."
+    },
+    {
+      "id": "head.block",
+      "stage": "slot",
+      "priority": 100,
+      "op": "map",
+      "match": {
+        "selector": "div.hw_d",
+        "scope": ["entry"],
+        "cardinality": { "min": 1 }
+      },
+      "emit": { "element": "header", "classes": ["odc-entry-head"], "move": "children" },
+      "confidence": 1.0,
+      "status": "approved",
+      "rationale": "div.hw_d holds headword, pronunciation, sound link and part of speech."
+    },
+    {
+      "id": "head.word",
+      "stage": "slot",
+      "priority": 95,
+      "op": "map",
+      "match": { "selector": "span.hw_txt", "scope": ["entry"] },
+      "emit": { "element": "h1", "classes": ["odc-hw"], "move": "children" },
+      "confidence": 1.0,
+      "status": "approved"
+    },
+    {
+      "id": "head.pron",
+      "stage": "slot",
+      "priority": 90,
+      "op": "map",
+      "match": { "selector": "span.hpron_word", "scope": ["entry"] },
+      "emit": { "element": "span", "classes": ["odc-phon"], "move": "children" },
+      "confidence": 1.0,
+      "status": "approved"
+    },
+    {
+      "id": "head.pos",
+      "stage": "slot",
+      "priority": 85,
+      "op": "map",
+      "match": { "selector": "span.fl", "scope": ["entry"] },
+      "emit": { "element": "span", "classes": ["odc-pos"], "move": "children" },
+      "confidence": 1.0,
+      "status": "approved",
+      "rationale": "The part of speech sits inside the head block; moving it into the pos-block would reorder text, so it stays where the source put it."
+    },
+    {
+      "id": "head.inflection",
+      "stage": "slot",
+      "priority": 80,
+      "op": "map",
+      "match": { "selector": "div.hw_infs_d", "scope": ["entry"] },
+      "emit": { "element": "div", "classes": ["odc-inflection"], "move": "children" },
+      "confidence": 0.97,
+      "status": "approved"
+    },
+    {
+      "id": "sense.block",
+      "stage": "slot",
+      "priority": 75,
+      "op": "map",
+      "match": {
+        "selector": "div.sense",
+        "scope": ["entry"],
+        "cardinality": { "min": 1 }
+      },
+      "emit": { "element": "div", "classes": ["odc-sense"], "move": "children" },
+      "confidence": 1.0,
+      "status": "approved"
+    },
+    {
+      "id": "sense.number",
+      "stage": "slot",
+      "priority": 70,
+      "op": "map",
+      "match": { "selector": "strong.sn_block_num", "scope": ["pos-block"] },
+      "emit": { "element": "span", "classes": ["odc-sense-number"], "move": "children" },
+      "confidence": 0.96,
+      "status": "approved",
+      "rationale": "strong.sn_block_num is a sibling of div.scnt, so it becomes an odc-sense-number before its sense rather than inside it."
+    },
+    {
+      "id": "def.text",
+      "stage": "slot",
+      "priority": 65,
+      "op": "map",
+      "match": { "selector": "span.def_text", "scope": ["sense"] },
+      "emit": { "element": "div", "classes": ["odc-def"], "move": "children" },
+      "confidence": 1.0,
+      "status": "approved"
+    },
+    {
+      "id": "example.item",
+      "stage": "slot",
+      "priority": 60,
+      "op": "map",
+      "match": { "selector": "li.vi", "scope": ["sense"] },
+      "emit": { "element": "li", "classes": ["odc-example"], "move": "children" },
+      "confidence": 0.99,
+      "status": "approved"
+    },
+    {
+      "id": "example.list",
+      "stage": "slot",
+      "priority": 55,
+      "op": "map",
+      "match": { "selector": "ul.vis", "scope": ["sense"] },
+      "emit": { "element": "ul", "classes": ["odc-examples"], "move": "children" },
+      "confidence": 0.98,
+      "status": "approved"
+    },
+    {
+      "id": "pv.line",
+      "stage": "slot",
+      "priority": 50,
+      "op": "map",
+      "match": { "selector": "div.dro_line", "scope": ["pos-block"] },
+      "emit": { "element": "div", "classes": ["odc-phrasal-verb"], "move": "children" },
+      "confidence": 0.95,
+      "status": "proposed",
+      "rationale": "Phrasal-verb heads are h2.dre inside div.dro_line; the line also carries the grammar label."
+    },
+    {
+      "id": "slot.grammar",
+      "stage": "slot",
+      "priority": 45,
+      "op": "map",
+      "match": { "selector": "span.sgram", "scope": ["sense"] },
+      "emit": { "element": "span", "classes": ["odc-grammar"], "move": "children" },
+      "confidence": 0.93,
+      "status": "proposed"
+    },
+    {
+      "id": "slot.labels",
+      "stage": "slot",
+      "priority": 40,
+      "op": "map",
+      "match": { "selector": "div.sblock_labels", "scope": ["pos-block"] },
+      "emit": { "element": "div", "classes": ["odc-labels"], "move": "children" },
+      "confidence": 0.9,
+      "status": "proposed"
+    },
+    {
+      "id": "numbering.sense",
+      "stage": "numbering",
+      "priority": 50,
+      "op": "number",
+      "match": { "selector": "div.odc-sense", "scope": ["pos-block"] },
+      "emit": { "attribute": "data-odc-n" },
+      "reset_on": ["pos-block"],
+      "confidence": 1.0,
+      "status": "approved",
+      "rationale": "Sense numbering restarts per part of speech, which is one pos-block per entry here."
+    }
+  ]
+}
