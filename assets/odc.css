@@ -1,0 +1,685 @@
+/* ==========================================================================
+   odc.css — ODC 词条正文样式（L1 归一化 DOM / L2 odc-* 槽位）
+   规范：docs/odc-html-spec.md v0.1（实验性草案）
+   约束：只样式化 .odc-* 类；无外部字体、图片、样式导入、CDN。
+   阅读列约 70ch，正文 16px / 1.6–1.65，释义优先。
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   1. 根容器与配色（浅色 / 深色）
+   -------------------------------------------------------------------------- */
+
+.odc-entry {
+  /* 浅色 */
+  --odc-bg: #ffffff;
+  --odc-fg: #1b1b1f;
+  --odc-fg-muted: #5c5f66;
+  --odc-fg-faint: #85888f;
+  --odc-accent: #1f5d99;
+  --odc-accent-line: #cfdfee;
+  --odc-rule: #e3e3e7;
+  --odc-rule-strong: #ccccd2;
+
+  /* 字体：拉丁走系统 UI 字体，中文走苹方；音标单独回退链 */
+  --odc-font-text: -apple-system, BlinkMacSystemFont, "SF Pro Text",
+    "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+    sans-serif;
+  --odc-font-ipa: "Charis SIL", "Doulos SIL", "Gentium Plus",
+    "Lucida Sans Unicode", "Arial Unicode MS", var(--odc-font-text);
+
+  --odc-measure: 70ch;
+
+  box-sizing: border-box;
+  display: block;
+  max-width: calc(var(--odc-measure) + 40px);
+  margin: 0 auto;
+  padding: 26px 20px 56px;
+  background: var(--odc-bg);
+  color: var(--odc-fg);
+  font-family: var(--odc-font-text);
+  font-size: 16px;
+  line-height: 1.6;
+  text-align: left;
+  overflow-wrap: break-word;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.odc-entry *,
+.odc-entry *::before,
+.odc-entry *::after {
+  box-sizing: inherit;
+}
+
+@media (prefers-color-scheme: dark) {
+  .odc-entry {
+    --odc-bg: #16171a;
+    --odc-fg: #e7e7ec;
+    --odc-fg-muted: #a5a9b2;
+    --odc-fg-faint: #7b7f88;
+    --odc-accent: #82b3e6;
+    --odc-accent-line: #2d3f52;
+    --odc-rule: #2a2c31;
+    --odc-rule-strong: #3a3d44;
+  }
+}
+
+/* 原始兜底词条（未归一化）：不套结构，只保证可读 */
+.odc-entry--raw {
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+/* 别名跳转词条：无正文，弱化呈现 */
+.odc-entry--redirect {
+  color: var(--odc-fg-muted);
+  font-style: italic;
+}
+
+/* --------------------------------------------------------------------------
+   2. 词头区：odc-head（v0 短名）/ odc-entry-head（v0.1 名）
+   -------------------------------------------------------------------------- */
+
+.odc-head,
+.odc-entry-head {
+  display: block;
+  margin: 0 0 14px;
+  padding: 0 0 10px;
+  border-bottom: 1px solid var(--odc-rule-strong);
+}
+
+.odc-hw {
+  display: inline;
+  margin: 0;
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+
+.odc-hw-alt {
+  margin-left: 0.45em;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--odc-fg-faint);
+}
+
+.odc-hw-alt[data-odc-kind="homograph"],
+.odc-hw-alt[data-odc-kind="homograph-headword"] {
+  margin-left: 0.12em;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--odc-fg-muted);
+  vertical-align: super;
+}
+
+.odc-phon {
+  margin-left: 0.55em;
+  font-family: var(--odc-font-ipa);
+  font-size: 15px;
+  color: var(--odc-fg-muted);
+  white-space: nowrap;
+}
+
+.odc-inflection {
+  margin-left: 0.5em;
+  font-size: 14px;
+  color: var(--odc-fg-muted);
+}
+
+/* 音频按钮：纯 CSS 三角，无图标资源 */
+.odc-audio {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  margin: 0 0.18em;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--odc-accent);
+  vertical-align: -1px;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.odc-audio::before {
+  content: "";
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 4px 0 4px 6px;
+  border-color: transparent transparent transparent currentColor;
+  opacity: 0.8;
+}
+
+.odc-audio:hover::before {
+  opacity: 1;
+}
+
+.odc-audio[data-odc-missing="1"] {
+  display: none;
+}
+
+/* --------------------------------------------------------------------------
+   3. 目录（派生视图，不计义项）
+   -------------------------------------------------------------------------- */
+
+.odc-toc {
+  display: block;
+  margin: 0 0 22px;
+  padding: 0 0 12px;
+  border-bottom: 1px solid var(--odc-rule);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--odc-fg-faint);
+}
+
+.odc-toc > * {
+  display: block;
+}
+
+.odc-toc .odc-hw {
+  display: block;
+  margin: 0 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--odc-fg-muted);
+}
+
+.odc-toc .odc-hw-alt {
+  margin-left: 0.3em;
+  font-size: 11.5px;
+}
+
+/* --------------------------------------------------------------------------
+   4. 词性段
+   -------------------------------------------------------------------------- */
+
+.odc-pos-block {
+  display: block;
+  margin: 0;
+}
+
+.odc-pos-block + .odc-pos-block {
+  margin-top: 26px;
+  padding-top: 18px;
+  border-top: 1px solid var(--odc-rule);
+}
+
+.odc-pos {
+  display: block;
+  margin: 4px 0 10px;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--odc-accent);
+}
+
+/* 义项大类 / 分类头 */
+.odc-sense-group {
+  display: block;
+  margin: 18px 0 8px;
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--odc-fg-muted);
+}
+
+/* --------------------------------------------------------------------------
+   5. 义项与释义（主角）
+   -------------------------------------------------------------------------- */
+
+.odc-sense,
+.odc-subsense {
+  position: relative;
+  display: block;
+  margin: 0;
+  padding-left: 26px;
+}
+
+.odc-sense + .odc-sense,
+.odc-sense + .odc-subsense {
+  margin-top: 0.62em;
+}
+
+.odc-subsense {
+  margin-top: 0.55em;
+  padding-left: 24px;
+}
+
+/* 二级义项在义项内再缩进半格 */
+.odc-sense .odc-subsense {
+  margin-left: 10px;
+}
+
+/* 悬挂编号：绝对定位在阅读列左侧 */
+.odc-sense-number {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 20px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 26.4px; /* = 16px × 1.65，与释义首行对齐 */
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--odc-accent);
+}
+
+.odc-def {
+  display: block;
+  margin: 0;
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.65;
+}
+
+/* 规范 4.5：不建中间层；仅为外部数据保留兼容别名 */
+.odc-def-text {
+  font-weight: 400;
+}
+
+/* 中文释义另起一行，退到第二层 */
+.odc-def-trans {
+  display: block;
+  margin: 0.18em 0 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--odc-fg-muted);
+}
+
+/* --------------------------------------------------------------------------
+   6. 例句
+   -------------------------------------------------------------------------- */
+
+.odc-examples {
+  display: block;
+  margin: 0.5em 0 0.25em;
+  padding: 0 0 0 12px;
+  border-left: 1px solid var(--odc-rule);
+  list-style: none;
+  font-size: 14.5px;
+  line-height: 1.55;
+}
+
+.odc-examples .odc-examples {
+  margin: 0.25em 0 0;
+  padding-left: 10px;
+}
+
+.odc-example {
+  display: block;
+  margin: 0.14em 0;
+  font-size: 14.5px;
+  line-height: 1.55;
+}
+
+.odc-ex-text {
+  display: inline;
+}
+
+.odc-ex-trans {
+  display: block;
+  margin: 0.06em 0 0;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--odc-fg-muted);
+}
+
+/* 例句出处 / 语料标识 */
+.odc-ex-source {
+  margin-left: 0.4em;
+  font-size: 12.5px;
+  font-style: normal;
+  color: var(--odc-fg-faint);
+}
+
+/* --------------------------------------------------------------------------
+   7. 行内标注
+   -------------------------------------------------------------------------- */
+
+.odc-label {
+  margin-right: 0.3em;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--odc-fg-muted);
+}
+
+.odc-label[data-odc-kind="pos"] {
+  font-style: italic;
+}
+
+.odc-signpost {
+  font-weight: 600;
+  color: var(--odc-fg);
+}
+
+.odc-signpost > span + span {
+  margin-left: 0.4em;
+  font-weight: 400;
+  color: var(--odc-fg-muted);
+}
+
+.odc-grammar {
+  margin-right: 0.3em;
+  font-size: 13px;
+  font-style: italic;
+  color: var(--odc-fg-muted);
+}
+
+.odc-collocation {
+  font-weight: 600;
+}
+
+.odc-collocation .odc-collocation {
+  font-weight: 500;
+}
+
+.odc-homograph {
+  font-weight: 600;
+}
+
+/* 频度等元信息（S1 W1），不在槽位表内，仅保底呈现 */
+.odc-meta {
+  margin-right: 0.35em;
+  font-size: 11.5px;
+  letter-spacing: 0.02em;
+  color: var(--odc-fg-faint);
+}
+
+/* 短语索引（► smash 之类）：紧跟交叉引用的词条名 */
+.odc-phrase-index {
+  display: inline;
+  font-weight: 500;
+}
+
+/* --------------------------------------------------------------------------
+   8. 交叉引用
+   -------------------------------------------------------------------------- */
+
+.odc-crossref {
+  color: var(--odc-accent);
+  text-decoration: none;
+  border-bottom: 1px solid var(--odc-accent-line);
+}
+
+.odc-crossref:hover {
+  border-bottom-color: var(--odc-accent);
+}
+
+.odc-crossrefs {
+  display: block;
+  margin: 14px 0 0;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--odc-fg-muted);
+}
+
+/* --------------------------------------------------------------------------
+   9. 短语动词
+   -------------------------------------------------------------------------- */
+
+.odc-pvs,
+.odc-phrasal-verbs {
+  display: block;
+  margin: 26px 0 0;
+  padding-top: 18px;
+  border-top: 1px solid var(--odc-rule-strong);
+}
+
+.odc-pv,
+.odc-phrasal-verb {
+  display: block;
+  margin: 0 0 14px;
+}
+
+.odc-pv-hw,
+.odc-phrasal-verb-hw {
+  margin: 0 0 3px;
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.odc-pv > .odc-sense,
+.odc-phrasal-verb > .odc-sense {
+  margin-top: 0.4em;
+}
+
+/* 习语条目（带释义），结构与短语动词一致 */
+.odc-idiom {
+  display: block;
+  margin: 0 0 14px;
+}
+
+.odc-idiom > .odc-sense {
+  margin-top: 0.4em;
+}
+
+/* --------------------------------------------------------------------------
+   10. 参考块（同义、词源、其他词典例句……）
+   -------------------------------------------------------------------------- */
+
+.odc-refs {
+  display: block;
+  margin: 28px 0 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--odc-rule-strong);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.odc-ref {
+  display: block;
+  margin: 0 0 16px;
+}
+
+.odc-ref-title {
+  display: block;
+  margin: 0 0 6px;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--odc-fg-faint);
+}
+
+/* --------------------------------------------------------------------------
+   11. 其他槽位
+   -------------------------------------------------------------------------- */
+
+.odc-usage-note {
+  display: block;
+  margin: 12px 0;
+  padding: 2px 0 2px 12px;
+  border-left: 2px solid var(--odc-rule-strong);
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--odc-fg-muted);
+}
+
+.odc-word-family,
+.odc-thesaurus {
+  display: block;
+  margin: 16px 0;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.odc-word-family > h3,
+.odc-thesaurus > h3 {
+  margin: 0 0 6px;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--odc-fg-faint);
+}
+
+.odc-word-origin {
+  display: block;
+  margin: 22px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--odc-rule);
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--odc-fg-muted);
+}
+
+.odc-citations {
+  display: block;
+  margin: 12px 0;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--odc-fg-muted);
+}
+
+.odc-citation {
+  display: block;
+  margin: 0 0 6px;
+}
+
+.odc-citation-text {
+  font-family: var(--odc-font-ipa);
+}
+
+.odc-citation-source {
+  margin-left: 0.4em;
+  font-size: 12.5px;
+  color: var(--odc-fg-faint);
+}
+
+.odc-pron-history {
+  font-size: 13px;
+  color: var(--odc-fg-muted);
+}
+
+.odc-img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 12px 0;
+  border-radius: 2px;
+}
+
+/* 未映射兜底块：不产生语义，只保证不炸版 */
+.odc-unmapped {
+  display: block;
+  margin: 6px 0;
+}
+
+.odc-entry--raw .odc-unmapped {
+  margin: 0;
+}
+
+/* --------------------------------------------------------------------------
+   12. 窄屏
+   -------------------------------------------------------------------------- */
+
+@media (max-width: 600px) {
+  .odc-entry {
+    padding: 18px 14px 40px;
+    font-size: 15.5px;
+  }
+
+  .odc-hw {
+    font-size: 25px;
+  }
+
+  .odc-phon {
+    font-size: 14px;
+  }
+
+  .odc-pos {
+    margin: 4px 0 8px;
+    font-size: 13px;
+  }
+
+  .odc-def {
+    font-size: 15.5px;
+    line-height: 1.62;
+  }
+
+  .odc-def-trans {
+    font-size: 13.5px;
+  }
+
+  .odc-sense {
+    padding-left: 22px;
+  }
+
+  .odc-subsense {
+    padding-left: 21px;
+  }
+
+  .odc-sense .odc-subsense {
+    margin-left: 6px;
+  }
+
+  .odc-sense-number {
+    width: 17px;
+    font-size: 12px;
+    line-height: 25.1px; /* = 15.5px × 1.62 */
+  }
+
+  .odc-examples {
+    padding-left: 10px;
+    font-size: 14px;
+  }
+
+  .odc-example {
+    font-size: 14px;
+  }
+
+  .odc-ex-trans {
+    font-size: 13px;
+  }
+
+  .odc-pos-block + .odc-pos-block {
+    margin-top: 20px;
+    padding-top: 14px;
+  }
+
+  .odc-pvs,
+  .odc-phrasal-verbs {
+    margin-top: 20px;
+    padding-top: 14px;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   13. 打印
+   -------------------------------------------------------------------------- */
+
+@media print {
+  .odc-entry {
+    max-width: none;
+    padding: 0;
+    background: #fff;
+    color: #000;
+  }
+
+  .odc-audio {
+    display: none !important;
+  }
+
+  .odc-toc {
+    display: none;
+  }
+
+  .odc-crossref {
+    color: #000;
+    border-bottom: 0;
+  }
+
+  .odc-sense,
+  .odc-subsense,
+  .odc-example {
+    break-inside: avoid;
+  }
+}
