@@ -35,6 +35,7 @@ pub mod mdx_scan;
 pub mod merge;
 pub mod pack;
 pub mod patch;
+pub mod profile;
 pub mod release;
 pub mod repo;
 pub mod signing;
