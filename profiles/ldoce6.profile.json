@@ -1,0 +1,669 @@
+{
+  "schema_version": "odc.profile/v0",
+  "profile_id": "ldoce6encn.en",
+  "spec": {
+    "version": "odc-html-spec/0.1",
+    "slot_registry": "odc-slots/0.1"
+  },
+  "dict": {
+    "name": "Longman Dictionary of Contemporary English 6 (En-Cn)",
+    "edition": "6",
+    "lang": "en",
+    "variant": "en-cn",
+    "source": {
+      "format": "mdx"
+    }
+  },
+  "engine": {
+    "name": "human",
+    "temperature": 0,
+    "host": "local"
+  },
+  "provenance": {
+    "source": "human",
+    "note": "T1.5 translation of crates/odc-core/src/adapters/ldoce6.rs (c6f0934-era behaviour) into odc.profile/v0 rules. Each rule cites the adapter branch it mirrors; gaps are listed in /tmp/odc-profile-t15-report.md."
+  },
+  "rules": [
+    {
+      "id": "cleanup.style-block",
+      "stage": "cleanup",
+      "priority": 100,
+      "op": "drop",
+      "match": {
+        "selector": "script, style, link, meta, head"
+      },
+      "rationale": "ldoce6.rs:765-772 skips link/script/style/meta/head/html/body outright."
+    },
+    {
+      "id": "cleanup.presentation-attributes",
+      "stage": "cleanup",
+      "priority": 95,
+      "op": "drop",
+      "match": {
+        "selector": "*"
+      },
+      "attributes": [
+        "style",
+        "on*"
+      ],
+      "rationale": "The adapter never copies source attributes; onclick handlers and inline styles are presentation only."
+    },
+    {
+      "id": "structure.refbar",
+      "stage": "structure",
+      "priority": 90,
+      "op": "map",
+      "match": {
+        "selector": "div.chwd"
+      },
+      "emit": {
+        "element": "nav",
+        "classes": [
+          "odc-refbar"
+        ],
+        "move": "children"
+      },
+      "rationale": "ldoce6.rs:808-819 consumes div.chwd as the homograph boundary and 440 rebuilds the same i-children as nav.odc-refbar; mapping keeps the bar text in place."
+    },
+    {
+      "id": "cleanup.popup-trigger",
+      "stage": "cleanup",
+      "priority": 90,
+      "op": "unwrap",
+      "match": {
+        "selector": "span.popup-button"
+      },
+      "rationale": "ldoce6.rs:748-752 mutes the popup trigger while it is emitted, but strip_popup_buttons only removes the wrapper before the fidelity check, so the frozen panes still carry the trigger label. Unwrapping reproduces the frozen text order."
+    },
+    {
+      "id": "cleanup.version-tag",
+      "stage": "cleanup",
+      "priority": 85,
+      "op": "unwrap",
+      "match": {
+        "selector": "deft, exat, atl, l6, sigt, gramexa, tail"
+      },
+      "rationale": "ldoce6.rs:804 and 1026 return without emitting deft/exat/l6/sigt/atl/gramexa; tail (960) is dropped the same way. Children stay in the flow."
+    },
+    {
+      "id": "cleanup.buttons",
+      "stage": "cleanup",
+      "priority": 80,
+      "op": "unwrap",
+      "match": {
+        "selector": "span.buttons"
+      },
+      "rationale": "ldoce6.rs:831 skips the span.buttons wrapper; the popup triggers inside were already muted."
+    },
+    {
+      "id": "cleanup.entryhead",
+      "stage": "cleanup",
+      "priority": 78,
+      "op": "unwrap",
+      "match": {
+        "selector": "span.entryhead"
+      },
+      "rationale": "ldoce6.rs:831 also skips span.entryhead; head slots are rebuilt from the hwd/hyphenation/phon children."
+    },
+    {
+      "id": "cleanup.speaker-icon",
+      "stage": "cleanup",
+      "priority": 76,
+      "op": "drop",
+      "match": {
+        "selector": "img"
+      },
+      "rationale": "ldoce6.rs:773-776 routes img through image(); the speaker icon itself never reaches L1, its parent link becomes an audio button."
+    },
+    {
+      "id": "cleanup.anchor",
+      "stage": "cleanup",
+      "priority": 74,
+      "op": "unwrap",
+      "match": {
+        "selector": "a"
+      },
+      "rationale": "ldoce6.rs:777-780 handles every a through anchor()/image(): the element is consumed, its children (icons) are dropped and anchor ids are recorded out of band."
+    },
+    {
+      "id": "cleanup.popup-payload",
+      "stage": "cleanup",
+      "priority": 60,
+      "op": "unwrap",
+      "match": {
+        "selector": "div.at-link > span.entry"
+      },
+      "rationale": "The adapter renders popup payloads as inline ref panels (ldoce6.rs:983-985, open_inline_ref). Unwrapping keeps their text in document order; the ref-panel wrapper itself cannot be expressed with the current operators."
+    },
+    {
+      "id": "root.entry",
+      "stage": "root",
+      "priority": 100,
+      "op": "map",
+      "match": {
+        "selector": "div > span.entry",
+        "cardinality": {
+          "min": 1
+        }
+      },
+      "emit": {
+        "element": "section",
+        "classes": [
+          "odc-entry"
+        ],
+        "move": "children",
+        "data": {
+          "odc-dict": "@dict",
+          "odc-key": "@key",
+          "odc-lang": "@lang"
+        }
+      },
+      "rationale": "ldoce6.rs:835-842: span.entry opens the record; homographs are separated later by div.chwd bars (next_entry)."
+    },
+    {
+      "id": "segment.pos-block",
+      "stage": "segment",
+      "priority": 100,
+      "op": "segment",
+      "match": {
+        "selector": "section.odc-entry"
+      },
+      "boundary": {
+        "start": "span.pos",
+        "until": [
+          "span.pos"
+        ],
+        "max_depth": 1
+      },
+      "emit": {
+        "element": "section",
+        "classes": [
+          "odc-pos-block"
+        ]
+      },
+      "rationale": "ldoce6.rs:899-945: span.pos closes the head and opens a section.odc-pos-block that owns the following senses; the source keeps them as flat siblings."
+    },
+    {
+      "id": "head.hwd",
+      "stage": "slot",
+      "priority": 100,
+      "op": "map",
+      "match": {
+        "selector": "span.hwd"
+      },
+      "emit": {
+        "element": "h1",
+        "classes": [
+          "odc-hw"
+        ],
+        "move": "children"
+      },
+      "rationale": "ldoce6.rs:845-849: span.hwd opens h1.odc-hw inside the header."
+    },
+    {
+      "id": "head.hyphenation",
+      "stage": "slot",
+      "priority": 98,
+      "op": "map",
+      "match": {
+        "selector": "span.hyphenation"
+      },
+      "emit": {
+        "element": "span",
+        "classes": [
+          "odc-hw-alt"
+        ],
+        "data": {
+          "odc-kind": "hyphenation"
+        },
+        "move": "children"
+      },
+      "rationale": "ldoce6.rs:855-861: hyphenation becomes odc-hw-alt with data-odc-kind=hyphenation."
+    },
+    {
+      "id": "head.homograph",
+      "stage": "slot",
+      "priority": 96,
+      "op": "map",
+      "match": {
+        "selector": "span.homnum"
+      },
+      "emit": {
+        "element": "span",
+        "classes": [
+          "odc-hw-alt"
+        ],
+        "data": {
+          "odc-kind": "homograph"
+        },
+        "move": "children"
+      },
+      "rationale": "ldoce6.rs:862-868: the homograph superscript becomes odc-hw-alt data-odc-kind=homograph."
+    },
+    {
+      "id": "head.phon",
+      "stage": "slot",
+      "priority": 94,
+      "op": "map",
+      "match": {
+        "selector": "span.proncodes"
+      },
+      "emit": {
+        "element": "span",
+        "classes": [
+          "odc-phon"
+        ],
+        "data": {
+          "odc-variant": "uk"
+        },
+        "move": "children"
+      },
+      "rationale": "ldoce6.rs:871-880: proncodes becomes span.odc-phon; the uk/us variant comes from a running pronunciation index the profile cannot reproduce per instance."
+    },
+    {
+      "id": "pos.block",
+      "stage": "slot",
+      "priority": 92,
+      "op": "map",
+      "match": {
+        "selector": "span.pos"
+      },
+      "emit": {
+        "element": "h2",
+        "classes": [
+          "odc-pos"
+        ],
+        "move": "children"
+      },
+      "rationale": "ldoce6.rs:943: the part of speech becomes h2.odc-pos inside the pos-block."
+    },
+    {
+      "id": "pos.grammar",
+      "stage": "slot",
+      "priority": 90,
+      "op": "map",
+      "match": {
+        "selector": "span.gram, span.propform"
+      },
+      "emit": {
+        "element": "span",
+        "classes": [
+          "odc-grammar"
+        ],
+        "move": "children"
+      },
+      "rationale": "ldoce6.rs:1022-1025: gram and propform both map to span.odc-grammar."
+    },
+    {
+      "id": "sense.number",
+      "stage": "slot",
+      "priority": 88,
+      "op": "map",
+      "match": {
+        "selector": "span.sensenum"
+      },
+      "emit": {
+        "element": "span",
+        "classes": [
+          "odc-sense-number"
+        ],
+        "move": "children"
+      },
+      "rationale": "ldoce6.rs:1003-1009: sensenum becomes span.odc-sense-number (passthrough inside ref boxes)."
+    },
+    {
+      "id": "sense.item",
+      "stage": "slot",
+      "priority": 86,
+      "op": "map",
+      "match": {
+        "selector": "span.sense"
+      },
+      "emit": {
+        "element": "div",
+        "classes": [
+          "odc-sense"
+        ],
+        "move": "children"
+      },
+      "rationale": "ldoce6.rs:1129-1162: span.sense opens div.odc-sense and closes the previous one."
+    },
+    {
+      "id": "sense.subsense",
+      "stage": "slot",
+      "priority": 84,
+      "op": "map",
+      "match": {
+        "selector": "span.subsense"
+      },
+      "emit": {
+        "element": "div",
+        "classes": [
+          "odc-subsense"
+        ],
+        "move": "children"
+      },
+      "rationale": "ldoce6.rs:1163-1206: subsense opens its own div.odc-subsense."
+    },
+    {
+      "id": "def.text",
+      "stage": "slot",
+      "priority": 82,
+      "op": "map",
+      "match": {
+        "selector": "span.def"
+      },
+      "emit": {
+        "element": "span",
+        "classes": [
+          "odc-def"
+        ],
+        "move": "children"
+      },
+      "rationale": "ldoce6.rs:1031-1038: span.def becomes span.odc-def and raises def_depth for the translation span."
+    },
+    {
+      "id": "example.item",
+      "stage": "slot",
+      "priority": 80,
+      "op": "map",
+      "match": {
+        "selector": "span.example"
+      },
+      "emit": {
+        "element": "li",
+        "classes": [
+          "odc-example"
+        ],
+        "move": "children"
+      },
+      "rationale": "ldoce6.rs:1053-1061: every span.example becomes an li.odc-example; the adapter lazily opens a ul.odc-examples around runs of them (segment cannot express that run)."
+    },
+    {
+      "id": "label.register",
+      "stage": "slot",
+      "priority": 78,
+      "op": "map",
+      "match": {
+        "selector": "span.registerlab"
+      },
+      "emit": {
+        "element": "span",
+        "classes": [
+          "odc-label"
+        ],
+        "data": {
+          "odc-kind": "register"
+        },
+        "move": "children"
+      },
+      "rationale": "ldoce6.rs:1039-1045: registerlab becomes span.odc-label data-odc-kind=register."
+    },
+    {
+      "id": "label.region",
+      "stage": "slot",
+      "priority": 76,
+      "op": "map",
+      "match": {
+        "selector": "span.geo"
+      },
+      "emit": {
+        "element": "span",
+        "classes": [
+          "odc-label"
+        ],
+        "data": {
+          "odc-kind": "region"
+        },
+        "move": "children"
+      },
+      "rationale": "Same branch as registerlab for the geographic label."
+    },
+    {
+      "id": "signpost",
+      "stage": "slot",
+      "priority": 74,
+      "op": "map",
+      "match": {
+        "selector": "span.signpost"
+      },
+      "emit": {
+        "element": "span",
+        "classes": [
+          "odc-signpost"
+        ],
+        "move": "children"
+      },
+      "rationale": "ldoce6.rs:1011-1018: signpost becomes span.odc-signpost outside ref boxes."
+    },
+    {
+      "id": "collocation.span",
+      "stage": "slot",
+      "priority": 72,
+      "op": "map",
+      "match": {
+        "selector": "span.collo, span.colloc, span.colloexa, span.colloinexa"
+      },
+      "emit": {
+        "element": "span",
+        "classes": [
+          "odc-collocation"
+        ],
+        "move": "children"
+      },
+      "rationale": "ldoce6.rs:1047-1051: the collocation spans share one odc-collocation wrapper."
+    },
+    {
+      "id": "pv.headword",
+      "stage": "slot",
+      "priority": 70,
+      "op": "map",
+      "match": {
+        "selector": "span.phrvbhwd"
+      },
+      "emit": {
+        "element": "h3",
+        "classes": [
+          "odc-pv-hw"
+        ],
+        "move": "children"
+      },
+      "rationale": "ldoce6.rs:850-854: phrvbhwd becomes h3.odc-pv-hw."
+    },
+    {
+      "id": "pv.entry",
+      "stage": "slot",
+      "priority": 68,
+      "op": "map",
+      "match": {
+        "selector": "span.phrvbentry"
+      },
+      "emit": {
+        "element": "article",
+        "classes": [
+          "odc-pv"
+        ],
+        "move": "children"
+      },
+      "rationale": "ldoce6.rs:1207-1250: phrvbentry opens article.odc-pv and resets the sense numbering scope."
+    },
+    {
+      "id": "phrase.index",
+      "stage": "slot",
+      "priority": 66,
+      "op": "map",
+      "match": {
+        "selector": "span.phrase"
+      },
+      "emit": {
+        "element": "span",
+        "classes": [
+          "odc-phrase-index"
+        ],
+        "move": "children"
+      },
+      "rationale": "ldoce6.rs:1066-1069: span.phrase becomes span.odc-phrase-index."
+    },
+    {
+      "id": "ref.title",
+      "stage": "slot",
+      "priority": 64,
+      "op": "map",
+      "match": {
+        "selector": "span.heading, span.colloboxheading"
+      },
+      "emit": {
+        "element": "summary",
+        "classes": [
+          "odc-ref-title"
+        ],
+        "move": "children"
+      },
+      "rationale": "ldoce6.rs:986-995: the inline ref box heading becomes summary.odc-ref-title."
+    },
+    {
+      "id": "translation",
+      "stage": "slot",
+      "priority": 62,
+      "op": "map",
+      "match": {
+        "selector": "tran"
+      },
+      "emit": {
+        "element": "span",
+        "classes": [
+          "odc-def-trans"
+        ],
+        "data": {
+          "odc-lang": "zh"
+        },
+        "move": "children"
+      },
+      "rationale": "ldoce6.rs:784-793: tran becomes the Chinese translation span when it sits inside a def."
+    },
+    {
+      "id": "translation.example",
+      "stage": "slot",
+      "priority": 60,
+      "op": "map",
+      "match": {
+        "selector": "trans"
+      },
+      "emit": {
+        "element": "span",
+        "classes": [
+          "odc-ex-trans"
+        ],
+        "data": {
+          "odc-lang": "zh"
+        },
+        "move": "children"
+      },
+      "rationale": "ldoce6.rs:794-800: trans becomes the Chinese example translation span."
+    },
+    {
+      "id": "cleanup.plain-elements",
+      "stage": "cleanup",
+      "priority": 70,
+      "op": "map",
+      "match": {
+        "selector": "en, signen, sign, cnt, collt"
+      },
+      "emit": {
+        "element": "span",
+        "move": "children"
+      },
+      "rationale": "ldoce6.rs:781-783 opens a bare span for en/signen/sign/cnt/collt."
+    },
+    {
+      "id": "example.translation",
+      "stage": "slot",
+      "priority": 58,
+      "op": "map",
+      "match": {
+        "selector": "example"
+      },
+      "emit": {
+        "element": "span",
+        "classes": [
+          "odc-ex-trans"
+        ],
+        "data": {
+          "odc-lang": "zh"
+        },
+        "move": "children"
+      },
+      "rationale": "ldoce6.rs:794-800: the example element becomes the Chinese example translation span."
+    },
+    {
+      "id": "example.text",
+      "stage": "slot",
+      "priority": 57,
+      "op": "map",
+      "match": {
+        "selector": "exaen"
+      },
+      "emit": {
+        "element": "span",
+        "classes": [
+          "odc-ex-text"
+        ],
+        "move": "children"
+      },
+      "rationale": "ldoce6.rs:801-803: exaen becomes span.odc-ex-text."
+    },
+    {
+      "id": "head.frequency",
+      "stage": "slot",
+      "priority": 56,
+      "op": "map",
+      "match": {
+        "selector": "span.freq"
+      },
+      "emit": {
+        "element": "span",
+        "classes": [],
+        "data": {
+          "odc-orig-class": "freq"
+        },
+        "move": "children"
+      },
+      "rationale": "ldoce6.rs:889-897: freq/level keep their class as data-odc-orig-class; the profile cannot copy the source class value, so each rule pins its own literal."
+    },
+    {
+      "id": "head.level",
+      "stage": "slot",
+      "priority": 55,
+      "op": "map",
+      "match": {
+        "selector": "span.level"
+      },
+      "emit": {
+        "element": "span",
+        "classes": [],
+        "data": {
+          "odc-orig-class": "level"
+        },
+        "move": "children"
+      },
+      "rationale": "ldoce6.rs:889-897: same branch as freq."
+    },
+    {
+      "id": "head.inflection",
+      "stage": "slot",
+      "priority": 54,
+      "op": "map",
+      "match": {
+        "selector": "span.inflections"
+      },
+      "emit": {
+        "element": "span",
+        "classes": [
+          "odc-inflection"
+        ],
+        "move": "children"
+      },
+      "rationale": "ldoce6.rs:941-950: inflections becomes span.odc-inflection; data-odc-kind needs inflection_kind() text sniffing, which the DSL cannot do."
+    }
+  ]
+}
