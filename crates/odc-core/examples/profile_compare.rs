@@ -135,6 +135,9 @@ impl Args {
                 "--golden" => golden = Some(PathBuf::from(value_of(&argv, &mut index, &flag)?)),
                 "--report" => report = Some(PathBuf::from(value_of(&argv, &mut index, &flag)?)),
                 "--dump" => dump = Some(PathBuf::from(value_of(&argv, &mut index, &flag)?)),
+                "--ignore-ui-text" => {
+                    let _ = UI_TEXT.set(true);
+                }
                 "--ignore-attr" => {
                     let name = value_of(&argv, &mut index, &flag)?;
                     let mut list = IGNORED.get().cloned().unwrap_or_default();
@@ -193,7 +196,10 @@ fn compare_golden(
         let source = pane_body(&fs::read_to_string(&file)?);
         let golden = entries.join(format!("{key}-l1.html"));
         let expected = pane_body(&fs::read_to_string(&golden)?);
-        let ctx = ParseContext::new(key, "ldoce6encn", "en");
+        // The pane declares the record key it was rendered for; file names
+        // cannot carry spaces ("Action Man" is stored as "Action_Man").
+        let key = declared_key(&expected).unwrap_or_else(|| String::from(key));
+        let ctx = ParseContext::new(key.clone(), "ldoce6encn", "en");
         let (produced, stats) = match profile.apply(&source, &ctx) {
             Outcome::Adapted { html, stats } | Outcome::Unadapted { html, stats } => (html, stats),
             Outcome::Alias { target } => {
@@ -693,8 +699,43 @@ fn strip(nodes: &[Node]) -> Vec<Node> {
             Node::Text(text) => !text.is_empty(),
             Node::El(_) => true,
         })
-        .cloned()
+        .map(|node| match node {
+            Node::El(elem) if ui_text_ignored() && is_ui(elem) => {
+                let mut elem = elem.clone();
+                elem.kids.retain(|kid| !matches!(kid, Node::Text(_)));
+                elem.attrs.retain(|(name, _)| name != "data-odc-ui");
+                Node::El(elem)
+            }
+            other => other.clone(),
+        })
         .collect()
+}
+
+/// Whether `--ignore-ui-text` was given.
+fn ui_text_ignored() -> bool {
+    UI_TEXT.get().copied().unwrap_or(false)
+}
+
+/// Whether the element carries a `data-odc-ui` marker (P4).
+///
+/// A reference-bar caption is chrome whichever form it takes: the frozen
+/// panes still spell the caption out, L1 keeps it in the marker.
+fn is_ui(elem: &Elem) -> bool {
+    elem.attrs.iter().any(|(name, _)| name == "data-odc-ui")
+        || elem.attrs.iter().any(|(name, value)| {
+            name == "class"
+                && value
+                    .split_whitespace()
+                    .any(|part| part == "odc-refbar__label")
+        })
+}
+
+/// Key declared by a rendered pane, if any.
+fn declared_key(html: &str) -> Option<String> {
+    let at = html.find("data-odc-key=\"")? + "data-odc-key=\"".len();
+    let rest = &html[at..];
+    let end = rest.find('"')?;
+    Some(String::from(&rest[..end]))
 }
 
 /// Compare only the odc-entry payload, so a wrapper the profile cannot remove
@@ -706,6 +747,9 @@ fn payload_diff(left: &[Node], right: &[Node]) -> Option<Diff> {
     diff_nodes(&expected.kids, &actual.kids, "section.odc-entry", &mut diff);
     diff
 }
+
+/// Whether UI captions (`data-odc-ui`) are excluded from text comparison.
+static UI_TEXT: OnceLock<bool> = OnceLock::new();
 
 /// Attributes excluded from the comparison, set from --ignore-attr.
 static IGNORED: OnceLock<Vec<String>> = OnceLock::new();
@@ -754,7 +798,12 @@ fn collect_text(nodes: &[Node], parts: &mut Vec<String>) {
     for node in nodes {
         match node {
             Node::Text(text) => parts.push(text.clone()),
-            Node::El(elem) => collect_text(&elem.kids, parts),
+            Node::El(elem) => {
+                if ui_text_ignored() && is_ui(elem) {
+                    continue;
+                }
+                collect_text(&elem.kids, parts);
+            }
         }
     }
 }
