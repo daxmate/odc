@@ -121,15 +121,15 @@ fn panel(group: &Group) -> Handle {
             doc::make_attr("data-odc-kind", &group.kind),
         ],
     );
-    let mut summary_attrs = vec![doc::make_attr("class", "odc-refbar__label")];
-    if group.kind == "toc" {
-        // P4: the caption is chrome, not entry text.
-        summary_attrs.push(doc::make_attr("data-odc-ui", "entry-menu"));
-    }
-    let summary = doc::element("summary", summary_attrs);
-    if group.kind != "toc" {
-        doc::append(&summary, doc::text_node(&label(&group.kind)));
-    }
+    // P4/D2: the caption is chrome, not entry text. L1 carries the kind the
+    // client localises; the engine never writes an English label.
+    let summary = doc::element(
+        "summary",
+        vec![
+            doc::make_attr("class", "odc-refbar__label"),
+            doc::make_attr("data-odc-ui", ui_kind(&group.kind)),
+        ],
+    );
     doc::append(&details, summary);
     let panel = doc::element("div", vec![doc::make_attr("class", "odc-ref-panel")]);
     for block in &group.blocks {
@@ -161,18 +161,15 @@ fn panel(group: &Group) -> Handle {
     details
 }
 
-/// Caption of a toolbar item.
-fn label(kind: &str) -> String {
-    match kind {
-        "toc" => String::from("Entry menu"),
-        "word-origin" => String::from("Word Origin"),
-        "verb-table" => String::from("Verb Table"),
-        "examples-other" => String::from("Examples"),
-        "thesaurus" => String::from("Thesaurus"),
-        "collocation" => String::from("Collocations"),
-        "phrase-index" => String::from("Phrases"),
-        "word-family" => String::from("Word Family"),
-        other => String::from(other),
+/// Caption key the client resolves to a localised label (D2).
+///
+/// The menu is the one caption the source never spells out, so it keeps the
+/// shared name; every other panel is named after its kind.
+fn ui_kind(kind: &str) -> &str {
+    if kind == "toc" {
+        "entry-menu"
+    } else {
+        kind
     }
 }
 

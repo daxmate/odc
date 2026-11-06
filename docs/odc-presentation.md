@@ -42,6 +42,7 @@ section.odc-entry[data-odc-dict, data-odc-key, data-odc-lang, data-odc-homograph
 ```
 
 - 词性块之间按**源文档出现顺序**；块内义项按源顺序。
+- **词条根唯一**：弹窗里引用的其它词条（`span.entry`）会随骨架重建变成嵌套 `section.odc-entry`，呈现层把它们降级为 `div.odc-entry-inner`（属性、子节点、文本一律保留），保证一个片段只有一个词条根。
 - 引用块（搭配/同义词/词族/词源/用法盒）**不留在义项流内**，一律进 `nav.odc-refbar`（P3）。
 - 例外：语法框（`odc-usage-note[data-odc-kind=grammar]`）留在所属义项流内（c6f0934 定案）。
 
@@ -58,7 +59,7 @@ section.odc-entry[data-odc-dict, data-odc-key, data-odc-lang, data-odc-homograph
 ### P3 引用块折叠
 
 - 每个引用块 → `details.odc-refbar__item[data-odc-kind=<种类>]`
-- `<summary class="odc-refbar__label">` 的文案**取自源**（Thesaurus / Collocations / Word Family / Word Origin），**不翻译、不改写**
+- `<summary class="odc-refbar__label">` 只带标记 `data-odc-ui="<kind>"`，**不写文案**（D2）：引擎不翻译、不改写、也不发明英文
 - 内容包在 `div.odc-ref-panel` 内
 - 种类枚举：`toc | thesaurus | collocation | word-family | word-origin | usage | other`
 

@@ -9,6 +9,7 @@ mod anchors;
 mod check;
 mod chrome;
 mod derive;
+mod nest;
 mod order;
 mod resource;
 mod state;
@@ -34,6 +35,10 @@ pub const LOCK: &str = "data-odc-locked";
 
 /// Run every presentation pass over a rule-processed document.
 pub fn apply(root: &Handle, ctx: &ParseContext, mut notes: Vec<String>) -> CheckReport {
+    // The profile rebuilds the skeleton from the source nesting, so every
+    // quoted span.entry arrives as a second section.odc-entry. Flatten them
+    // before anything reads the entry structure (P1).
+    nest::demote(root);
     order::arrange(root);
     chrome::assemble(root, ctx);
     anchors::assign(root, ctx);

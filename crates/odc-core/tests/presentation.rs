@@ -80,6 +80,24 @@ fn p7_sound_links_become_audio_buttons() {
 }
 
 #[test]
+fn a_quoted_entry_inside_a_popup_is_not_a_second_root() {
+    // LDOCE6 quotes another headword inside the popup payload; the entry root
+    // of that quote is demoted to a plain inner block (P1).
+    let fragment = format!(
+        r#"<div><span class="entry">{HEAD}<span class="buttons"><span class="popup-button">Word sets</span><div class="at-link"><div class="content"><span class="entry"><span class="popheader">WORD SETS</span><span class="pos">noun</span></span>quoted body</div></div></span><span class="sense"><span class="sensenum">1</span><span class="def">produce</span></span></span></div>"#
+    );
+    let (html, report) = render(&fragment, "make");
+    assert_eq!(
+        html.matches(r#"<section class="odc-entry""#).count(),
+        1,
+        "{html}"
+    );
+    assert!(html.contains(r#"<div class="odc-entry-inner""#), "{html}");
+    assert!(html.contains("quoted body"), "{html}");
+    assert!(report.ok(), "{report:?}");
+}
+
+#[test]
 fn p2_p3_p4_reference_bar_chrome() {
     let fragment = format!(
         r#"<div><span class="entry">{HEAD}<span class="buttons"><span class="popup-button">Entry menu</span><div class="at-link"><span class="entry"><span class="popheader pope_menu">MENU FOR make</span></span>menu body</div></span><div class="at-link"><span class="entry"><span class="popheader popetym">WORD ORIGIN</span></span>origin body</div><span class="sense"><span class="sensenum">1</span><span class="def">produce</span></span></span></div>"#
@@ -96,10 +114,22 @@ fn p2_p3_p4_reference_bar_chrome() {
         html.contains(r#"<details class="odc-refbar__item" data-odc-kind="word-origin">"#),
         "{html}"
     );
-    assert!(html.contains("Word Origin"), "{html}");
+    // D2: the caption is a marker, not text; the box title stays source text.
+    assert!(
+        html.contains(r#"<summary class="odc-refbar__label" data-odc-ui="word-origin"></summary>"#),
+        "{html}"
+    );
+    assert!(!html.contains("Word Origin<"), "{html}");
+    assert!(html.contains("WORD ORIGIN"), "{html}");
     assert!(html.contains(r#"<div class="odc-ref-panel">"#), "{html}");
     assert!(
         html.contains(r#"<div class="odc-ref-block" data-odc-source="entry">"#),
+        "{html}"
+    );
+    // P1: the popups quote other entries; a quoted entry is not a second root.
+    assert_eq!(
+        html.matches(r#"<section class="odc-entry""#).count(),
+        1,
         "{html}"
     );
     assert!(report.ok(), "{report:?}");
