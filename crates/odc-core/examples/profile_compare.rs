@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::OnceLock;
 
 use odc_core::adapters::ldoce6::Ldoce6;
 use odc_core::adapters::{Adapter, ParseContext};
@@ -134,6 +135,12 @@ impl Args {
                 "--golden" => golden = Some(PathBuf::from(value_of(&argv, &mut index, &flag)?)),
                 "--report" => report = Some(PathBuf::from(value_of(&argv, &mut index, &flag)?)),
                 "--dump" => dump = Some(PathBuf::from(value_of(&argv, &mut index, &flag)?)),
+                "--ignore-attr" => {
+                    let name = value_of(&argv, &mut index, &flag)?;
+                    let mut list = IGNORED.get().cloned().unwrap_or_default();
+                    list.push(name);
+                    let _ = IGNORED.set(list);
+                }
                 "--limit" => limit = Some(value_of(&argv, &mut index, &flag)?.parse()?),
                 other => return Err(format!("unknown argument {other}").into()),
             }
@@ -178,6 +185,8 @@ fn compare_golden(
     let mut lines = Vec::new();
     let mut equal = 0usize;
     let mut text_equal = 0usize;
+    let mut bag_equal = 0usize;
+    let mut payload_equal = 0usize;
     for file in files {
         let name = file.file_name().and_then(|n| n.to_str()).unwrap_or("?");
         let key = name.trim_end_matches("-raw.html");
@@ -200,16 +209,27 @@ fn compare_golden(
         let right = parse_html(&produced);
         let same = compare_trees(&left, &right);
         let text_same = text_of(&left) == text_of(&right);
+        let bag_same = bag_of(&left) == bag_of(&right);
+        let payload = payload_diff(&left, &right);
         if same.is_none() && text_same {
             equal += 1;
         }
         if text_same {
             text_equal += 1;
         }
+        if bag_same {
+            bag_equal += 1;
+        }
+        if payload.is_none() {
+            payload_equal += 1;
+        }
         lines.push(json!({
             "key": key,
+            "payload_equal": payload.is_none(),
+            "payload_first_diff": payload.as_ref().map(Diff::to_json),
             "equal": same.is_none(),
             "text_equal": text_same,
+            "bag_equal": bag_same,
             "first_diff": same.as_ref().map(Diff::to_json),
             "first_text_diff": if text_same { Value::Null } else { first_text_diff(&left, &right).unwrap_or(Value::Null) },
             "stats": stats_json(&stats),
@@ -218,7 +238,13 @@ fn compare_golden(
     let total = lines.len();
     Ok(json!({
         "mode": "golden",
-        "summary": { "total": total, "equal": equal, "text_equal": text_equal },
+        "summary": {
+            "total": total,
+            "equal": equal,
+            "text_equal": text_equal,
+            "bag_equal": bag_equal,
+            "payload_equal": payload_equal,
+        },
         "entries": lines,
     }))
 }
@@ -261,6 +287,8 @@ fn compare_raw(
     let mut lines = Vec::new();
     let mut equal = 0usize;
     let mut text_equal = 0usize;
+    let mut bag_equal = 0usize;
+    let mut payload_equal = 0usize;
     for record in &records {
         if odc_core::profile::alias_target(&record.text).is_some() {
             continue;
@@ -278,24 +306,42 @@ fn compare_raw(
         let right = parse_html(&produced);
         let same = compare_trees(&left, &right);
         let text_same = text_of(&left) == text_of(&right);
+        let bag_same = bag_of(&left) == bag_of(&right);
+        let payload = payload_diff(&left, &right);
         if same.is_none() && text_same {
             equal += 1;
         }
         if text_same {
             text_equal += 1;
         }
+        if bag_same {
+            bag_equal += 1;
+        }
+        if payload.is_none() {
+            payload_equal += 1;
+        }
         lines.push(json!({
             "key": record.key,
+            "payload_equal": payload.is_none(),
+            "payload_first_diff": payload.as_ref().map(Diff::to_json),
             "equal": same.is_none(),
             "text_equal": text_same,
+            "bag_equal": bag_same,
             "first_diff": same.as_ref().map(Diff::to_json),
+            "first_text_diff": if text_same { Value::Null } else { first_text_diff(&left, &right).unwrap_or(Value::Null) },
             "stats": stats_json(&stats),
         }));
     }
     let total = lines.len();
     Ok(json!({
         "mode": "adapter-vs-profile",
-        "summary": { "total": total, "equal": equal, "text_equal": text_equal },
+        "summary": {
+            "total": total,
+            "equal": equal,
+            "text_equal": text_equal,
+            "bag_equal": bag_equal,
+            "payload_equal": payload_equal,
+        },
         "entries": lines,
     }))
 }
@@ -515,6 +561,9 @@ fn canon_attrs(elem: &Elem) -> BTreeMap<String, String> {
             // Executor provenance, never part of the slot contract.
             continue;
         }
+        if ignored(name) {
+            continue;
+        }
         if name == "class" {
             let mut classes: Vec<&str> = value.split_whitespace().collect();
             classes.sort_unstable();
@@ -646,6 +695,52 @@ fn strip(nodes: &[Node]) -> Vec<Node> {
         })
         .cloned()
         .collect()
+}
+
+/// Compare only the odc-entry payload, so a wrapper the profile cannot remove
+/// does not hide the rest of the tree.
+fn payload_diff(left: &[Node], right: &[Node]) -> Option<Diff> {
+    let expected = find_class(left, "odc-entry")?;
+    let actual = find_class(right, "odc-entry")?;
+    let mut diff = None;
+    diff_nodes(&expected.kids, &actual.kids, "section.odc-entry", &mut diff);
+    diff
+}
+
+/// Attributes excluded from the comparison, set from --ignore-attr.
+static IGNORED: OnceLock<Vec<String>> = OnceLock::new();
+
+fn ignored(name: &str) -> bool {
+    IGNORED
+        .get()
+        .is_some_and(|list| list.iter().any(|item| item == name))
+}
+
+/// First element carrying a class, searched depth-first.
+fn find_class<'a>(nodes: &'a [Node], class: &str) -> Option<&'a Elem> {
+    for node in nodes {
+        if let Node::El(elem) = node {
+            let hit = elem.attrs.iter().any(|(name, value)| {
+                name == "class" && value.split_whitespace().any(|part| part == class)
+            });
+            if hit {
+                return Some(elem);
+            }
+            if let Some(found) = find_class(&elem.kids, class) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
+/// Word multiset of a tree, for order-insensitive comparison.
+fn bag_of(nodes: &[Node]) -> BTreeMap<String, usize> {
+    let mut out = BTreeMap::new();
+    for word in text_of(nodes).split_whitespace() {
+        *out.entry(String::from(word)).or_insert(0) += 1;
+    }
+    out
 }
 
 /// Whitespace-collapsed text of a tree, in document order.
