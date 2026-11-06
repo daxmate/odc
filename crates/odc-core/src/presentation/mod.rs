@@ -10,6 +10,7 @@ mod check;
 mod chrome;
 mod derive;
 mod order;
+mod state;
 
 use std::rc::Rc;
 
@@ -32,6 +33,9 @@ pub fn apply(root: &Handle, ctx: &ParseContext) -> CheckReport {
     order::arrange(root);
     chrome::assemble(root, ctx);
     anchors::assign(root, ctx);
+    // Source runtime state goes before provenance: a box that was open is not
+    // part of the entry's identity, so `data-odc-orig-class` must not record it.
+    state::strip(root);
     derive::finish(root);
     check::run(root, ctx)
 }

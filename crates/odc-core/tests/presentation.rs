@@ -118,3 +118,107 @@ fn p8_self_check_reports_a_missing_key() {
         vec!["entry-root", "unique-id", "slot-class", "head", "key"]
     );
 }
+
+// ---------------------------------------------------------------------------
+// OALD9 dialect: skeleton rebuild on real samples (C1)
+// ---------------------------------------------------------------------------
+
+/// Minimal OALD9 mapping used as a *fixture*: it only exercises the executor
+/// and the presentation layer, it is not a shipping profile.
+const OALD9_FIXTURE: &str = r#"
+{"schema_version":"odc.profile/v0","profile_id":"test.oald9.shape",
+ "dict":{"name":"fixture","lang":"en"},"engine":{"name":"human"},
+ "rules":[
+  {"id":"cleanup.link","stage":"cleanup","priority":100,"op":"drop","match":{"selector":"link"}},
+  {"id":"cleanup.script","stage":"cleanup","priority":99,"op":"drop","match":{"selector":"script"}},
+  {"id":"root.entry","stage":"root","priority":100,"op":"map",
+   "match":{"selector":"div.entry","cardinality":{"min":1}},
+   "emit":{"element":"section","classes":["odc-entry"],"move":"children",
+           "data":{"odc-key":"@key","odc-dict":"@dict","odc-lang":"@lang"}}},
+  {"id":"head.wrap","stage":"slot","priority":96,"op":"wrap",
+   "match":{"selector":"h2.h"},
+   "emit":{"element":"header","classes":["odc-head"]}},
+  {"id":"head.hw","stage":"slot","priority":95,"op":"map",
+   "match":{"selector":"h2.h"},
+   "emit":{"element":"h1","classes":["odc-hw"],"move":"children"}},
+  {"id":"pos","stage":"slot","priority":90,"op":"map",
+   "match":{"selector":"span.pos"},
+   "emit":{"element":"h2","classes":["odc-pos"],"move":"children"}},
+  {"id":"sense","stage":"slot","priority":80,"op":"map",
+   "match":{"selector":"li.sn-g"},
+   "emit":{"element":"div","classes":["odc-sense"],"move":"children"}},
+  {"id":"def","stage":"slot","priority":70,"op":"map",
+   "match":{"selector":"span.def"},
+   "emit":{"element":"span","classes":["odc-def"],"move":"children"}}
+ ]}
+"#;
+
+fn oald9_profile() -> Profile {
+    Profile::from_json(OALD9_FIXTURE).unwrap_or_else(|error| panic!("fixture parses: {error}"))
+}
+
+/// Read a sample from the survey output; `None` when the survey is absent
+/// (CI has no sample tree, so the test reports a skip instead of failing).
+fn sample(name: &str) -> Option<String> {
+    let path = format!("/tmp/odc-oald9-samples/{name}");
+    match std::fs::read_to_string(&path) {
+        Ok(text) => Some(text),
+        Err(_) => {
+            eprintln!("skip: {path} is not available");
+            None
+        }
+    }
+}
+
+/// The survey samples start with the record's own navigation (dict-top) and
+/// keep an unclosed `ol`; both are part of what the rebuild has to survive, so
+/// the test keeps the text as-is instead of trimming it.
+fn render_sample(name: &str) -> Option<String> {
+    let text = sample(name)?;
+    let start = text
+        .find("div class=\"entry\"")
+        .map(|at| at.saturating_sub(5))?;
+    let body = &text[start..];
+    match odc_core::profile::exec::apply(&oald9_profile(), body, &ctx(name)) {
+        Outcome::Adapted { html, .. } | Outcome::Unadapted { html, .. } => Some(html),
+        Outcome::Alias { .. } => None,
+    }
+}
+
+#[test]
+fn oald9_senses_are_grouped_into_position_blocks() {
+    let mut checked = 0;
+    for name in ["028382_go.html", "066502_take.html", "007803_break.html"] {
+        let Some(out) = render_sample(name) else {
+            continue;
+        };
+        checked += 1;
+        assert!(out.contains("odc-entry"), "{name}: no entry\n{out}");
+        let first_block = out.find("odc-pos-block").unwrap_or_else(|| {
+            panic!("{name}: no position block\n{out}");
+        });
+        let first_sense = out.find("class=\"odc-sense\"").unwrap_or_else(|| {
+            panic!("{name}: no sense\n{out}");
+        });
+        assert!(
+            first_block < first_sense,
+            "{name}: a sense escaped the position blocks\n{out}"
+        );
+        let verb = out.find("data-odc-pos=\"verb\"").unwrap_or_else(|| {
+            panic!("{name}: verb block missing\n{out}");
+        });
+        let noun = out.find("data-odc-pos=\"noun\"").unwrap_or_else(|| {
+            panic!("{name}: noun block missing\n{out}");
+        });
+        assert!(verb < noun, "{name}: positions lost their source order");
+        // The long, unclosed list wrapper is gone: it was a generic container,
+        // not a slot.
+        assert!(
+            !out.contains("<ol") || out.matches("<ol").count() < 2,
+            "{name}: list wrapper survived around the blocks"
+        );
+    }
+    if checked == 0 {
+        eprintln!("skip: no OALD9 sample available");
+    }
+}

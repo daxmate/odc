@@ -39,7 +39,7 @@ impl Match {
 }
 
 /// Parse a body fragment the same way ['crate::html'] does.
-fn parse_fragment(input: &str) -> RcDom {
+pub(crate) fn parse_fragment(input: &str) -> RcDom {
     let context = Node::new(NodeData::Element {
         name: QualName::new(None, ns!(html), LocalName::from("div")),
         attrs: RefCell::new(Vec::new()),
@@ -51,7 +51,7 @@ fn parse_fragment(input: &str) -> RcDom {
 }
 
 /// Serialise the children of the document node, byte-stably.
-fn serialize(root: &Handle) -> String {
+pub(crate) fn serialize(root: &Handle) -> String {
     let handle = SerializableHandle::from(root.clone());
     let options = SerializeOpts {
         traversal_scope: TraversalScope::ChildrenOnly(None),
