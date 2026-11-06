@@ -69,11 +69,18 @@ pub(crate) fn serialize(root: &Handle) -> String {
 /// Returns an ['Outcome'] that always carries the full rule statistics, so a
 /// caller can report partial coverage even when the fragment is unadapted.
 pub fn apply(profile: &Profile, fragment: &str, ctx: &ParseContext) -> Outcome {
+    // An `@@@LINK=` record has no body to adapt: it is an alias for another
+    // key. The engine answers that before parsing, so a `root` rule with a
+    // minimum can never count the alias as a coverage miss and no profile has
+    // to write an "empty record" rule for it.
+    if let Some(target) = super::alias_target(fragment) {
+        return Outcome::Alias { target };
+    }
     let clean = crate::html::repair_sanitize(fragment).unwrap_or_else(|| String::from(fragment));
     let dom = parse_fragment(&clean);
     let root = dom.document.clone();
     normalize_document(&root);
-    crate::presentation::capture(&root);
+    let notes = crate::presentation::capture(&root);
     let mut stats = RunStats::default();
 
     for stage in Stage::ORDER {
@@ -94,7 +101,7 @@ pub fn apply(profile: &Profile, fragment: &str, ctx: &ParseContext) -> Outcome {
         }
     }
 
-    stats.presentation = crate::presentation::apply(&root, ctx);
+    stats.presentation = crate::presentation::apply(&root, ctx, notes);
     trim_document_edges(&root);
     canonical_whitespace(&root);
     let html = serialize(&root);
@@ -627,8 +634,26 @@ fn scope_instance(m: &Match, reset: &[Scope]) -> usize {
     0
 }
 
-/// Copy every attribute of 'source' except class and the rule marker, so a
-/// split copy keeps the entry identity (dictionary, key, language).
+/// Attributes a split section inherits from its source node.
+///
+/// A split copy keeps the entry identity (dictionary, key, language) **and**
+/// the plain attributes the source dialect hangs on the node it is split out of
+/// — a phrasal-verb entry marks itself with `type="pv_entry"`, and losing that
+/// on the way into L1 loses the distinction between a phrasal verb and a normal
+/// entry.
+///
+/// Four things are never inherited:
+///
+/// * `class`, because the emit classes decide the L1 class list,
+/// * `id`, because document identity is P6's alone (source ids travel through
+///   the anchor alias pass instead of being copied into L1),
+/// * `data-odc-rule`, the executor marker,
+/// * `data-odc-anchor` / `data-odc-anchor-self` / `data-odc-locked`, the
+///   engine bookkeeping for one specific node — copying them would make every
+///   copy claim the same source anchor.
+///
+/// Entry identity (`data-odc-key`, `data-odc-dict`, `data-odc-lang`) *is*
+/// inherited: a split copy is still the same entry.
 fn inherit_attrs(source: &Handle) -> Vec<(String, String)> {
     let NodeData::Element { attrs, .. } = &source.data else {
         return Vec::new();
@@ -637,11 +662,37 @@ fn inherit_attrs(source: &Handle) -> Vec<(String, String)> {
         .borrow()
         .iter()
         .filter(|a| {
-            let name = a.name.local.as_ref();
-            !name.eq_ignore_ascii_case("class") && !name.eq_ignore_ascii_case("data-odc-rule")
+            let name = a.name.local.as_ref().to_ascii_lowercase();
+            !matches!(
+                name.as_str(),
+                "class"
+                    | "id"
+                    | "data-odc-rule"
+                    | "data-odc-anchor"
+                    | "data-odc-anchor-self"
+                    | "data-odc-locked"
+            )
         })
         .map(|a| (a.name.local.to_string(), a.value.to_string()))
         .collect()
+}
+
+/// Merge `over` into `base`; on a name clash the later list wins.
+///
+/// Split copies start from the container attributes and then layer the
+/// attributes of the node they were split out of on top, so the more specific
+/// node decides. Order is preserved (container first, override in place) which
+/// keeps the serialised attribute order stable.
+fn merge_attrs(base: &mut Vec<(String, String)>, over: &[(String, String)]) {
+    for (name, value) in over {
+        match base
+            .iter_mut()
+            .find(|(existing, _)| existing.eq_ignore_ascii_case(name))
+        {
+            Some(slot) => slot.1.clone_from(value),
+            None => base.push((name.clone(), value.clone())),
+        }
+    }
 }
 
 fn apply_split(
@@ -695,7 +746,10 @@ fn apply_split(
         let mut copies = Vec::new();
         for (offset, index) in targets.iter().enumerate() {
             let number = (start + offset as i64).to_string();
+            // B4: the section keeps the container attributes and layers the
+            // attributes of the node it was split out of on top.
             let mut extra = inherit_attrs(&m.node);
+            merge_attrs(&mut extra, &inherit_attrs(&kids[*index]));
             extra.push((attribute.clone(), number));
             if rule.emit.classes.is_empty() {
                 let inherited = selector::class_list(&m.node).join(" ");

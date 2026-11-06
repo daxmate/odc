@@ -39,6 +39,9 @@ impl CheckItem {
 pub struct CheckReport {
     /// Individual checks, always five entries.
     pub items: Vec<CheckItem>,
+    /// Diagnostics that are not pass/fail checks (kept-verbatim references,
+    /// unresolved source anchors). Empty on a fully resolved record.
+    pub notes: Vec<String>,
 }
 
 impl CheckReport {
@@ -60,7 +63,7 @@ impl CheckReport {
 }
 
 /// Run the checks over a finished document.
-pub fn run(root: &Handle, ctx: &ParseContext) -> CheckReport {
+pub fn run(root: &Handle, ctx: &ParseContext, notes: Vec<String>) -> CheckReport {
     let items = vec![
         entry_roots(root),
         unique_ids(root),
@@ -68,7 +71,7 @@ pub fn run(root: &Handle, ctx: &ParseContext) -> CheckReport {
         head_present(root),
         key_matches(root, ctx),
     ];
-    CheckReport { items }
+    CheckReport { items, notes }
 }
 
 /// 1. Every entry is a `section.odc-entry` at the top level.

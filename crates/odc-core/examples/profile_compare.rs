@@ -185,11 +185,17 @@ fn compare_golden(
     if let Some(max) = limit {
         files.truncate(max);
     }
-    let mut lines = Vec::new();
+    let mut lines: Vec<Value> = Vec::new();
     let mut equal = 0usize;
     let mut text_equal = 0usize;
     let mut bag_equal = 0usize;
     let mut payload_equal = 0usize;
+    // Body records are compared; alias records have no body to compare.
+    let mut body = 0usize;
+    let alias = lines
+        .iter()
+        .filter(|line| line.get("alias").is_some())
+        .count();
     for file in files {
         let name = file.file_name().and_then(|n| n.to_str()).unwrap_or("?");
         let key = name.trim_end_matches("-raw.html");
@@ -217,6 +223,7 @@ fn compare_golden(
         let text_same = text_of(&left) == text_of(&right);
         let bag_same = bag_of(&left) == bag_of(&right);
         let payload = payload_diff(&left, &right);
+        body += 1;
         if same.is_none() && text_same {
             equal += 1;
         }
@@ -231,6 +238,7 @@ fn compare_golden(
         }
         lines.push(json!({
             "key": key,
+            "kind": "body",
             "payload_equal": payload.is_none(),
             "payload_first_diff": payload.as_ref().map(Diff::to_json),
             "equal": same.is_none(),
@@ -246,6 +254,8 @@ fn compare_golden(
         "mode": "golden",
         "summary": {
             "total": total,
+            "body": body,
+            "alias": alias,
             "equal": equal,
             "text_equal": text_equal,
             "bag_equal": bag_equal,
@@ -295,8 +305,11 @@ fn compare_raw(
     let mut text_equal = 0usize;
     let mut bag_equal = 0usize;
     let mut payload_equal = 0usize;
+    // Alias records carry no body: they are counted, never compared.
+    let mut alias = 0usize;
     for record in &records {
         if odc_core::profile::alias_target(&record.text).is_some() {
+            alias += 1;
             continue;
         }
         let ctx = ParseContext::new(record.key.clone(), adapter.dict(), "en");
@@ -343,6 +356,8 @@ fn compare_raw(
         "mode": "adapter-vs-profile",
         "summary": {
             "total": total,
+            "body": total,
+            "alias": alias,
             "equal": equal,
             "text_equal": text_equal,
             "bag_equal": bag_equal,

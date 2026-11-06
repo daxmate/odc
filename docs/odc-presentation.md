@@ -91,11 +91,14 @@ section.odc-entry[data-odc-dict, data-odc-key, data-odc-lang, data-odc-homograph
 
 - 只对 `odc-pos-block` 与 `odc-sense` 生成；同一文档内必须唯一。
 - 依据：基准 1,089 个 id，profile 输出 0 个；交叉引用（`odc-crossref`）依赖它跳转。
+- **源锚点别名**：源记录用 `<a id="uuid">` + `entry://#uuid` 互相引用，L1 用生成的 id。capture 在锚点元素本身与它后面的块上记账，装配期按文档顺序解析成 `{key}-{pos}[-s{n}]`，并改写页内 `#…` 链接（含 `data-odc-target`）。
+- **不发明 id**：解析不到生成 id 的源锚点保持原样，只记一条 `notes`；给元素补 id 会改 P6 契约。
 
 ### P7 资源 URL
 
 - `sound://x.mp3` → `odc-resource://x.mp3`，双写 `data-odc-src` + `data-odc-orig-src`
-- 图片相对路径同理
+- 图片相对路径同理：`img[src]`、`source[src]` 走同一套解析，写 `src` + `data-odc-orig-src`
+- 解析只看 scheme，不看词典：`sound://` 与普通/绝对路径进 pack；`data:`、`http(s)://`、`mailto:`、协议相对 `//host/x` **原样保留**并记一条 `notes`
 - 依据：基准 2,687 处音标按钮
 
 ### P8 呈现层自检（装配后必跑）
@@ -105,6 +108,8 @@ section.odc-entry[data-odc-dict, data-odc-key, data-odc-lang, data-odc-homograph
 3. `id` 唯一
 4. 每个 `odc-sense` 有 `data-odc-n`
 5. 无 `data-odc-orig-*` 缺失的 rename 节点
+
+五项之外的诊断（保留原样的资源引用、解析不到 id 的源锚点）走 `CheckReport.notes`，不计入通过/失败，也不改变「检查项恒为五条」。
 
 ## 4. 与现有 `docs/odc-html-spec.md` 的偏差（必须合并）
 

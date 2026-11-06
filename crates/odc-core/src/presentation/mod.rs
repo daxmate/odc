@@ -10,6 +10,7 @@ mod check;
 mod chrome;
 mod derive;
 mod order;
+mod resource;
 mod state;
 
 use std::rc::Rc;
@@ -21,23 +22,29 @@ use crate::adapters::ParseContext;
 pub use check::{CheckItem, CheckReport};
 
 /// Stamp the source fragment before any rule runs.
-pub fn capture(root: &Handle) {
-    derive::capture(root);
+///
+/// The returned notes describe references the engine kept verbatim; they are
+/// fed back into the self-check once the presentation passes have run.
+pub fn capture(root: &Handle) -> Vec<String> {
+    derive::capture(root)
 }
 
 /// Attribute that marks a node as engine-owned; rule packs skip those nodes.
 pub const LOCK: &str = "data-odc-locked";
 
 /// Run every presentation pass over a rule-processed document.
-pub fn apply(root: &Handle, ctx: &ParseContext) -> CheckReport {
+pub fn apply(root: &Handle, ctx: &ParseContext, mut notes: Vec<String>) -> CheckReport {
     order::arrange(root);
     chrome::assemble(root, ctx);
     anchors::assign(root, ctx);
+    // Source anchors must be mapped before the provenance pass drops the
+    // bookkeeping attribute that carries the owner.
+    notes.extend(anchors::alias(root));
     // Source runtime state goes before provenance: a box that was open is not
     // part of the entry's identity, so `data-odc-orig-class` must not record it.
     state::strip(root);
     derive::finish(root);
-    check::run(root, ctx)
+    check::run(root, ctx, notes)
 }
 
 /// One element together with its position in the tree.
