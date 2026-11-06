@@ -255,8 +255,20 @@ fn stamp_pos(block: &Handle) {
     }
 }
 
-/// Position carried by a content block itself, never by its descendants.
+/// Position carried by a content block: its own mark first, else the first
+/// marked descendant.
+///
+/// Some sources park the position on a wrapper around the block the rules
+/// marked (`span.pos-g > span.pos`, OALD9), so reading only the node itself
+/// leaves the senses ungrouped. Reading the first descendant keeps the rule
+/// pack free of dictionary-specific selectors; the entry boundary keeps a
+/// nested entry's position from leaking into the outer one.
 fn block_pos(node: &Handle) -> Option<String> {
+    own_pos(node).or_else(|| descendant_pos(node))
+}
+
+/// Position mark on the node itself, never on its descendants.
+fn own_pos(node: &Handle) -> Option<String> {
     attr(node, "data-odc-pos")
         .and_then(|raw| pos_value(&raw))
         .or_else(|| {
@@ -266,6 +278,27 @@ fn block_pos(node: &Handle) -> Option<String> {
                 None
             }
         })
+}
+
+/// First position mark under a node, in document order.
+///
+/// A nested entry is a different document: the walk does not enter it.
+fn descendant_pos(node: &Handle) -> Option<String> {
+    for child in node.children.borrow().iter() {
+        if !crate::profile::selector::is_element(child) {
+            continue;
+        }
+        if tag(child) == "section" && has_class(child, ENTRY) {
+            continue;
+        }
+        if let Some(pos) = own_pos(child) {
+            return Some(pos);
+        }
+        if let Some(pos) = descendant_pos(child) {
+            return Some(pos);
+        }
+    }
+    None
 }
 
 /// First `.odc-pos` label under a container.
@@ -362,6 +395,19 @@ mod tests {
         serialize(&dom.document)
     }
 
+    /// First element with a tag name, depth-first.
+    fn find_tag(node: &Handle, name: &str) -> Option<Handle> {
+        if tag(node) == name {
+            return Some(node.clone());
+        }
+        for child in node.children.borrow().iter() {
+            if let Some(hit) = find_tag(child, name) {
+                return Some(hit);
+            }
+        }
+        None
+    }
+
     /// A rule-processed document in the OALD9 shape: one entry, no position
     /// containers, all senses parked inside one long `ol`, the position as a
     /// sibling `odc-pos` slot.
@@ -435,6 +481,54 @@ mod tests {
             out.contains(r#"<div class="odc-sense">a store</div>"#),
             "{out}"
         );
+    }
+
+    /// The OALD9 shape: the position sits on a wrapper inside the block the
+    /// rules marked, and the senses that follow belong to it.
+    #[test]
+    fn a_position_mark_on_a_descendant_opens_the_run() {
+        let html = r#"<section class="odc-entry" data-odc-key="go">
+            <header class="odc-head"><h1 class="odc-hw">go</h1></header>
+            <div class="odc-sense"><span class="pos-g"><span class="odc-pos">verb</span></span> move</div>
+            <div class="odc-sense">leave</div>
+            <h2 class="odc-pos">noun</h2>
+            <div class="odc-sense">attempt</div>
+        </section>"#;
+        let out = rebuild_once(html);
+        assert_eq!(out.matches("odc-pos-block").count(), 2, "{out}");
+        let verb = out.find(r#"data-odc-pos="verb""#).expect("verb block");
+        let noun = out.find(r#"data-odc-pos="noun""#).expect("noun block");
+        assert!(verb < noun, "{out}");
+        // Both senses follow the verb mark, so both live in the verb block.
+        assert_eq!(out[verb..noun].matches("odc-sense").count(), 2, "{out}");
+    }
+
+    /// A mark on the node itself outranks anything it contains.
+    #[test]
+    fn an_own_mark_outranks_a_descendant_mark() {
+        let dom = parse_fragment(
+            r#"<div class="odc-sense" data-odc-pos="verb"><span class="odc-pos">noun</span></div>"#,
+        );
+        let node = find_tag(&dom.document, "div").expect("sense");
+        assert_eq!(block_pos(&node).as_deref(), Some("verb"));
+    }
+
+    /// A nested entry is a different document: its position is not ours.
+    #[test]
+    fn a_nested_entry_does_not_lend_its_position() {
+        let dom = parse_fragment(
+            r#"<div class="odc-sense">outer<section class="odc-entry"><h2 class="odc-pos">noun</h2></section></div>"#,
+        );
+        let node = find_tag(&dom.document, "div").expect("sense");
+        assert_eq!(block_pos(&node), None);
+    }
+
+    /// No marker anywhere in the subtree: the engine invents nothing.
+    #[test]
+    fn a_subtree_without_a_mark_has_no_position() {
+        let dom = parse_fragment(r#"<div class="odc-sense">plain <b>text</b></div>"#);
+        let node = find_tag(&dom.document, "div").expect("sense");
+        assert_eq!(block_pos(&node), None);
     }
 
     /// Inline blocks separated only by source text keep their separator, so two

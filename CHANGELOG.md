@@ -22,6 +22,10 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   `MAX_RECORD_BYTES` is deprecated in favour of
   `DEFAULT_MAX_RECORD_BYTES`; `HARD_MAX_RECORD_BYTES` caps configuration at
   16 MiB.
+- Presentation: `block_pos` also reads a position mark from the first
+  descendant, so a source that parks `span.pos-g > span.pos` inside the block
+  (OALD9) still groups its senses; a nested `section.odc-entry` is never
+  crossed.
 
 ## [0.14.0] - 2026-11-04
 
