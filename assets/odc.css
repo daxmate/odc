@@ -226,6 +226,106 @@ details.odc-toc {
 }
 
 /* --------------------------------------------------------------------------
+   3b. 参考工具条（词头下的一排按钮）
+   -------------------------------------------------------------------------- */
+
+nav.odc-refbar {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 12px 0 18px;
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.odc-refbar__item {
+  position: relative;
+  display: block;
+  margin: 0;
+  padding: 0;
+}
+
+.odc-refbar__item > summary.odc-refbar__label {
+  display: inline-block;
+  margin: 0;
+  padding: 3px 10px;
+  border: 1px solid var(--odc-rule-strong);
+  border-radius: 999px;
+  color: var(--odc-fg-muted);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  cursor: pointer;
+  list-style: none;
+}
+
+.odc-refbar__item > summary.odc-refbar__label::-webkit-details-marker {
+  display: none;
+}
+
+.odc-refbar__item > summary.odc-refbar__label::marker {
+  content: "";
+}
+
+.odc-refbar__item[open] > summary.odc-refbar__label {
+  border-color: var(--odc-accent);
+  background: var(--odc-accent-line);
+  color: var(--odc-fg);
+}
+
+/* 浮层：展开时不推正文，只覆盖在下面 */
+.odc-ref-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 20;
+  width: min(700px, 88vw);
+  max-height: 70vh;
+  overflow: auto;
+  padding: 14px 16px;
+  border: 1px solid var(--odc-rule-strong);
+  border-radius: 10px;
+  background: var(--odc-bg);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--odc-fg);
+}
+
+.odc-ref-panel__title {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--odc-fg-faint);
+}
+
+.odc-ref-block + .odc-ref-block {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--odc-rule);
+}
+
+.odc-refbar__item[data-odc-kind="toc"] .odc-hw {
+  display: block;
+  margin: 0 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--odc-fg-muted);
+}
+
+@media (max-width: 600px) {
+  .odc-ref-panel {
+    width: calc(100vw - 44px);
+    max-height: 60vh;
+  }
+}
+
+/* --------------------------------------------------------------------------
    4. 词性段
    -------------------------------------------------------------------------- */
 

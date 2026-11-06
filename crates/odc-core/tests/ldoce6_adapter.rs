@@ -1,6 +1,6 @@
 //! Adapter tests: one real LDOCE6 snippet per slot family.
 
-use odc_core::adapters::ldoce6::{entry_slug, resource_key, same_text, Ldoce6, SLUG};
+use odc_core::adapters::ldoce6::{entry_slug, resource_key, same_words, Ldoce6, SLUG};
 use odc_core::adapters::{count_slots, Adapter, ParseContext};
 
 fn ctx(key: &str) -> ParseContext {
@@ -84,6 +84,19 @@ const REF: &str = concat!(
     "<span class=\"colloinexa\">a decision</span></span>",
     "</span></div></span>",
     "</span></span></div>",
+);
+
+const VERB_TABLE: &str = concat!(
+    "<div><span class=\"entry\"><span class=\"entryhead\"><span class=\"hwd\">go</span>",
+    "<span class=\"pos\">verb</span>",
+    "<span class=\"buttons\"><div class=\"at-link\"><span class=\"entry\">",
+    "<span class=\"popheader popetym\">WORD ORIGIN</span>",
+    "<span class=\"etymorigin\">gan</span>",
+    "<span class=\"popup-button\">Verb Table</span>",
+    "<div class=\"verbtable\"><span class=\"popverbs\">VERB TABLE</span>",
+    "<div class=\"lemma\">go</div>",
+    "<table><tbody><tr><td class=\"header\">Simple Form</td></tr></tbody></table></div>",
+    "</span></div></span></span></span></div>",
 );
 
 #[test]
@@ -178,48 +191,95 @@ fn phrasal_verb_is_a_sub_entry() {
 #[test]
 fn reference_block_keeps_kind_and_source() {
     let out = parse(REF, "make");
-    assert!(out.contains("<section class=\"odc-refs\">"), "{out}");
+    assert!(out.contains("<nav class=\"odc-refbar\">"), "{out}");
     assert!(
-        out.contains(
-            "<details class=\"odc-ref\" data-odc-kind=\"collocation\" data-odc-source=\"corpus\">"
-        ),
+        out.contains("<details class=\"odc-refbar__item\" data-odc-kind=\"collocation\">"),
         "{out}"
     );
     assert!(
-        out.contains("<summary class=\"odc-ref-title\">COLLOCATIONS FROM THE CORPUS</summary>"),
+        out.contains("<div class=\"odc-ref-block\" data-odc-source=\"corpus\">"),
         "{out}"
     );
-    assert!(!out.contains("<details class=\"odc-ref\" open"), "{out}");
+    assert!(
+        out.contains("<summary class=\"odc-refbar__label\">Collocations</summary>"),
+        "{out}"
+    );
+    assert!(
+        out.contains("<p class=\"odc-ref-panel__title\">COLLOCATIONS FROM THE CORPUS</p>"),
+        "{out}"
+    );
+    assert!(
+        !out.contains("<details class=\"odc-refbar__item\" open"),
+        "{out}"
+    );
     assert!(out.contains("class=\"odc-collocation\""), "{out}");
+    assert!(!out.contains("class=\"odc-ref\""), "{out}");
 }
 
 #[test]
-fn inline_reference_boxes_are_collapsed_and_siblings() {
+fn inline_reference_boxes_share_the_toolbar() {
     let out = parse(INLINE_BOXES, "make");
+    let nav = out.find("<nav class=\"odc-refbar\">").expect("toolbar");
     let thes = out
-        .find("<details class=\"odc-ref\" data-odc-kind=\"thesaurus\" data-odc-source=\"entry\">")
+        .find("data-odc-kind=\"thesaurus\"")
         .expect("thesaurus box");
     let collo = out
-        .find("<details class=\"odc-ref\" data-odc-kind=\"collocation\" data-odc-source=\"entry\">")
+        .find("data-odc-kind=\"collocation\"")
         .expect("collocation box");
-    assert!(thes < collo, "{out}");
-    let close = out[thes..].find("</details>").expect("closed box");
-    assert!(thes + close < collo, "boxes must not nest: {out}");
     assert!(
-        out.contains("<summary class=\"odc-ref-title\">THESAURUS</summary>"),
+        nav < thes && nav < collo,
+        "boxes outside the toolbar: {out}"
+    );
+    assert!(
+        out.contains("<summary class=\"odc-refbar__label\">THESAURUS</summary>"),
         "{out}"
     );
     assert!(
-        out.contains("<summary class=\"odc-ref-title\">COLLOCATIONS</summary>"),
+        out.contains("<summary class=\"odc-refbar__label\">Collocations</summary>"),
+        "{out}"
+    );
+    assert!(
+        !out.contains("<details class=\"odc-refbar__item\" open"),
+        "{out}"
+    );
+}
+#[test]
+fn verb_table_gets_its_own_toolbar_entry() {
+    let out = parse(VERB_TABLE, "go");
+    let vt = out
+        .find("data-odc-kind=\"verb-table\"")
+        .expect("verb table entry");
+    let table = out
+        .find("data-odc-orig-class=\"verbtable\"")
+        .expect("table markup");
+    let vt_next = out[vt + 1..]
+        .find("<details class=\"odc-refbar__item\"")
+        .map_or(out.len(), |at| vt + 1 + at);
+    assert!(
+        vt < table && table < vt_next,
+        "table outside its panel: {out}"
+    );
+    let origin = out
+        .find("data-odc-kind=\"word-origin\"")
+        .expect("word origin entry");
+    let origin_next = out[origin + 1..]
+        .find("<details class=\"odc-refbar__item\"")
+        .map_or(out.len(), |at| origin + 1 + at);
+    assert!(
+        !(origin < table && table < origin_next),
+        "table leaked into word origin: {out}"
+    );
+    assert!(
+        out.contains("<summary class=\"odc-refbar__label\">Verb Table</summary>"),
         "{out}"
     );
 }
 
 #[test]
 fn text_is_preserved_verbatim() {
-    for fragment in [HEAD, SENSE, PHRASAL, REF] {
+    for fragment in [HEAD, SENSE, PHRASAL, REF, INLINE_BOXES, MENU, VERB_TABLE] {
         let out = parse(fragment, "make");
-        assert!(same_text(fragment, &out), "text drift for {fragment}");
+        assert!(same_words(fragment, &out), "text drift for {fragment}");
     }
 }
 
@@ -252,23 +312,29 @@ const MENU: &str = concat!(
 );
 
 #[test]
-fn main_senses_come_before_refs_and_collapsed_menu() {
+fn toolbar_sits_between_head_and_senses() {
     let out = parse(MENU, "make");
+    let head = out.find("</header>").expect("head");
+    let nav = out.find("<nav class=\"odc-refbar\">").expect("toolbar");
     let sense = out.find("class=\"odc-sense\"").expect("sense block");
-    let refs = out.find("class=\"odc-refs\"").expect("refs block");
-    assert!(sense < refs, "sense at {sense}, refs at {refs}: {out}");
-    let toc = out
-        .find("<details class=\"odc-toc\">")
-        .expect("toc details");
-    assert!(refs < toc, "refs at {refs}, toc at {toc}: {out}");
     assert!(
-        out.contains("<summary class=\"odc-ref-title\">MENU FOR make</summary>"),
+        head < nav && nav < sense,
+        "head {head}, nav {nav}, sense {sense}: {out}"
+    );
+    assert!(
+        out.contains("<summary class=\"odc-refbar__label\">Entry menu</summary>"),
         "{out}"
     );
-    assert!(!out.contains("<details class=\"odc-toc\" open"), "{out}");
-    assert!(!out.contains("<nav class=\"odc-toc\""), "{out}");
+    assert!(
+        out.contains("<p class=\"odc-ref-panel__title\">MENU FOR make</p>"),
+        "{out}"
+    );
+    assert!(
+        !out.contains("<details class=\"odc-refbar__item\" open"),
+        "{out}"
+    );
+    assert!(!out.contains("class=\"odc-toc\""), "{out}");
 }
-
 #[test]
 fn probe_claims_ldoce_and_rejects_other_markup() {
     let probe = Ldoce6.probe(SENSE).expect("ldoce probe");

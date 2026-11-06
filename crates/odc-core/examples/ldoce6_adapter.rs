@@ -15,7 +15,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use odc_core::adapters::ldoce6::{redirect_target, same_text, Ldoce6, SLUG};
+use odc_core::adapters::ldoce6::{redirect_target, same_words, Ldoce6, SLUG};
 use odc_core::adapters::{count_slots, Adapter, ParseContext, SlotCounts};
 use odc_core::html::repair_sanitize;
 use odc_core::mdx::{MdxRecord, MdxSource, MAX_RECORD_BYTES};
@@ -214,7 +214,8 @@ fn run_one(adapter: &Ldoce6, record: &MdxRecord) -> Sample {
     let elapsed_us = start.elapsed().as_micros();
 
     let unadapted = unadapted_reason(&l1);
-    let fidelity_ok = same_text(&clean, &l1);
+    // Popups move into the toolbar, so fidelity is word-level, not order-level.
+    let fidelity_ok = same_words(&clean, &l1);
     let split_lines = odc_core::adapters::split_line_violations(&l1);
     let slots = count_slots(&l1);
     let idempotent = adapter

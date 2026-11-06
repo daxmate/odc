@@ -101,8 +101,11 @@ impl Adapter for Ldoce6 {
             return Ok(raw_fallback(fragment, ctx, Reason::ParseFailed));
         }
         let mut html = builder.finish();
+        html = strip_popup_buttons(&html);
         html = format_blocks(&html).unwrap_or(html);
-        if !same_words(&clean, &html) {
+        // Toolbar button labels are new chrome; everything else must stay verbatim.
+        let clean_for_compare = strip_popup_buttons(&clean);
+        if !same_words(&clean_for_compare, &html) {
             return Ok(raw_fallback(fragment, ctx, Reason::ParseFailed));
         }
         Ok(html)
@@ -136,14 +139,38 @@ pub fn same_text(left: &str, right: &str) -> bool {
     content_text(left) == content_text(right)
 }
 
-/// Fidelity guard for the reordered entry: same words, same counts, and the
-/// only allowed difference is block order (senses before refs and entry menu).
-fn same_words(left: &str, right: &str) -> bool {
-    let mut a: Vec<String> = content_text(left)
+/// UI triggers such as "Word Origin" are not entry text; the toolbar owns them.
+fn strip_popup_buttons(html: &str) -> String {
+    const OPEN: &str = "<span data-odc-orig-class=\"popup-button\">";
+    let mut out = String::with_capacity(html.len());
+    let mut rest = html;
+    while let Some(start) = rest.find(OPEN) {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + OPEN.len()..];
+        match after.find("</span>") {
+            Some(end) if !after[..end].contains('<') => {
+                rest = &after[end + "</span>".len()..];
+            }
+            _ => {
+                out.push_str(OPEN);
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Fidelity guard for the reordered entry: same words, same counts, any order.
+///
+/// Toolbar button labels are UI chrome and are ignored on both sides.
+#[must_use]
+pub fn same_words(left: &str, right: &str) -> bool {
+    let mut a: Vec<String> = content_text(&strip_chrome(left))
         .split_whitespace()
         .map(str::to_owned)
         .collect();
-    let mut b: Vec<String> = content_text(right)
+    let mut b: Vec<String> = content_text(&strip_chrome(right))
         .split_whitespace()
         .map(str::to_owned)
         .collect();
@@ -298,6 +325,8 @@ pub(crate) struct Builder<'a> {
     out: String,
     frames: Vec<Frame>,
     inline: Vec<Inline>,
+    /// Span depths of popup triggers whose label text must be dropped.
+    mute_spans: Vec<usize>,
     head_open: bool,
     head_done: bool,
     entry_count: usize,
@@ -315,6 +344,14 @@ pub(crate) struct Builder<'a> {
     toc_capture: bool,
     toc: String,
     refs: String,
+    /// Byte offset just past the entry head, where the reference toolbar goes.
+    refbar_pos: Option<usize>,
+    /// Popup blocks collected so far; popups can arrive in several bursts.
+    ref_blocks: Vec<RefBlock>,
+    /// Buffered markup that carried no popup header.
+    loose: String,
+    /// Span of the toolbar already written into `out`.
+    refbar_at: Option<(usize, usize)>,
     capturing: bool,
     ref_summary: bool,
     span_depth: usize,
@@ -331,6 +368,7 @@ impl<'a> Builder<'a> {
             out: String::with_capacity(4096),
             frames: Vec::new(),
             inline: Vec::new(),
+            mute_spans: Vec::new(),
             head_open: false,
             head_done: false,
             entry_count: 0,
@@ -348,6 +386,10 @@ impl<'a> Builder<'a> {
             toc_capture: false,
             toc: String::new(),
             refs: String::new(),
+            refbar_pos: None,
+            ref_blocks: Vec::new(),
+            loose: String::new(),
+            refbar_at: None,
             capturing: false,
             span_depth: 0,
             ref_box_depth: None,
@@ -377,17 +419,65 @@ impl<'a> Builder<'a> {
         self.close_from(0);
     }
 
-    /// Move reference blocks and the entry menu to the end of the entry so the
-    /// main senses stay adjacent to the headword.
+    /// Move reference blocks and the entry menu into one toolbar under the
+    /// headword, so the main senses are not interleaved with popup content.
     fn flush_deferred(&mut self) {
-        if !self.refs.is_empty() {
-            let refs = std::mem::take(&mut self.refs);
-            self.out.push_str(&refs);
+        let refs = std::mem::take(&mut self.refs);
+        let toc = std::mem::take(&mut self.toc);
+        collect_blocks(&mut self.ref_blocks, &mut self.loose, &toc, Some("toc"));
+        collect_blocks(&mut self.ref_blocks, &mut self.loose, &refs, None);
+        self.split_verb_tables();
+        if self.ref_blocks.is_empty() && self.loose.trim().is_empty() {
+            return;
         }
-        if !self.toc.is_empty() {
-            let toc = std::mem::take(&mut self.toc);
-            self.out.push_str(&toc);
+        let items = build_refbar_items(&self.ref_blocks, &self.loose);
+        let bar = format!("<nav class=\"odc-refbar\">{items}</nav>");
+
+        if let Some((start, end)) = self.refbar_at {
+            self.out.replace_range(start..end, &bar);
+            self.refbar_at = Some((start, start + bar.len()));
+        } else {
+            let pos = self
+                .refbar_pos
+                .unwrap_or(self.out.len())
+                .min(self.out.len());
+            self.out.insert_str(pos, &bar);
+            self.refbar_at = Some((pos, pos + bar.len()));
         }
+    }
+
+    /// Give every captured `div.verbtable` its own toolbar entry.
+    ///
+    /// The source nests the conjugation table after the word-origin popup; it
+    /// belongs to the original "Verb Table" button, not to the etymology panel.
+    fn split_verb_tables(&mut self) {
+        let mut blocks = Vec::with_capacity(self.ref_blocks.len() + 1);
+        for mut block in std::mem::take(&mut self.ref_blocks) {
+            let (tables, rest) = take_verb_tables(&block.html);
+            block.html = rest;
+            if !block.html.trim().is_empty() || !block.title.is_empty() {
+                blocks.push(block);
+            }
+            for table in tables {
+                blocks.push(RefBlock {
+                    kind: String::from("verb-table"),
+                    source: String::from("entry"),
+                    title: String::new(),
+                    html: table,
+                });
+            }
+        }
+        let (tables, rest) = take_verb_tables(&self.loose);
+        self.loose = rest;
+        for table in tables {
+            blocks.push(RefBlock {
+                kind: String::from("verb-table"),
+                source: String::from("entry"),
+                title: String::new(),
+                html: table,
+            });
+        }
+        self.ref_blocks = blocks;
     }
 
     /// Final markup with cross-reference anchors resolved.
@@ -414,6 +504,9 @@ impl<'a> Builder<'a> {
     }
 
     fn emit(&mut self, text: &str) {
+        if !self.mute_spans.is_empty() {
+            return;
+        }
         if self.capturing {
             self.refs.push_str(text);
         } else if self.toc_capture {
@@ -532,6 +625,9 @@ impl<'a> Builder<'a> {
             self.close_tag("head");
             self.head_open = false;
             self.head_done = true;
+            if self.refbar_pos.is_none() {
+                self.refbar_pos = Some(self.out.len());
+            }
         }
     }
 
@@ -570,6 +666,9 @@ impl<'a> Builder<'a> {
     fn end(&mut self, name: &str) {
         if name == "span" {
             self.span_depth = self.span_depth.saturating_sub(1);
+            if self.mute_spans.last() == Some(&(self.span_depth + 1)) {
+                self.mute_spans.pop();
+            }
             if self.ref_box_depth == Some(self.span_depth + 1) {
                 self.ref_box_depth = None;
                 if self.has_open("ref") {
@@ -606,6 +705,11 @@ impl<'a> Builder<'a> {
 
         if name == "span" {
             self.span_depth += 1;
+        }
+        if name == "span" && has("popup-button") {
+            // Popup triggers are UI chrome, never entry text: drop the label.
+            self.mute_spans.push(self.span_depth);
+            return;
         }
         if matches!(
             name,
@@ -1272,6 +1376,387 @@ fn ref_kind(pop: &str, title: &str) -> (&'static str, &'static str) {
         "popwf" => ("word-family", "entry"),
         _ => ("other", source),
     }
+}
+
+/// Drop UI chrome from markup before comparing words.
+///
+/// Toolbar labels and popup trigger labels are not entry text, and the popup
+/// buttons themselves are removed from L1.
+fn strip_chrome(html: &str) -> String {
+    let without_l1 = strip_elements(html, "data-odc-orig-class=\"popup-button\"", "span");
+    let without_source = strip_elements(&without_l1, "class=\"popup-button\"", "span");
+    strip_refbar_labels(&without_source)
+}
+
+/// Remove elements whose start tag carries `marker`, closing tag `tag`.
+fn strip_elements(html: &str, marker: &str, tag: &str) -> String {
+    let open_mark = format!("<{tag}");
+    let close_mark = format!("</{tag}>");
+    let mut out = String::with_capacity(html.len());
+    let mut cursor = 0;
+    while let Some(at) = html[cursor..].find(marker) {
+        let marker_pos = cursor + at;
+        let Some(open) = html[..marker_pos].rfind(&open_mark) else {
+            break;
+        };
+        if open < cursor {
+            break;
+        }
+        if !html[open..].contains('>') {
+            break;
+        }
+        let mut depth = 0usize;
+        let mut i = open;
+        let mut close = None;
+        while i < html.len() {
+            let next_open = html[i..].find(&open_mark).map(|end| i + end);
+            let next_close = html[i..].find(&close_mark).map(|end| i + end);
+            match (next_open, next_close) {
+                (Some(start), Some(end)) if start < end => {
+                    depth += 1;
+                    i = start + open_mark.len();
+                }
+                (_, Some(end)) => {
+                    depth -= 1;
+                    i = end + close_mark.len();
+                    if depth == 0 {
+                        close = Some(i);
+                        break;
+                    }
+                }
+                _ => break,
+            }
+        }
+        let Some(after) = close else {
+            break;
+        };
+        out.push_str(&html[cursor..open]);
+        cursor = after;
+    }
+    out.push_str(&html[cursor..]);
+    out
+}
+
+/// Markup without the toolbar button labels.
+///
+/// The labels restate the popup names for the toolbar; they are UI chrome, not
+/// entry text, so the text-drift guard compares everything but those labels.
+fn strip_refbar_labels(html: &str) -> String {
+    const OPEN: &str = "<summary class=\"odc-refbar__label\">";
+    let mut out = String::with_capacity(html.len());
+    let mut rest = html;
+    while let Some(start) = rest.find(OPEN) {
+        out.push_str(&rest[..start]);
+        let after = &rest[start..];
+        match after.find("</summary>") {
+            Some(close) => rest = &after[close + "</summary>".len()..],
+            None => {
+                rest = "";
+                break;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// One buffered popup block, parsed back out of the captured reference HTML.
+struct RefBlock {
+    kind: String,
+    source: String,
+    title: String,
+    html: String,
+}
+
+/// A toolbar entry: every buffered block of one kind, merged.
+struct RefGroup {
+    kind: String,
+    label: String,
+    /// Indices into the block list, in source order.
+    blocks: Vec<usize>,
+    /// Whether this group carries the loose markup instead of blocks.
+    loose: bool,
+}
+
+/// Toolbar order for the kinds the source dictionary promotes to buttons.
+const REF_ORDER: [&str; 6] = [
+    "toc",
+    "word-origin",
+    "verb-table",
+    "examples-other",
+    "collocation",
+    "phrase-index",
+];
+
+/// Render the toolbar items: one collapsed button per popup kind.
+///
+/// The block text is kept verbatim: only the details wrappers and their
+/// summaries are replaced, so the toolbar never shifts the words of the entry.
+fn build_refbar_items(blocks: &[RefBlock], loose: &str) -> String {
+    let mut groups: Vec<RefGroup> = Vec::new();
+    for (index, block) in blocks.iter().enumerate() {
+        let label = ref_label(&block.kind, &plain_text(&block.title));
+        match groups.iter_mut().find(|group| group.kind == block.kind) {
+            Some(group) => group.blocks.push(index),
+            None => groups.push(RefGroup {
+                kind: block.kind.clone(),
+                label,
+                blocks: vec![index],
+                loose: false,
+            }),
+        }
+    }
+    if !loose.trim().is_empty() {
+        // Buffered markup with no popup header still has to reach the page.
+        groups.push(RefGroup {
+            kind: String::from("other"),
+            label: String::from("Other"),
+            blocks: Vec::new(),
+            loose: true,
+        });
+    }
+    groups.sort_by_key(|group| ref_rank(&group.kind));
+
+    let mut html = String::new();
+    for group in groups {
+        html.push_str("<details class=\"odc-refbar__item\" data-odc-kind=\"");
+        html.push_str(&escape_attr(&group.kind));
+        html.push_str("\"><summary class=\"odc-refbar__label\">");
+        html.push_str(&escape_attr(&group.label));
+        html.push_str("</summary><div class=\"odc-ref-panel\">");
+        if group.loose {
+            html.push_str(loose.trim());
+        }
+        for index in group.blocks {
+            let block = &blocks[index];
+            html.push_str("<div class=\"odc-ref-block\" data-odc-source=\"");
+            html.push_str(&escape_attr(&block.source));
+            html.push_str("\">");
+            if !block.title.is_empty() {
+                html.push_str("<p class=\"odc-ref-panel__title\">");
+                html.push_str(&block.title);
+                html.push_str("</p>");
+            }
+            html.push_str(block.html.trim());
+            html.push_str("</div>");
+        }
+        html.push_str("</div></details>");
+    }
+    html
+}
+
+/// Collect details blocks, appending loose markup to the block it followed.
+fn collect_blocks(
+    blocks: &mut Vec<RefBlock>,
+    loose: &mut String,
+    html: &str,
+    toc_kind: Option<&str>,
+) {
+    for part in details_parts(html) {
+        match part {
+            BlockPart::Block { tag, inner } => {
+                let (title, body) = split_summary(&inner);
+                let (kind, source) = match toc_kind {
+                    Some(kind) => (String::from(kind), String::from("entry")),
+                    None => (
+                        String::from(tag_attr(&tag, "data-odc-kind").unwrap_or("other")),
+                        String::from(tag_attr(&tag, "data-odc-source").unwrap_or("entry")),
+                    ),
+                };
+                blocks.push(RefBlock {
+                    kind,
+                    source,
+                    title,
+                    html: String::from(body),
+                });
+            }
+            BlockPart::Loose(markup) => {
+                let rest = strip_refs_wrapper(&markup);
+                if rest.trim().is_empty() {
+                    continue;
+                }
+                match blocks.last_mut() {
+                    Some(block) => block.html.push_str(rest.trim()),
+                    None => loose.push_str(rest.trim()),
+                }
+            }
+        }
+    }
+}
+
+/// Class marker the adapter writes for LDOCE `div.verbtable`.
+const VERB_TABLE_CLASS: &str = "data-odc-orig-class=\"verbtable\"";
+
+/// Pull every `div.verbtable` out of captured markup: `(tables, rest)`.
+fn take_verb_tables(html: &str) -> (Vec<String>, String) {
+    let mut tables = Vec::new();
+    let mut rest = String::with_capacity(html.len());
+    let mut cursor = 0;
+    while let Some(found) = html[cursor..].find(VERB_TABLE_CLASS) {
+        let marker = cursor + found;
+        let Some(open) = html[..marker].rfind("<div") else {
+            break;
+        };
+        let Some(close) = closing_div(html, open) else {
+            break;
+        };
+        rest.push_str(&html[cursor..open]);
+        tables.push(String::from(html[open..close].trim()));
+        cursor = close;
+    }
+    rest.push_str(&html[cursor..]);
+    (tables, rest)
+}
+
+/// End offset (just past `</div>`) of the div that starts at `open`.
+fn closing_div(html: &str, open: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut i = open;
+    while i < html.len() {
+        let next_open = html[i..].find("<div").map(|at| i + at);
+        let next_close = html[i..].find("</div>").map(|at| i + at);
+        match (next_open, next_close) {
+            (Some(start), Some(end)) if start < end => {
+                depth += 1;
+                i = start + "<div".len();
+            }
+            (_, Some(end)) => {
+                depth -= 1;
+                i = end + "</div>".len();
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// Button label for a popup kind; unknown kinds fall back to the block title.
+fn ref_label(kind: &str, title: &str) -> String {
+    match kind {
+        "toc" => String::from("Entry menu"),
+        "word-origin" => String::from("Word Origin"),
+        "verb-table" => String::from("Verb Table"),
+        "examples-other" => String::from("Examples"),
+        "collocation" => String::from("Collocations"),
+        "phrase-index" => String::from("Phrases"),
+        _ if !title.is_empty() => String::from(title),
+        _ => String::from(kind),
+    }
+}
+
+/// Position of a kind in the toolbar; unknown kinds keep their source order.
+fn ref_rank(kind: &str) -> usize {
+    REF_ORDER
+        .iter()
+        .position(|known| *known == kind)
+        .unwrap_or(REF_ORDER.len())
+}
+
+/// Value of a data attribute in a raw start tag.
+fn tag_attr<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
+    let needle = format!("{name}=\"");
+    let start = tag.find(&needle)? + needle.len();
+    let end = tag[start..].find('\"')? + start;
+    Some(&tag[start..end])
+}
+
+/// One slice of a buffered fragment: a details block or loose markup.
+enum BlockPart {
+    Block { tag: String, inner: String },
+    Loose(String),
+}
+
+/// Split the buffered HTML into details blocks and the markup between them.
+fn details_parts(html: &str) -> Vec<BlockPart> {
+    let mut parts = Vec::new();
+    let mut cursor = 0;
+    while let Some(rel) = html[cursor..].find("<details") {
+        let start = cursor + rel;
+        let Some(open_rel) = html[start..].find('>') else {
+            break;
+        };
+        let open_end = start + open_rel;
+        let mut depth = 1usize;
+        let mut i = open_end + 1;
+        let mut close = None;
+        while depth > 0 {
+            let next_open = html[i..].find("<details").map(|at| i + at);
+            let next_close = html[i..].find("</details>").map(|at| i + at);
+            match (next_open, next_close) {
+                (Some(open), Some(end)) if open < end => {
+                    depth += 1;
+                    i = open + "<details".len();
+                }
+                (_, Some(end)) => {
+                    depth -= 1;
+                    i = end + "</details>".len();
+                    if depth == 0 {
+                        close = Some(end);
+                    }
+                }
+                _ => break,
+            }
+        }
+        let Some(close_start) = close else {
+            break;
+        };
+        if start > cursor {
+            parts.push(BlockPart::Loose(String::from(&html[cursor..start])));
+        }
+        parts.push(BlockPart::Block {
+            tag: String::from(&html[start..=open_end]),
+            inner: String::from(&html[open_end + 1..close_start]),
+        });
+        cursor = i;
+    }
+    if cursor < html.len() {
+        parts.push(BlockPart::Loose(String::from(&html[cursor..])));
+    }
+    parts
+}
+
+/// Drop the `<section class="odc-refs">` wrappers the buffer carries.
+fn strip_refs_wrapper(markup: &str) -> String {
+    markup
+        .replace("<section class=\"odc-refs\">", "")
+        .replace("</section>", "")
+}
+
+/// Take the leading summary off a block body: (summary HTML, rest).
+fn split_summary(inner: &str) -> (String, &str) {
+    let lead = inner.len() - inner.trim_start().len();
+    let rest = &inner[lead..];
+    if !rest.starts_with("<summary") {
+        return (String::new(), inner);
+    }
+    let (Some(open), Some(close)) = (rest.find('>'), rest.find("</summary>")) else {
+        return (String::new(), inner);
+    };
+    if close < open {
+        return (String::new(), inner);
+    }
+    (
+        String::from(rest[open + 1..close].trim()),
+        &rest[close + "</summary>".len()..],
+    )
+}
+
+/// Visible text of an HTML fragment, with runs of whitespace collapsed.
+fn plain_text(html: &str) -> String {
+    let mut out = String::new();
+    let mut in_tag = false;
+    for ch in html.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            other if !in_tag => out.push(other),
+            _ => {}
+        }
+    }
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 impl Ldoce6 {
