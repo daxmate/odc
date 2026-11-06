@@ -12,6 +12,7 @@
 //! No rule can execute code, fetch a URL or call a model: the operator list is
 //! closed and every one of them only touches the parsed tree.
 
+pub mod contract;
 pub mod exec;
 pub mod schema;
 pub mod selector;

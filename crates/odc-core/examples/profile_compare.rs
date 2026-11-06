@@ -1,11 +1,16 @@
 //! Compare the LDOCE6 adapter with an odc.profile/v0 pack on the same input.
 //!
-//! Two modes:
+//! Three modes:
 //!
 //! * --raw <jsonl|dir> runs the Rust adapter and the profile over the same
 //!   fragments and reports the first structural difference per record;
 //! * --golden <dir> compares the profile output with the frozen acceptance
-//!   panes the adapter produced (entries/<key>-l1.html).
+//!   panes the adapter produced (entries/<key>-l1.html);
+//! * --source <jsonl> compares the profile output with the **source fragment
+//!   it was built from**, using the D1 contract in
+//!   `odc_core::profile::contract`: text bag, order inside a semantic block,
+//!   P1 skeleton invariants and source residue. This is the only ruler a
+//!   dictionary without an adapter can be measured with.
 //!
 //! The comparison is semantic, not byte-wise: both sides are parsed into a
 //! minimal element tree, whitespace-only text nodes are dropped, text runs are
@@ -89,13 +94,34 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
         compare_golden(&profile, golden, args.dump.as_deref(), args.limit)?
     } else if let Some(raw) = &args.raw {
         compare_raw(&profile, raw, args.limit)?
+    } else if let Some(source) = &args.source {
+        compare_source(&profile, source, args.dump.as_deref(), args.limit)?
     } else {
-        return Err("either --raw or --golden is required".into());
+        return Err("either --raw, --golden or --source is required".into());
     };
     if let Some(path) = &args.report {
         fs::write(path, serde_json::to_string_pretty(&report)? + "\n")?;
     }
     let summary = &report["summary"];
+    if report["mode"] == "source-contract" {
+        let count = |name: &str| summary[name].as_u64().unwrap_or(0);
+        println!(
+            "source-contract: {} body + {} alias | bag {}/{} order {}/{} structure {}/{} clean {}/{}",
+            count("body"),
+            count("alias"),
+            count("bag_ok"),
+            count("body"),
+            count("order_ok"),
+            count("body"),
+            count("structure_ok"),
+            count("body"),
+            count("clean_ok"),
+            count("body"),
+        );
+        // Non-zero until every body record passes: the ruler measures, it does
+        // not excuse a partial pass.
+        return Ok(count("body") > 0 && count("equal") == count("body"));
+    }
     println!(
         "{}: {}/{} equal ({} text-equal)",
         report["mode"].as_str().unwrap_or("?"),
@@ -111,6 +137,7 @@ struct Args {
     profile: PathBuf,
     raw: Option<PathBuf>,
     golden: Option<PathBuf>,
+    source: Option<PathBuf>,
     report: Option<PathBuf>,
     dump: Option<PathBuf>,
     limit: Option<usize>,
@@ -122,6 +149,7 @@ impl Args {
         let mut profile = None;
         let mut raw = None;
         let mut golden = None;
+        let mut source = None;
         let mut report = None;
         let mut dump = None;
         let mut limit = None;
@@ -133,6 +161,7 @@ impl Args {
                 "--profile" => profile = Some(PathBuf::from(value_of(&argv, &mut index, &flag)?)),
                 "--raw" => raw = Some(PathBuf::from(value_of(&argv, &mut index, &flag)?)),
                 "--golden" => golden = Some(PathBuf::from(value_of(&argv, &mut index, &flag)?)),
+                "--source" => source = Some(PathBuf::from(value_of(&argv, &mut index, &flag)?)),
                 "--report" => report = Some(PathBuf::from(value_of(&argv, &mut index, &flag)?)),
                 "--dump" => dump = Some(PathBuf::from(value_of(&argv, &mut index, &flag)?)),
                 "--ignore-ui-text" => {
@@ -152,6 +181,7 @@ impl Args {
             profile: profile.ok_or_else(|| String::from("--profile is required"))?,
             raw,
             golden,
+            source,
             report,
             dump,
             limit,
@@ -272,33 +302,7 @@ fn compare_raw(
     path: &Path,
     limit: Option<usize>,
 ) -> Result<Value, Box<dyn std::error::Error>> {
-    let mut records = Vec::new();
-    if path.is_dir() {
-        let mut files = panes(path)?;
-        if let Some(max) = limit {
-            files.truncate(max);
-        }
-        for file in files {
-            let name = file.file_name().and_then(|n| n.to_str()).unwrap_or("?");
-            let key = name.trim_end_matches("-raw.html");
-            let text = pane_body(&fs::read_to_string(&file)?);
-            records.push(Record {
-                key: String::from(key),
-                text,
-            });
-        }
-    } else {
-        let text = fs::read_to_string(path)?;
-        for line in text.lines() {
-            if line.trim().is_empty() {
-                continue;
-            }
-            records.push(serde_json::from_str::<Record>(line)?);
-            if limit.is_some_and(|max| records.len() >= max) {
-                break;
-            }
-        }
-    }
+    let records = read_records(path, limit)?;
     let adapter = Ldoce6;
     let mut lines = Vec::new();
     let mut equal = 0usize;
@@ -364,6 +368,150 @@ fn compare_raw(
             "payload_equal": payload_equal,
         },
         "entries": lines,
+    }))
+}
+
+/// Read the sample set: a JSONL file, or a directory of -raw.html panes.
+fn read_records(
+    path: &Path,
+    limit: Option<usize>,
+) -> Result<Vec<Record>, Box<dyn std::error::Error>> {
+    let mut records = Vec::new();
+    if path.is_dir() {
+        let mut files = panes(path)?;
+        if let Some(max) = limit {
+            files.truncate(max);
+        }
+        for file in files {
+            let name = file.file_name().and_then(|n| n.to_str()).unwrap_or("?");
+            let key = name.trim_end_matches("-raw.html");
+            records.push(Record {
+                key: String::from(key),
+                text: pane_body(&fs::read_to_string(&file)?),
+            });
+        }
+        return Ok(records);
+    }
+    let text = fs::read_to_string(path)?;
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        records.push(serde_json::from_str::<Record>(line)?);
+        if limit.is_some_and(|max| records.len() >= max) {
+            break;
+        }
+    }
+    Ok(records)
+}
+
+/// Dictionary slug the profile was written for: the first segment of its id.
+///
+/// The source fragment says nothing about the dictionary, so the L1 identity
+/// comes from the profile and never from the caller.
+fn profile_dict(profile: &Profile) -> String {
+    profile
+        .profile_id
+        .split('.')
+        .next()
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+/// Compare every L1 fragment with the source fragment it was built from (D1).
+///
+/// A record passes only when the four contract checks pass; the reasons are
+/// counted by code so the next profile change has a target instead of a vibe.
+fn compare_source(
+    profile: &Profile,
+    path: &Path,
+    dump: Option<&Path>,
+    limit: Option<usize>,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let records = read_records(path, limit)?;
+    let dict = profile_dict(profile);
+    let mut failures: Vec<Value> = Vec::new();
+    let mut codes: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let mut alias = 0usize;
+    let mut body = 0usize;
+    let mut equal = 0usize;
+    let mut bag_ok = 0usize;
+    let mut order_ok = 0usize;
+    let mut structure_ok = 0usize;
+    let mut clean_ok = 0usize;
+    for record in &records {
+        let ctx = ParseContext::new(record.key.clone(), dict.clone(), "en");
+        let produced = match profile.apply(&record.text, &ctx) {
+            Outcome::Adapted { html, .. } | Outcome::Unadapted { html, .. } => html,
+            Outcome::Alias { .. } => {
+                // An alias record has no body: it is a pointer, not a fragment.
+                alias += 1;
+                continue;
+            }
+        };
+        if let Some(dump) = dump {
+            fs::create_dir_all(dump)?;
+            fs::write(dump.join(format!("{}.html", record.key)), &produced)?;
+        }
+        let verdict = odc_core::profile::contract::check(&record.text, &produced);
+        body += 1;
+        if verdict.bag_ok {
+            bag_ok += 1;
+        }
+        if verdict.order_ok {
+            order_ok += 1;
+        }
+        if verdict.structure_ok {
+            structure_ok += 1;
+        }
+        if verdict.clean_ok {
+            clean_ok += 1;
+        }
+        if verdict.ok() {
+            equal += 1;
+            continue;
+        }
+        for reason in &verdict.reasons {
+            *codes.entry(reason.code).or_insert(0) += 1;
+        }
+        failures.push(json!({
+            "key": record.key,
+            "bag_ok": verdict.bag_ok,
+            "order_ok": verdict.order_ok,
+            "structure_ok": verdict.structure_ok,
+            "clean_ok": verdict.clean_ok,
+            "reasons": verdict
+                .reasons
+                .iter()
+                .map(|reason| json!({ "code": reason.code, "detail": reason.detail }))
+                .collect::<Vec<Value>>(),
+            "first_diff": verdict.first_diff(),
+        }));
+    }
+    let mut reasons: Vec<Value> = codes
+        .iter()
+        .map(|(code, count)| json!({ "code": code, "count": count }))
+        .collect();
+    reasons.sort_by(|a, b| {
+        b["count"]
+            .as_u64()
+            .cmp(&a["count"].as_u64())
+            .then_with(|| a["code"].as_str().cmp(&b["code"].as_str()))
+    });
+    Ok(json!({
+        "mode": "source-contract",
+        "summary": {
+            "total": records.len(),
+            "body": body,
+            "alias": alias,
+            "equal": equal,
+            "bag_ok": bag_ok,
+            "order_ok": order_ok,
+            "structure_ok": structure_ok,
+            "clean_ok": clean_ok,
+        },
+        "reason_counts": reasons,
+        "failures": failures,
     }))
 }
 

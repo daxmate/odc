@@ -141,6 +141,8 @@ section.odc-entry[data-odc-dict, data-odc-key, data-odc-lang, data-odc-homograph
 ### D1 落地表述（替换 odc-html-spec.md §8.1）
 
 > **文本保真**：源片段与 L1 产物在去标签后的文本**词袋**上必须完全一致（同一多重集）；每个语义块（`odc-sense` / `odc-ref-block` / `odc-examples` …）**内部**的文本顺序必须与源一致。跨块排列顺序由呈现层规范（P1）决定，不参与保真判定。
+>
+> **落地判定**：`profile_compare --source`（实现 `profile/contract.rs`），规则、实测与局限见 [`profile-contract.md`](profile-contract.md)。
 
 ### D2 落地表述
 
