@@ -66,16 +66,19 @@
 
 ### 3.1 根元素与骨架
 
+> 骨架、chrome、顺序、派生属性与锚点 id 由引擎统一装配，规范与实现见 [`odc-presentation.md`](odc-presentation.md)（P1–P8、D1–D3）。**词典规则包不描述呈现**：它只回答「这块是什么」。
+
+
 ```html
 <section class="odc-entry" data-odc-dict="ldoce6encn" data-odc-key="make" data-odc-lang="en">
-  <header class="odc-entry-head">
+  <header class="odc-head">
     <h1 class="odc-hw">make</h1>
     <span class="odc-hw-alt" data-odc-kind="hyphenation">make</span>
     <span class="odc-phon" data-odc-variant="uk">/meɪk/</span>
     <span class="odc-inflection" data-odc-kind="past">made</span>
   </header>
 
-  <nav class="odc-toc" data-odc-counted="0"><!-- 可选；可由 sense 列表重建；不参与义项统计 --></nav>
+  <nav class="odc-refbar"><!-- 折叠条：Entry menu + 词条级引用块（P3） --></nav>
 
   <section class="odc-pos-block" data-odc-pos="verb" id="make-verb">
     <h2 class="odc-pos">verb</h2>
@@ -117,7 +120,7 @@
 
 <!-- 同形词：make² 是同级条目，自己的 head / refbar / pos-block -->
 <section class="odc-entry" data-odc-dict="ldoce6encn" data-odc-key="make" data-odc-homograph="2" data-odc-lang="en">
-  <header class="odc-entry-head">
+  <header class="odc-head">
     <h1 class="odc-hw">make</h1>
     <span class="odc-hw-alt" data-odc-kind="homograph">2</span>
   </header>
@@ -150,8 +153,8 @@
 
 | 元素 | 允许的父 | 允许的子 | 说明 |
 |---|---|---|---|
-| `.odc-entry` | 无（片段根） | `.odc-entry-head`、`.odc-toc`?、`.odc-pos-block`+、`.odc-refs`?、`.odc-crossrefs`? | 1 个词条 1 个根 |
-| `.odc-entry-head` | entry | `.odc-hw`、`.odc-hw-alt`*、`.odc-phon`*、`.odc-inflection`* | 1 |
+| `.odc-entry` | 无（片段根） | `.odc-head`、`.odc-refbar`?、`.odc-pos-block`+、`.odc-sense`+ | 1 个词条 1 个根 |
+| `.odc-head` | entry | `.odc-hw`、`.odc-hw-alt`*、`.odc-phon`*、`.odc-inflection`* | 1 |
 | `.odc-pos` | pos-block | 文本 | 词性标签，1 |
 | `.odc-pos-block` | entry | `.odc-pos`、`.odc-sense-group`*、`.odc-sense`+、`.odc-phrasal-verbs`? | 1..N |
 | `.odc-sense-group` | pos-block | `.odc-sense-group`（可嵌套）、`.odc-sense`+ | 分类头/大类 |
@@ -274,7 +277,7 @@
 |---|---|---|---|---|---|
 | `odc-entry` | 词条根，一个源记录一个根 | entry-head、toc?、pos-block+、refs?、crossrefs? | 1 | dict / key / lang | ldoce6ec/make@590；mwaled/make@142；hanyu/打@56 |
 | `odc-entry--redirect` | 未消解的别名（空容器，指向目标 key） | 无 | 0..1/词条 | target、redirect | `ldoce6encn` 212,797 / 265,545 条记录（80.1%） |
-| `odc-entry-head` | 词头 + 音标 + 屈折 | hw、hw-alt*、phon*、inflection* | 1 | — | ldoce6ec/make@590；mwaled/make@142；hanyu/打@84 |
+| `odc-head` | 词头 + 音标 + 屈折 | hw、hw-alt*、phon*、inflection* | 1 | — | ldoce6ec/make@590；mwaled/make@142；hanyu/打@84 |
 | `odc-pos-block` | 词性分段，**编号作用域** | pos、sense-group*、sense+、pvs? | 1..N | pos、id | ldoce6ec/make@973；oald9cn/make@405；mwaled/make@467 |
 | `odc-sense` | 编号义项 | signpost?、grammar?、label*、def、subsense*、examples?、collocation*、citations? | 1..N | n、label、scope、id | ldoce6ec/make@679559；oald9cn/make@6888；mwaled/make@1174；hanyu/打@146 |
 | `odc-sense-number` | 编号载体（可省：编号也可直接在 `data-odc-n`） | 文本 | 0..1/义项 | scope、n、label | ldoce6ec/make@679587；oald9cn/make@7093；mwaled/make@973 |
@@ -311,7 +314,7 @@
 
 | 槽位 | 语义 | 允许子元素 | 基数 | 关键属性 | 证据 |
 |---|---|---|---|---|---|
-| `odc-toc` | 词条目录（派生视图；保文本、不计义项） | 链接项+/文本 | 0..1 | counted=0 | ldoce6ec/make@1679（仅 LDOCE 有）；LDOCE `entrymenu` |
+| `odc-refbar` | 折叠条（Entry menu + 词条级引用块，引擎装配） | `details.odc-refbar__item`+ | 0..1 | — | 8 条人工基准；P2/P3 |
 | `odc-thesaurus` | 同义/联想词 | 词条列表 | 0..N | source | ldoce6ec/make@19014；oald9cn/make@15152 |
 | `odc-word-family` | 词族 | 词列表 | 0..1 | — | ldoce6ec/make@678840 |
 | `odc-word-origin` | 词源 | 段落 | 0..1 | — | ldoce6ec/make@678000 附近；oald9cn `ORIGIN` 盒 |
@@ -326,7 +329,7 @@
 | 例句正文 | `.odc-ex-text` | `.odc-ex-src`（会与「出处」混淆） |
 | 释义 | `.odc-def` | `.odc-def-text`（不建中间层） |
 | 参考块容器 | `.odc-ref[data-odc-kind]` | 每类一个顶层类名 |
-| 词条头 | `header.odc-entry-head` | v0 短名（已废弃，不兼容） |
+| 词条头 | `header.odc-head` | v0 短名（已废弃，不兼容） |
 | 短语动词列表 | `section.odc-phrasal-verbs` | v0 缩写（已废弃） |
 | 短语动词条目 | `article.odc-phrasal-verb` | v0 缩写（已废弃） |
 
@@ -461,7 +464,7 @@ LDOCE6++ 的 `span.entryhead` / `span.buttons` 在 MDX 里**永不闭合**，后
 ### 7.4 TOC
 
 - TOC 是**派生视图**，不是事实来源：可由 sense 列表重建（`.odc-toc` 可缺省）。
-- LDOCE `entrymenu` 必须映射为 `nav.odc-toc`：**保留全部文本**（满足 8.1 文本保真），并置 `data-odc-counted="0"`；内部条目只是文本/链接，**不计义项、不参与编号**，也不计入 `odc-sense` 槽位统计。
+- LDOCE `entrymenu` 由引擎装配为 `nav.odc-refbar > details.odc-refbar__item[data-odc-kind="toc"]`（P2/P4）。菜单正文保留在面板里；**标题是 chrome**：`<summary class="odc-refbar__label" data-odc-ui="entry-menu"></summary>`，由客户端按语言注入（D2）。内部条目只是文本/链接，**不计义项、不参与编号**。
 - 为什么不是「排除」：v0 要求「排除 entrymenu 里重复的 sensenum」，与 8.1 的文本保真直接冲突（排除即丢文本）。v0.1 的口径是「**文本在、语义不在**」：`make` 的义项数仍是 29，不会因 entrymenu 虚增到 67。
 - TOC 项只放链接 + 标签，`data-odc-target` 指向义项 id；不放释义文本。
 
@@ -509,7 +512,12 @@ LDOCE6++ 的 `span.entryhead` / `span.buttons` 在 MDX 里**永不闭合**，后
 
 ## 8. 验收标准
 
-### 8.1 文本保真（空白归一后比较）
+### 8.1 文本保真（词袋 + 块内顺序）
+
+- 判定口径见 [`odc-presentation.md`](odc-presentation.md) D1：**文本保真 = 词袋 + 块内顺序**。跨块排列（词头、引用条、词性块、义项块之间）由呈现层规范 P1 决定，不参与保真判定。
+- UI 文案（`data-odc-ui`）与引用条标题属于 chrome，不计入正文（D2）。
+- 下面的空白处理算法仍用于**单个块内**的比较。
+
 
 - 方法：对同一条词条，分别从**源净化片段**与**L1 产物**抽取纯文本，两份文档用同一套算法。
 - **抽取算法**：

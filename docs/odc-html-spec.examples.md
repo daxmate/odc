@@ -34,7 +34,7 @@
 
 ```html
 <section class="odc-entry" data-odc-dict="ldoce6encn" data-odc-key="make" data-odc-lang="en">
-  <header class="odc-entry-head">
+  <header class="odc-head">
     <h1 class="odc-hw">make</h1>
     <span class="odc-hw-alt" data-odc-kind="hyphenation">make</span>
     <span class="odc-phon" data-odc-variant="uk">/meɪk/</span>
@@ -85,7 +85,7 @@
 
 ```html
 <section class="odc-entry" data-odc-dict="oald9cn" data-odc-key="make" data-odc-lang="en">
-  <header class="odc-entry-head"><h1 class="odc-hw">make</h1></header>
+  <header class="odc-head"><h1 class="odc-hw">make</h1></header>
   <section class="odc-pos-block" data-odc-pos="verb" id="make-verb">
     <h2 class="odc-pos">verb</h2>
     <div class="odc-sense" data-odc-n="1" data-odc-label="1" data-odc-scope="make-verb" id="make-verb-s1">
@@ -125,7 +125,7 @@
 
 ```html
 <section class="odc-entry" data-odc-dict="hanyu" data-odc-key="打" data-odc-lang="zh">
-  <header class="odc-entry-head">
+  <header class="odc-head">
     <h1 class="odc-hw">打</h1>
     <span class="odc-sense-group" data-odc-label="（I）"></span>
     <span class="odc-phon" data-odc-variant="zhuyin">ㄉㄚˇ</span>
@@ -166,7 +166,7 @@
 
 ```html
 <section class="odc-entry" data-odc-dict="mwaled" data-odc-key="make" data-odc-lang="en">
-  <header class="odc-entry-head">
+  <header class="odc-head">
     <h1 class="odc-hw">make</h1>
     <span class="odc-hw-alt" data-odc-kind="homograph" data-odc-homograph="1">1</span>
     <span class="odc-phon" data-odc-variant="us">/meɪk/</span>
@@ -298,7 +298,7 @@
 
 ```html
 <section class="odc-entry" data-odc-dict="ldoce6encn" data-odc-key="make" data-odc-lang="en">
-  <header class="odc-entry-head">
+  <header class="odc-head">
     <h1 class="odc-hw">make</h1>
     <span class="odc-phon" data-odc-variant="uk">/meɪk/</span>
   </header>
