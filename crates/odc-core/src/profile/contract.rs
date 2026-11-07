@@ -27,7 +27,7 @@
 //!    * every child of `nav.odc-refbar` is a reference block (`odc-ref*`).
 //! 4. `clean` — no source class name and no source attribute survives the
 //!    translation. Every class token starts with `odc-`; every attribute is
-//!    `class`, one of [`NEUTRAL_ATTRS`], or `data-odc-*` — which includes
+//!    `class`, one of `NEUTRAL_ATTRS`, or `data-odc-*` — which includes
 //!    `data-odc-orig-class`, the one place where the engine records a source
 //!    class on purpose. Tag names are not judged: a neutral tag such as `h2`
 //!    or `li` is allowed as long as its classes are engine-owned, and there is
@@ -115,7 +115,7 @@ pub struct Verdict {
     pub structure_ok: bool,
     /// No source class or source attribute survived.
     pub clean_ok: bool,
-    /// One entry per failed check, capped at [`MAX_PER_CODE`] per code.
+    /// One entry per failed check, capped at `MAX_PER_CODE` per code.
     pub reasons: Vec<Reason>,
 }
 
