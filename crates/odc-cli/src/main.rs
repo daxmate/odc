@@ -2616,12 +2616,14 @@ fn run_survey(
         println!("{json_text}");
     } else {
         println!(
-            "survey {}: {} entries, {} kinds, {} clusters -> {}",
+            "survey {}: {} entries, {} kinds, {} clusters (reference) -> estimate {} rules, {} ops -> {}",
             file.display(),
             report.entries_scanned,
             report.verdict.kinds,
             report.verdict.clusters,
-            report.verdict.grade.as_str()
+            report.estimate.rules,
+            report.estimate.ops,
+            report.estimate.verdict.as_str()
         );
         println!(
             "wrote {} and {}",

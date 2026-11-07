@@ -57,6 +57,11 @@ fn survey_writes_report_and_samples() {
     assert_eq!(report["verdict"]["kinds"], 2);
     assert_eq!(report["verdict"]["clusters"], 2);
     assert_eq!(report["verdict"]["grade"], "easy");
+    assert_eq!(report["estimate"]["rules"], 2);
+    assert_eq!(report["estimate"]["ops"], 0);
+    assert_eq!(report["estimate"]["verdict"], "easy");
+    assert!(report["estimate"]["basis"].as_array().is_some());
+    assert!(report["quirks"].as_array().is_some());
 
     assert!(out.join("survey.md").is_file());
     assert!(out.join("survey.json").is_file());

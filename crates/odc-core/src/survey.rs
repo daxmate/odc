@@ -50,6 +50,96 @@ pub const DEFAULT_CORE_THRESHOLD: f64 = 0.01;
 /// How many decorative kinds the markdown summary lists.
 const DECOR_TOP: usize = 20;
 
+/// A sibling run longer than this is a structural quirk: the adapter needs a
+/// grouping operator instead of a per-child mapping.
+pub const LONG_RUN_THRESHOLD: usize = 10;
+
+/// How many rules a slot kind costs to map.
+///
+/// A structural kind is a container: mapping it means expressing its child
+/// structure. A leaf kind carries text or an attribute and maps in one rule.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KindClass {
+    /// Holds element children; needs a mapping plus its children's.
+    Structural,
+    /// Holds text or nothing; one mapping rule.
+    Leaf,
+}
+
+impl KindClass {
+    /// Stable identifier used in JSON and in the Markdown tables.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Structural => "structural",
+            Self::Leaf => "leaf",
+        }
+    }
+}
+
+/// Structural quirks that cost an extra operator each.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuirkKind {
+    /// One record holds several entry containers; needs a split.
+    MultiEntry,
+    /// An entry container nests inside another; needs demote/promote.
+    NestedEntry,
+    /// One container holds a long same-kind sibling run; needs a group.
+    LongRun,
+    /// The same semantic block appears at several depths; needs a hoist.
+    FloatingBlock,
+}
+
+impl QuirkKind {
+    /// Stable identifier used in JSON and in the Markdown tables.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::MultiEntry => "multi_entry",
+            Self::NestedEntry => "nested_entry",
+            Self::LongRun => "long_run",
+            Self::FloatingBlock => "floating_block",
+        }
+    }
+
+    /// Every quirk, in reporting order.
+    #[must_use]
+    pub fn all() -> [Self; 4] {
+        [
+            Self::MultiEntry,
+            Self::NestedEntry,
+            Self::LongRun,
+            Self::FloatingBlock,
+        ]
+    }
+}
+
+/// Cost grade derived from the estimate, not from cluster counts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CostGrade {
+    /// A handful of rules and at most two operators.
+    Easy,
+    /// Still writable by hand.
+    Medium,
+    /// Needs a human to design operators first.
+    Hard,
+}
+
+impl CostGrade {
+    /// Stable identifier used in JSON and on the command line.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Easy => "easy",
+            Self::Medium => "medium",
+            Self::Hard => "hard",
+        }
+    }
+}
+
 /// Hard-coded verdict thresholds. They are constants, not flags: changing them
 /// would change the ruler. They are expressed in the core caliber: only kinds
 /// at or above DEFAULT_CORE_THRESHOLD, and templates built from them, count.
@@ -58,6 +148,12 @@ const EASY_CLUSTERS: usize = 20;
 const EASY_OUTLIERS: f64 = 0.05;
 const MEDIUM_CORE_KINDS: usize = 25;
 const MEDIUM_CLUSTERS: usize = 60;
+
+/// Cost-model thresholds: the ruler for the estimate, not tunables.
+const EASY_ESTIMATED_RULES: usize = 20;
+const EASY_ESTIMATED_OPS: usize = 2;
+const MEDIUM_ESTIMATED_RULES: usize = 60;
+const MEDIUM_ESTIMATED_OPS: usize = 4;
 
 /// One slot kind: a tag plus the first token of its class attribute.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -196,12 +292,40 @@ pub struct KindReport {
     pub tag: String,
     /// First class token (empty when absent).
     pub class: String,
+    /// Structural or leaf; decides whether the kind costs one rule or two.
+    pub shape: KindClass,
     /// Total occurrences, counting repeats inside a folded run.
     pub occurrences: usize,
     /// Entries containing at least one occurrence.
     pub entries: usize,
     /// entries / entries_scanned.
     pub presence: f64,
+}
+
+/// One detected structural quirk.
+#[derive(Clone, Debug, Serialize)]
+pub struct QuirkReport {
+    /// Which quirk fired.
+    pub kind: QuirkKind,
+    /// Entries where the quirk was observed.
+    pub entries: usize,
+    /// entries / entries_scanned.
+    pub share: f64,
+    /// One entry key showing the quirk, for eyeballing.
+    pub sample: Option<String>,
+}
+
+/// Estimated hand-written cost of adapting this dialect.
+#[derive(Clone, Debug, Serialize)]
+pub struct EstimateReport {
+    /// One rule per slot kind (structural and leaf alike).
+    pub rules: usize,
+    /// One operator per detected structural quirk.
+    pub ops: usize,
+    /// Grade derived from rules and ops alone.
+    pub verdict: CostGrade,
+    /// Why the numbers came out this way, one line per ingredient.
+    pub basis: Vec<String>,
 }
 
 /// Slot kinds split into the ones that decide templates and the rest.
@@ -363,6 +487,10 @@ pub struct SurveyReport {
     pub unparsed: usize,
     /// Records that held more than one entry container.
     pub multi_entry_records: usize,
+    /// Estimated hand-written cost, independent of cluster counts.
+    pub estimate: EstimateReport,
+    /// Structural quirks found while scanning; one operator each.
+    pub quirks: Vec<QuirkReport>,
     /// Slot kinds split into core and decorative.
     pub kinds: KindsReport,
     /// Core template clusters, ordered by size.
@@ -405,7 +533,38 @@ impl SurveyReport {
         out.push_str(&format!("- elapsed: {elapsed_ms} ms\n\n"));
 
         out.push_str(&format!(
-            "## Verdict: {}\n\n",
+            "## Cost estimate: {}\n\n",
+            self.estimate.verdict.as_str().to_uppercase()
+        ));
+        out.push_str(&format!("- estimated rules: {}\n", self.estimate.rules));
+        out.push_str(&format!("- estimated operators: {}\n", self.estimate.ops));
+        for line in &self.estimate.basis {
+            out.push_str(&format!("- {line}\n"));
+        }
+        out.push_str(
+            "\n> Cluster counts below describe the skeleton only; they do not decide the grade.\n\n",
+        );
+
+        out.push_str("## Structural quirks\n\n");
+        if self.quirks.iter().all(|quirk| quirk.entries == 0) {
+            out.push_str("None detected.\n\n");
+        } else {
+            out.push_str("| quirk | entries | share | sample |\n");
+            out.push_str("|-------|---------|-------|--------|\n");
+            for quirk in self.quirks.iter().filter(|quirk| quirk.entries > 0) {
+                out.push_str(&format!(
+                    "| `{}` | {} | {:.2}% | `{}` |\n",
+                    quirk.kind.as_str(),
+                    quirk.entries,
+                    quirk.share * 100.0,
+                    quirk.sample.as_deref().unwrap_or("-")
+                ));
+            }
+            out.push('\n');
+        }
+
+        out.push_str(&format!(
+            "## Cluster verdict (reference only): {}\n\n",
             self.verdict.grade.as_str().to_uppercase()
         ));
         for reason in &self.verdict.reasons {
@@ -419,13 +578,14 @@ impl SurveyReport {
             "## Core slot kinds ({})\n\n",
             self.kinds.core.len()
         ));
-        out.push_str("| # | kind | occurrences | entries | presence |\n");
-        out.push_str("|---|------|-------------|---------|----------|\n");
+        out.push_str("| # | kind | shape | occurrences | entries | presence |\n");
+        out.push_str("|---|------|-------|-------------|---------|----------|\n");
         for (index, kind) in self.kinds.core.iter().enumerate() {
             out.push_str(&format!(
-                "| {} | `{}` | {} | {} | {:.2}% |\n",
+                "| {} | `{}` | {} | {} | {} | {:.2}% |\n",
                 index + 1,
                 kind.kind,
+                kind.shape.as_str(),
                 kind.occurrences,
                 kind.entries,
                 kind.presence * 100.0
@@ -567,6 +727,10 @@ pub struct Surveyor {
     empty: usize,
     unparsed: usize,
     multi_entry_records: usize,
+    structural_kinds: BTreeSet<SlotKind>,
+    leaf_kinds: BTreeSet<SlotKind>,
+    quirk_entries: BTreeMap<QuirkKind, usize>,
+    quirk_samples: BTreeMap<QuirkKind, String>,
     kinds: BTreeMap<SlotKind, KindCounter>,
     clusters: BTreeMap<Vec<SlotKind>, ClusterCounter>,
     depth_hist: [usize; 11],
@@ -636,6 +800,10 @@ impl Surveyor {
             empty: 0,
             unparsed: 0,
             multi_entry_records: 0,
+            structural_kinds: BTreeSet::new(),
+            leaf_kinds: BTreeSet::new(),
+            quirk_entries: BTreeMap::new(),
+            quirk_samples: BTreeMap::new(),
             kinds: BTreeMap::new(),
             clusters: BTreeMap::new(),
             depth_hist: [0; 11],
@@ -691,6 +859,7 @@ impl Surveyor {
         }
         if roots.len() > 1 {
             self.multi_entry_records += 1;
+            self.note_quirk(QuirkKind::MultiEntry, key);
         }
         for root in &roots {
             self.absorb(root, key, html);
@@ -708,6 +877,7 @@ impl Surveyor {
         self.depth_sum += profile.depth;
         self.kinds_per_entry_sum += profile.slots.len();
         self.depth_hist[profile.depth.min(10)] += 1;
+        self.scan_structure(root, key);
         for run in &profile.runs {
             self.runs_hist[run_bucket(*run)] += 1;
         }
@@ -744,6 +914,42 @@ impl Surveyor {
         }
     }
 
+    /// Record one quirk hit: first key wins as the sample.
+    fn note_quirk(&mut self, kind: QuirkKind, key: &str) {
+        *self.quirk_entries.entry(kind).or_insert(0) += 1;
+        self.quirk_samples
+            .entry(kind)
+            .or_insert_with(|| key.to_string());
+    }
+
+    /// Classify every kind in this entry and detect structural quirks.
+    ///
+    /// The cost model needs two things about a kind: whether it ever held
+    /// element children (structural) or not (leaf), and at how many depths it
+    /// appeared (several depths means the block floats).
+    fn scan_structure(&mut self, root: &Handle, key: &str) {
+        let root_kind = kind_of(root);
+        let mut facts: BTreeMap<SlotKind, KindFacts> = BTreeMap::new();
+        let scan = walk_structure(root, &root_kind, 1, &mut facts);
+
+        for (kind, facts) in facts {
+            if facts.has_children {
+                self.structural_kinds.insert(kind);
+            } else {
+                self.leaf_kinds.insert(kind);
+            }
+            if facts.depths.len() > 1 {
+                self.note_quirk(QuirkKind::FloatingBlock, key);
+            }
+        }
+        if scan.nested {
+            self.note_quirk(QuirkKind::NestedEntry, key);
+        }
+        if scan.long_run {
+            self.note_quirk(QuirkKind::LongRun, key);
+        }
+    }
+
     /// Consume the surveyor and build the report.
     #[must_use]
     pub fn finish(self) -> SurveyReport {
@@ -770,6 +976,11 @@ impl Surveyor {
                         kind: kind.label(),
                         tag: kind.tag.clone(),
                         class: kind.class.clone(),
+                        shape: if self.structural_kinds.contains(kind) {
+                            KindClass::Structural
+                        } else {
+                            KindClass::Leaf
+                        },
                         occurrences: counter.occurrences,
                         entries: counter.entries,
                         presence: ratio(counter.entries, scanned),
@@ -985,6 +1196,52 @@ impl Surveyor {
             })
             .collect();
 
+        let quirks: Vec<QuirkReport> = QuirkKind::all()
+            .into_iter()
+            .map(|kind| {
+                let entries = self.quirk_entries.get(&kind).copied().unwrap_or(0);
+                QuirkReport {
+                    kind,
+                    entries,
+                    share: ratio(entries, scanned),
+                    sample: self.quirk_samples.get(&kind).cloned(),
+                }
+            })
+            .collect();
+
+        let structural_rules = self
+            .kinds
+            .keys()
+            .filter(|kind| self.structural_kinds.contains(*kind))
+            .count();
+        let leaf_rules = self
+            .kinds
+            .keys()
+            .filter(|kind| {
+                !self.structural_kinds.contains(*kind) && self.leaf_kinds.contains(*kind)
+            })
+            .count();
+        let rules = structural_rules + leaf_rules;
+        let ops = quirks.iter().filter(|quirk| quirk.entries > 0).count();
+        let verdict = cost_grade(rules, ops);
+        let mut basis = vec![
+            format!("structural kinds: {structural_rules}"),
+            format!("leaf kinds: {leaf_rules}"),
+            format!("structural quirks: {ops}"),
+            "cluster counts are not part of the estimate".to_string(),
+        ];
+        basis.push(match verdict {
+            CostGrade::Easy => "grade easy: rules <= 20 and ops <= 2".to_string(),
+            CostGrade::Medium => "grade medium: rules <= 60 and ops <= 4".to_string(),
+            CostGrade::Hard => "grade hard: above the medium bounds".to_string(),
+        });
+        let estimate = EstimateReport {
+            rules,
+            ops,
+            verdict,
+            basis,
+        };
+
         SurveyReport {
             tool: "odc survey",
             schema: 2,
@@ -997,6 +1254,8 @@ impl Surveyor {
             empty: self.empty,
             unparsed: self.unparsed,
             multi_entry_records: self.multi_entry_records,
+            estimate,
+            quirks,
             kinds: KindsReport {
                 core: core_kinds,
                 decor: decor_kinds,
@@ -1024,6 +1283,16 @@ impl Surveyor {
                 reasons,
             },
         }
+    }
+}
+
+fn cost_grade(rules: usize, ops: usize) -> CostGrade {
+    if rules <= EASY_ESTIMATED_RULES && ops <= EASY_ESTIMATED_OPS {
+        CostGrade::Easy
+    } else if rules <= MEDIUM_ESTIMATED_RULES && ops <= MEDIUM_ESTIMATED_OPS {
+        CostGrade::Medium
+    } else {
+        CostGrade::Hard
     }
 }
 
@@ -1143,6 +1412,62 @@ fn has_heading(node: &Handle) -> bool {
         }
     }
     false
+}
+
+/// What one entry says about a kind: whether it holds children, and where.
+#[derive(Default)]
+struct KindFacts {
+    has_children: bool,
+    depths: BTreeSet<usize>,
+}
+
+/// Quirks found by one recursive walk; they need no per-kind state.
+#[derive(Clone, Copy, Default)]
+struct StructureScan {
+    nested: bool,
+    long_run: bool,
+}
+
+/// Walk one entry and collect per-kind facts plus structural quirks.
+///
+/// A kind is structural when it ever held element children; a run is long when
+/// more than LONG_RUN_THRESHOLD same-kind siblings sit under one parent; an
+/// entry is nested when the entry container kind appears inside itself.
+fn walk_structure(
+    node: &Handle,
+    root_kind: &SlotKind,
+    depth: usize,
+    facts: &mut BTreeMap<SlotKind, KindFacts>,
+) -> StructureScan {
+    let mut scan = StructureScan::default();
+    let mut run_kind: Option<SlotKind> = None;
+    let mut run_len = 0usize;
+    for child in element_children(node) {
+        let kind = kind_of(&child);
+        if run_kind.as_ref() == Some(&kind) {
+            run_len += 1;
+        } else {
+            run_kind = Some(kind.clone());
+            run_len = 1;
+        }
+        if run_len > LONG_RUN_THRESHOLD {
+            scan.long_run = true;
+        }
+
+        let children = element_children(&child);
+        let entry = facts.entry(kind.clone()).or_default();
+        entry.depths.insert(depth);
+        if !children.is_empty() {
+            entry.has_children = true;
+        }
+        if kind == *root_kind {
+            scan.nested = true;
+        }
+        let deeper = walk_structure(&child, root_kind, depth + 1, facts);
+        scan.nested |= deeper.nested;
+        scan.long_run |= deeper.long_run;
+    }
+    scan
 }
 
 fn element_depth(node: &Handle) -> usize {
@@ -1734,7 +2059,7 @@ mod tests {
         let markdown = report.to_markdown("demo.mdx", 12);
         assert!(markdown.contains("## Core slot kinds (2)"));
         assert!(markdown.contains("## Core templates (1)"));
-        assert!(markdown.contains("## Verdict: EASY"));
+        assert!(markdown.contains("## Cluster verdict (reference only): EASY"));
         assert!(markdown.contains("demo.mdx"));
         assert!(markdown.contains("clusters_all"));
     }
@@ -1861,5 +2186,150 @@ mod tests {
             ..SurveyOptions::default()
         })
         .is_ok());
+    }
+
+    #[test]
+    fn kinds_are_classified_structural_and_leaf() {
+        let report = survey(&[&entry(
+            r#"<span class="hwd">a</span><div class="def"><span class="x">b</span></div>"#,
+        )]);
+        let shapes: BTreeMap<&str, KindClass> = report
+            .kinds
+            .core
+            .iter()
+            .map(|kind| (kind.kind.as_str(), kind.shape))
+            .collect();
+        assert_eq!(shapes.get("span.hwd"), Some(&KindClass::Leaf));
+        assert_eq!(shapes.get("div.def"), Some(&KindClass::Structural));
+        assert_eq!(shapes.get("span.x"), Some(&KindClass::Leaf));
+    }
+
+    #[test]
+    fn a_record_with_two_entries_reports_the_multi_entry_quirk() {
+        let html = format!(
+            "{}{}",
+            entry(r#"<span class="hwd">a</span>"#),
+            entry(r#"<span class="hwd">b</span>"#)
+        );
+        let report = survey(&[&html]);
+        let quirk = report
+            .quirks
+            .iter()
+            .find(|quirk| quirk.kind == QuirkKind::MultiEntry)
+            .expect("multi_entry");
+        assert_eq!(quirk.entries, 1);
+        assert_eq!(report.estimate.ops, 1);
+    }
+
+    #[test]
+    fn a_nested_entry_reports_the_nested_entry_quirk() {
+        let html = entry(&entry(r#"<span class="hwd">a</span>"#));
+        let report = survey(&[&html]);
+        let quirk = report
+            .quirks
+            .iter()
+            .find(|quirk| quirk.kind == QuirkKind::NestedEntry)
+            .expect("nested_entry");
+        assert_eq!(quirk.entries, 1);
+    }
+
+    #[test]
+    fn a_long_sibling_run_reports_the_long_run_quirk() {
+        let mut body = String::from(r#"<span class="hwd">a</span>"#);
+        for _ in 0..(LONG_RUN_THRESHOLD + 1) {
+            body.push_str(r#"<span class="ex">x</span>"#);
+        }
+        let report = survey(&[&entry(&body)]);
+        let quirk = report
+            .quirks
+            .iter()
+            .find(|quirk| quirk.kind == QuirkKind::LongRun)
+            .expect("long_run");
+        assert_eq!(quirk.entries, 1);
+    }
+
+    #[test]
+    fn a_repeated_block_at_two_depths_reports_the_floating_block_quirk() {
+        let body =
+            r#"<span class="def">a</span><div class="wrap"><span class="def">b</span></div>"#;
+        let report = survey(&[&entry(body)]);
+        let quirk = report
+            .quirks
+            .iter()
+            .find(|quirk| quirk.kind == QuirkKind::FloatingBlock)
+            .expect("floating_block");
+        assert_eq!(quirk.entries, 1);
+    }
+
+    #[test]
+    fn the_estimate_counts_kinds_as_rules_and_quirks_as_ops() {
+        let mut body = String::from(
+            r#"<span class="hwd">a</span><div class="def"><span class="x">b</span></div>"#,
+        );
+        for _ in 0..(LONG_RUN_THRESHOLD + 1) {
+            body.push_str(r#"<span class="ex">x</span>"#);
+        }
+        let report = survey(&[&entry(&body)]);
+        assert_eq!(
+            report.estimate.rules,
+            report.kinds.core.len() + report.decor.kinds
+        );
+        assert_eq!(report.estimate.ops, 1);
+        assert!(report
+            .estimate
+            .basis
+            .iter()
+            .any(|line| line.contains("structural")));
+    }
+
+    #[test]
+    fn cost_grade_follows_the_fixed_bounds() {
+        assert_eq!(cost_grade(20, 2), CostGrade::Easy);
+        assert_eq!(cost_grade(21, 2), CostGrade::Medium);
+        assert_eq!(cost_grade(20, 3), CostGrade::Medium);
+        assert_eq!(cost_grade(60, 4), CostGrade::Medium);
+        assert_eq!(cost_grade(61, 4), CostGrade::Hard);
+        assert_eq!(cost_grade(10, 5), CostGrade::Hard);
+    }
+
+    #[test]
+    fn markdown_leads_with_the_cost_estimate() {
+        let report = survey(&[&entry(r#"<span class="hwd">a</span>"#)]);
+        let markdown = report.to_markdown("book.mdx", 1);
+        let estimate_at = markdown.find("## Cost estimate").expect("estimate heading");
+        let cluster_at = markdown
+            .find("## Cluster verdict")
+            .expect("cluster heading");
+        assert!(estimate_at < cluster_at);
+        assert!(markdown.contains("estimated rules"));
+        assert!(markdown.contains("Cluster counts below describe the skeleton only"));
+    }
+
+    #[test]
+    fn the_estimate_stays_within_a_quarter_of_the_ldoce6_rule_count() {
+        // The real rule count comes from the shipped profile, never a constant.
+        let profile: serde_json::Value =
+            serde_json::from_str(include_str!("../../../profiles/ldoce6.profile.json"))
+                .expect("profile json");
+        let real = profile["rules"].as_array().expect("rules array").len();
+        assert!(real > 0);
+
+        // LDOCE6 measured 56 slot kinds in the 2026-11-07 full run (docs/
+        // dialect-survey.md: 42 core + 14 decorative). Names below are
+        // synthetic because the estimator only counts kinds and shapes.
+        const LDOCE6_KINDS: usize = 56;
+        let mut body = String::new();
+        for index in 0..LDOCE6_KINDS {
+            body.push_str(&format!(r#"<span class="k{index}">x</span>"#));
+        }
+        let report = survey(&[&entry(&body)]);
+        assert_eq!(report.estimate.rules, LDOCE6_KINDS);
+
+        let error = (report.estimate.rules as f64 - real as f64).abs() / real as f64;
+        assert!(
+            error <= 0.25,
+            "estimate {} vs real {real}: {error:.3}",
+            report.estimate.rules
+        );
     }
 }

@@ -19,6 +19,12 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   profile — slot kinds, template clusters, outlier share, coverage and a fixed
   easy / medium / manual verdict — and writes `survey.md`, `survey.json` and raw
   per-cluster samples. Model and baseline numbers: `docs/dialect-survey.md`.
+- Survey cost estimate: one rule per slot kind (structural or leaf) plus one
+  operator per structural quirk (`multi_entry`, `nested_entry`, `long_run`,
+  `floating_block`), graded easy / medium / hard. It tracks hand-written work
+  instead of template combinations: LDOCE6 estimates 56 rules against the 47 in
+  `profiles/ldoce6.profile.json` (+19%, inside the 25% gate). The old
+  cluster-based grade stays in the report as a reference only.
 - Engine: `profile_compare --source` compares an L1 fragment with the source
   fragment it was built from — D1 text bag, order inside a semantic block, P1
   skeleton invariants and source residue — so a dictionary without an adapter

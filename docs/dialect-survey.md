@@ -28,25 +28,62 @@ odc survey book.mdx --json               # 报告打到 stdout
 旧口径（E5）用「全部 kind 的集合」当签名，装饰块有没有出现会直接分裂模板，簇数里混着噪声；
 `clusters_all` 保留这个数字，只作对照，不参与档位判定。
 
+## 成本模型（E7：种类 ≈ 规则数）
+
+前两版都拿「组合」当人工量：E5 用全部 kind 的集合，E6 只留 ≥1% 的核心 kind。两者在
+LDOCE6 上都失败（11632 / 11186 簇），而事实是 LDOCE6 用 `profiles/ldoce6.profile.json`
+里的 47 条规则就适配成功，OALD9 一共只有 15 种槽位。
+
+**结论：人工量跟着「槽位种类数 + 结构怪癖类型数」走，不跟组合走。**可选块的有无
+不增加规则，只增加渲染分支。
+
+```
+estimated_rules = structural_kinds + leaf_kinds_used   # 每种一个映射规则
+estimated_ops   = 命中的结构怪癖类型数                  # 每类一个算子
+verdict:
+  easy   : estimated_rules <= 20 且 estimated_ops <= 2
+  medium : estimated_rules <= 60 且 estimated_ops <= 4
+  hard   : 其它
+```
+
+种类分两类（`kinds.core[].shape` / `kinds.decor[].shape` 之外，表格里也有 `shape` 列）：
+
+| 类别 | 判据 | 成本 |
+| --- | --- | --- |
+| `structural` | 出现过元素子节点（容器） | 1 条映射 + 子级自身的规则 |
+| `leaf` | 子节点只有文本或为空 | 1 条映射 |
+
+结构怪癖（`quirks`，只检测计数，不自动修）：
+
+| 怪癖 | 判据 | 需要的算子 |
+| --- | --- | --- |
+| `multi_entry` | 一条记录里有多个词条容器 | split |
+| `nested_entry` | 词条容器内又出现同 kind 容器 | demote / promote |
+| `long_run` | 同一父节点下同类兄弟 > 10 | group |
+| `floating_block` | 同一 kind 在 ≥2 个深度出现 | hoist |
+
+簇数从此只描述骨架分布：`clusters_core` / `clusters_all` 仍在报告里，但不参与定档。
+
 词条容器识别：`--entry-selector` > class 里含 `entry` token 的元素（取最外层，
 一条记录可以有多个）> 退化启发式（同签名重复出现、含标题、文本最长的容器）。
 识别不到任何容器 → 退出码 2。
 
-难度档位（核心口径，写死，不可调）：
+参考档位（旧核心口径，写死，可调不了，但**不再定档**）：
 
 - **easy**：core kinds ≤ 12 且 clusters_core ≤ 20 且离群词条占比 ≤ 5%
 - **medium**：core kinds ≤ 25 且 clusters_core ≤ 60
 - **manual**：其它
 
 阈值来自「一本能手工写完 profile 的词典该有多少骨架」这一判断，**不随词典调**；
-调阈值凑档位等于把尺子掰弯。
+调阈值凑档位等于把尺子掰弯。E7 起它只作参考，`survey.md` 里标为
+`## Cluster verdict (reference only)`；定档看上面的成本模型。
 
 ## 输出
 
 | 文件 | 内容 |
 | --- | --- |
-| `survey.md` | 人读：核心 kinds 表、装饰块表、clusters_core 全表、最大 200 簇的 layout + 样本 key、结构统计 |
-| `survey.json` | 机器读：`kinds.core / kinds.decor / clusters_core / clusters_all / coreless / coverage / decor / stats / verdict` |
+| `survey.md` | 人读：顶部先给成本估算（规则数 / 算子数 / 结论）与怪癖表，再给 kinds 表（含 `shape`）、装饰块表、clusters_core 全表、最大 200 簇的 layout + 样本 key、结构统计 |
+| `survey.json` | 机器读：`estimate{rules,ops,verdict,basis} / quirks[] / kinds.core / kinds.decor / clusters_core / clusters_all / coreless / coverage / decor / stats / verdict` |
 | `samples/<cluster-id>/<safe-key>.html` | 每簇最多 5 条原始 HTML（单条上限 256 KB，全局预算 64 MB） |
 
 `coverage` 给出覆盖 50% / 80% / 95% **已聚类词条**所需的簇数；分母不含 coreless。
@@ -90,3 +127,20 @@ LDOCE6：56 个 kind 里有 **42 个都 ≥ 1%**（`span.def` 98.8%、`span.pos`
 
 读法：核心 kinds 少说明词条骨架稳定；clusters_core 仍大且单例多，说明集合签名把可选块组合
 也数成了模板 —— 先看 `clusters_all - clusters_core` 判断装饰噪音，再看 `coverage` 判断真实长尾。
+
+## 成本模型校准（E7）
+
+真实规则数从 `profiles/ldoce6.profile.json` 的 `rules` 数组数出来，单测
+`the_estimate_stays_within_a_quarter_of_the_ldoce6_rule_count` 直接读该文件，不写死 47。
+
+| 词典 | 实测槽位种类 | estimated_rules | 真实规则数 | 误差 | 判定 |
+| --- | --- | --- | --- | --- | --- |
+| LDOCE6 | 56（42 核心 + 14 装饰） | 56 | 47（profile JSON） | +19.1% | 通过（≤25%） |
+| OALD9 | 15（7 核心 + 8 装饰） | 15 | 尚无 profile | – | 规则数已落在 easy 上界内 |
+
+误差 = `|estimate - real| / real`。上限 25% 是硬判据：**超了说明模型又错了，要停手报模型，
+不许调系数**。
+
+边界说明：本机没有 LDOCE6 / OALD9 的原始 `.mdx`，上表「实测槽位种类」引用 2026-11-07
+全量实测（见上一节）；`estimated_ops` 需要原始语料才能数怪癖，本机未复测，因此 verdict
+只写规则数能支撑的部分，不猜算子数。
