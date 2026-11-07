@@ -18,7 +18,7 @@ use std::time::Instant;
 use odc_core::adapters::ldoce6::{redirect_target, same_words, Ldoce6, SLUG};
 use odc_core::adapters::{count_slots, Adapter, ParseContext, SlotCounts};
 use odc_core::html::repair_sanitize;
-use odc_core::mdx::{MdxRecord, MdxSource, MAX_RECORD_BYTES};
+use odc_core::mdx::{MdxRecord, MdxSource, DEFAULT_MAX_RECORD_BYTES};
 use serde_json::{json, Map, Value};
 
 /// Number of randomly sampled records.
@@ -173,7 +173,7 @@ fn sample_records(
             stats.skipped_redirect += 1;
             continue;
         }
-        if record.html.len() > MAX_RECORD_BYTES {
+        if record.html.len() > DEFAULT_MAX_RECORD_BYTES {
             stats.skipped_large += 1;
             continue;
         }
