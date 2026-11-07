@@ -42,12 +42,21 @@ pub const SAMPLE_BUDGET_BYTES: usize = 64 * 1024 * 1024;
 /// A cluster holding less than this share of the corpus is an outlier.
 pub const OUTLIER_SHARE: f64 = 0.005;
 
+/// A slot kind must appear in at least this share of the entries to shape a
+/// template. Everything rarer is a decorative block: measured and reported on
+/// its own, never allowed to multiply templates.
+pub const DEFAULT_CORE_THRESHOLD: f64 = 0.01;
+
+/// How many decorative kinds the markdown summary lists.
+const DECOR_TOP: usize = 20;
+
 /// Hard-coded verdict thresholds. They are constants, not flags: changing them
-/// would change the ruler.
-const EASY_KINDS: usize = 12;
+/// would change the ruler. They are expressed in the core caliber: only kinds
+/// at or above DEFAULT_CORE_THRESHOLD, and templates built from them, count.
+const EASY_CORE_KINDS: usize = 12;
 const EASY_CLUSTERS: usize = 20;
 const EASY_OUTLIERS: f64 = 0.05;
-const MEDIUM_KINDS: usize = 25;
+const MEDIUM_CORE_KINDS: usize = 25;
 const MEDIUM_CLUSTERS: usize = 60;
 
 /// One slot kind: a tag plus the first token of its class attribute.
@@ -140,6 +149,8 @@ pub struct SurveyOptions {
     pub entry_selector: Option<String>,
     /// Raw samples kept per cluster.
     pub samples_per_cluster: usize,
+    /// Share of entries a slot kind needs to shape a template.
+    pub core_threshold: f64,
 }
 
 impl Default for SurveyOptions {
@@ -148,6 +159,7 @@ impl Default for SurveyOptions {
             limit: None,
             entry_selector: None,
             samples_per_cluster: DEFAULT_SAMPLES_PER_CLUSTER,
+            core_threshold: DEFAULT_CORE_THRESHOLD,
         }
     }
 }
@@ -192,6 +204,67 @@ pub struct KindReport {
     pub presence: f64,
 }
 
+/// Slot kinds split into the ones that decide templates and the rest.
+#[derive(Clone, Debug, Serialize)]
+pub struct KindsReport {
+    /// Kinds at or above the core threshold.
+    pub core: Vec<KindReport>,
+    /// Kinds below it; these never shape a template.
+    pub decor: Vec<KindReport>,
+}
+
+impl KindsReport {
+    /// Every measured kind, core first then decorative.
+    pub fn all(&self) -> impl Iterator<Item = &KindReport> {
+        self.core.iter().chain(self.decor.iter())
+    }
+
+    /// Total number of measured kinds.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.core.len() + self.decor.len()
+    }
+
+    /// Whether no kind was measured at all.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+/// One decorative block in the summary.
+#[derive(Clone, Debug, Serialize)]
+pub struct DecorKind {
+    /// tag.class label.
+    pub kind: String,
+    /// Total occurrences.
+    pub count: usize,
+    /// Share of entries containing it, in percent.
+    pub entries_pct: f64,
+}
+
+/// Decorative blocks, reported apart from templates.
+#[derive(Clone, Debug, Serialize)]
+pub struct DecorReport {
+    /// Number of decorative kinds.
+    pub kinds: usize,
+    /// Share of entries touched by at least one decorative kind, in percent.
+    pub entries_touched_pct: f64,
+    /// The most frequent decorative kinds.
+    pub top: Vec<DecorKind>,
+}
+
+/// How many core templates are needed to cover most entries.
+#[derive(Clone, Copy, Debug, Default, Serialize)]
+pub struct CoverageReport {
+    /// Templates covering 50% of the templated entries.
+    pub c50: usize,
+    /// Templates covering 80% of the templated entries.
+    pub c80: usize,
+    /// Templates covering 95% of the templated entries.
+    pub c95: usize,
+}
+
 /// One template cluster.
 #[derive(Clone, Debug, Serialize)]
 pub struct ClusterReport {
@@ -234,10 +307,6 @@ pub struct OptionalKind {
 pub struct StatsReport {
     /// Share of entries held by the largest cluster.
     pub top_cluster_share: f64,
-    /// Clusters needed to cover 80% of the entries.
-    pub clusters_for_80: usize,
-    /// Clusters needed to cover 90% of the entries.
-    pub clusters_for_90: usize,
     /// Deepest element nesting seen inside an entry container.
     pub max_depth: usize,
     /// Mean element nesting depth.
@@ -294,10 +363,18 @@ pub struct SurveyReport {
     pub unparsed: usize,
     /// Records that held more than one entry container.
     pub multi_entry_records: usize,
-    /// Slot kind table, ordered by occurrences.
-    pub kinds: Vec<KindReport>,
-    /// Template clusters, ordered by size.
-    pub clusters: Vec<ClusterReport>,
+    /// Slot kinds split into core and decorative.
+    pub kinds: KindsReport,
+    /// Core template clusters, ordered by size.
+    pub clusters_core: Vec<ClusterReport>,
+    /// Template count under the old all-kinds caliber, kept for comparison.
+    pub clusters_all: usize,
+    /// Entries carrying no core slot kind.
+    pub coreless: usize,
+    /// How many core templates cover 50/80/95% of the templated entries.
+    pub coverage: CoverageReport,
+    /// Decorative blocks, counted apart from templates.
+    pub decor: DecorReport,
     /// Structural statistics.
     pub stats: StatsReport,
     /// Difficulty verdict.
@@ -334,14 +411,19 @@ impl SurveyReport {
         for reason in &self.verdict.reasons {
             out.push_str(&format!("- {reason}\n"));
         }
-        out.push('\n');
+        out.push_str(
+            "\n> Caliber: a template is built from core slot kinds only; decorative blocks are counted apart and never form a template. clusters_all keeps the old all-kinds count for comparison only.\n\n",
+        );
 
-        out.push_str(&format!("## Slot kinds ({})\n\n", self.kinds.len()));
+        out.push_str(&format!(
+            "## Core slot kinds ({})\n\n",
+            self.kinds.core.len()
+        ));
         out.push_str("| # | kind | occurrences | entries | presence |\n");
         out.push_str("|---|------|-------------|---------|----------|\n");
-        for (index, kind) in self.kinds.iter().enumerate() {
+        for (index, kind) in self.kinds.core.iter().enumerate() {
             out.push_str(&format!(
-                "| {} | {} | {} | {} | {:.1}% |\n",
+                "| {} | `{}` | {} | {} | {:.2}% |\n",
                 index + 1,
                 kind.kind,
                 kind.occurrences,
@@ -352,12 +434,37 @@ impl SurveyReport {
         out.push('\n');
 
         out.push_str(&format!(
-            "## Template clusters ({})\n\n",
-            self.clusters.len()
+            "## Decorative blocks ({} kinds, {:.2}% of entries touched)\n\n",
+            self.decor.kinds, self.decor.entries_touched_pct
         ));
-        out.push_str("| id | entries | share | outlier | kinds |\n");
-        out.push_str("|----|---------|-------|---------|-------|\n");
-        for cluster in &self.clusters {
+        if self.decor.top.is_empty() {
+            out.push_str("None: every measured kind is core.\n\n");
+        } else {
+            out.push_str("| # | kind | occurrences | entries |\n");
+            out.push_str("|---|------|-------------|---------|\n");
+            for (index, kind) in self.decor.top.iter().enumerate() {
+                out.push_str(&format!(
+                    "| {} | `{}` | {} | {:.2}% |\n",
+                    index + 1,
+                    kind.kind,
+                    kind.count,
+                    kind.entries_pct
+                ));
+            }
+            out.push('\n');
+        }
+
+        out.push_str(&format!(
+            "## Core templates ({})\n\n",
+            self.clusters_core.len()
+        ));
+        out.push_str(&format!(
+            "The old all-kinds caliber found {} templates; that number counted decorative noise, not work.\n\n",
+            self.clusters_all
+        ));
+        out.push_str("| id | entries | share | outlier | core kinds |\n");
+        out.push_str("|----|---------|-------|---------|------------|\n");
+        for cluster in &self.clusters_core {
             out.push_str(&format!(
                 "| {} | {} | {:.2}% | {} | {} |\n",
                 cluster.id,
@@ -368,12 +475,15 @@ impl SurveyReport {
             ));
         }
         out.push('\n');
+        if self.coreless > 0 {
+            out.push_str(&format!(
+                "{} entries carry no core slot at all and are counted apart.\n\n",
+                self.coreless
+            ));
+        }
 
-        // A full-book scan can produce thousands of singleton clusters. Keep
-        // the table complete (it is the census) but expand only the largest
-        // clusters; the rest stay in survey.json and samples/.
-        let detailed = self.clusters.len().min(200);
-        for cluster in self.clusters.iter().take(detailed) {
+        let detailed = self.clusters_core.len().min(200);
+        for cluster in self.clusters_core.iter().take(detailed) {
             out.push_str(&format!(
                 "### {} ({} entries, {:.2}%)\n",
                 cluster.id,
@@ -386,7 +496,6 @@ impl SurveyReport {
             let keys: Vec<&str> = cluster
                 .samples
                 .iter()
-                .take(3)
                 .map(|sample| sample.key.as_str())
                 .collect();
             if !keys.is_empty() {
@@ -394,26 +503,27 @@ impl SurveyReport {
             }
             out.push('\n');
         }
-        if self.clusters.len() > detailed {
+        if self.clusters_core.len() > detailed {
             out.push_str(&format!(
                 "Cluster details are expanded for the {detailed} largest clusters; the remaining {} are listed in survey.json and samples/ only.\n\n",
-                self.clusters.len() - detailed
+                self.clusters_core.len() - detailed
             ));
         }
 
         out.push_str("## Structure\n\n");
         out.push_str(&format!(
-            "- largest cluster: {:.1}% of entries\n",
+            "- largest template: {:.1}% of templated entries\n",
             self.stats.top_cluster_share * 100.0
         ));
         out.push_str(&format!(
-            "- clusters needed to cover 80% / 90% of entries: {} / {}\n",
-            self.stats.clusters_for_80, self.stats.clusters_for_90
+            "- templates needed to cover 50% / 80% / 95% of templated entries: {} / {} / {}\n",
+            self.coverage.c50, self.coverage.c80, self.coverage.c95
         ));
         out.push_str(&format!(
             "- depth: max {}, mean {:.2}\n",
             self.stats.max_depth, self.stats.mean_depth
         ));
+        out.push_str("- deepest nesting per entry:\n");
         for bucket in &self.stats.depth {
             out.push_str(&format!("  - depth {}: {}\n", bucket.label, bucket.count));
         }
@@ -425,13 +535,11 @@ impl SurveyReport {
         for bucket in &self.stats.runs {
             out.push_str(&format!("  - run {}: {}\n", bucket.label, bucket.count));
         }
-        if self.stats.optional.is_empty() {
-            out.push_str("- optional blocks: none\n");
-        } else {
-            out.push_str("- optional blocks (presence below 100%):\n");
+        if !self.stats.optional.is_empty() {
+            out.push_str("- kinds missing from some entries:\n");
             for kind in self.stats.optional.iter().take(20) {
                 out.push_str(&format!(
-                    "  - {}: {:.1}%\n",
+                    "  - `{}`: {:.2}% of entries\n",
                     kind.kind,
                     kind.presence * 100.0
                 ));
@@ -480,6 +588,16 @@ struct ClusterCounter {
     samples: Vec<SurveySample>,
 }
 
+/// Entries sharing one core signature, merged from the all-kinds clusters.
+#[derive(Default)]
+struct CoreGroup {
+    entries: usize,
+    /// Size of the largest all-kinds cluster behind this group.
+    largest: usize,
+    layout: String,
+    samples: Vec<SurveySample>,
+}
+
 /// Slots and shape of one entry container.
 struct EntryProfile {
     slots: BTreeSet<SlotKind>,
@@ -497,6 +615,12 @@ impl Surveyor {
     ///
     /// Fails with Error::InvalidArgument when the selector cannot be parsed.
     pub fn new(options: SurveyOptions) -> Result<Self> {
+        if !(options.core_threshold > 0.0 && options.core_threshold <= 1.0) {
+            return Err(Error::InvalidArgument(format!(
+                "core threshold must be in (0, 1], got {}",
+                options.core_threshold
+            )));
+        }
         let selector = match &options.entry_selector {
             Some(text) => Some(parse_selector(text)?),
             None => None,
@@ -630,53 +754,180 @@ impl Surveyor {
             (false, _, fallback) if fallback > 0 => EntrySource::Fallback,
             _ => EntrySource::None,
         };
+        let threshold = self.options.core_threshold;
 
-        let mut clusters: Vec<(Vec<SlotKind>, ClusterCounter)> =
+        // Split the measured kinds. A kind is core only when it shows up in at
+        // least the core threshold of the entries. Everything else is a
+        // decorative block: it is still counted, but it must not multiply
+        // templates.
+        let mut measured: Vec<(SlotKind, KindReport)> = self
+            .kinds
+            .iter()
+            .map(|(kind, counter)| {
+                (
+                    kind.clone(),
+                    KindReport {
+                        kind: kind.label(),
+                        tag: kind.tag.clone(),
+                        class: kind.class.clone(),
+                        occurrences: counter.occurrences,
+                        entries: counter.entries,
+                        presence: ratio(counter.entries, scanned),
+                    },
+                )
+            })
+            .collect();
+        measured.sort_by(|a, b| {
+            b.1.occurrences
+                .cmp(&a.1.occurrences)
+                .then_with(|| a.1.kind.cmp(&b.1.kind))
+        });
+        let mut core_keys: BTreeSet<SlotKind> = BTreeSet::new();
+        let mut core_kinds: Vec<KindReport> = Vec::new();
+        let mut decor_kinds: Vec<KindReport> = Vec::new();
+        for (key, report) in measured {
+            if report.presence >= threshold {
+                core_keys.insert(key);
+                core_kinds.push(report);
+            } else {
+                decor_kinds.push(report);
+            }
+        }
+
+        // Project the all-kinds clusters onto the core signature. The
+        // projection keeps entry counts exact; layout and samples come from the
+        // largest contributing all-kinds cluster.
+        let mut clusters_all: Vec<(Vec<SlotKind>, ClusterCounter)> =
             self.clusters.into_iter().collect();
-        clusters.sort_by(|a, b| b.1.entries.cmp(&a.1.entries).then_with(|| a.0.cmp(&b.0)));
+        clusters_all.sort_by(|a, b| b.1.entries.cmp(&a.1.entries).then_with(|| a.0.cmp(&b.0)));
+        let clusters_all_count = clusters_all.len();
 
-        let total_clusters = clusters.len();
-        let mut reports = Vec::with_capacity(total_clusters);
+        let mut grouped: BTreeMap<Vec<SlotKind>, CoreGroup> = BTreeMap::new();
+        let mut coreless = 0usize;
+        let mut decor_entries = 0usize;
+        for (template, mut counter) in clusters_all {
+            let entries = counter.entries;
+            if template.iter().any(|kind| !core_keys.contains(kind)) {
+                decor_entries += entries;
+            }
+            let signature: Vec<SlotKind> = template
+                .iter()
+                .filter(|kind| core_keys.contains(*kind))
+                .cloned()
+                .collect();
+            if signature.is_empty() {
+                coreless += entries;
+                continue;
+            }
+            let group = grouped.entry(signature).or_default();
+            group.entries += entries;
+            if entries > group.largest {
+                group.largest = entries;
+                group.layout = std::mem::take(&mut counter.layout);
+                group.samples = std::mem::take(&mut counter.samples);
+            }
+        }
+
+        let mut core_clusters: Vec<(Vec<SlotKind>, CoreGroup)> = grouped.into_iter().collect();
+        core_clusters.sort_by(|a, b| b.1.entries.cmp(&a.1.entries).then_with(|| a.0.cmp(&b.0)));
+
+        // Shares are measured against the entries that carry a core slot. The
+        // coreless bucket is reported on its own below.
+        let clustered = scanned.saturating_sub(coreless);
+        let mut reports = Vec::with_capacity(core_clusters.len());
         let mut outlier_entries = 0usize;
         let mut outlier_clusters = 0usize;
-        for (index, (template, counter)) in clusters.into_iter().enumerate() {
-            let share = ratio(counter.entries, scanned);
+        for (index, (signature, group)) in core_clusters.into_iter().enumerate() {
+            let share = ratio(group.entries, clustered);
             let outlier = share < OUTLIER_SHARE;
             if outlier {
                 outlier_clusters += 1;
-                outlier_entries += counter.entries;
+                outlier_entries += group.entries;
             }
             reports.push(ClusterReport {
                 id: format!("c{:03}", index + 1),
-                entries: counter.entries,
+                entries: group.entries,
                 share,
                 outlier,
-                kinds: template.iter().map(SlotKind::label).collect(),
-                layout: counter.layout,
-                samples: counter.samples,
+                kinds: signature.iter().map(SlotKind::label).collect(),
+                layout: group.layout,
+                samples: group.samples,
             });
         }
 
-        let mut kinds: Vec<KindReport> = self
-            .kinds
-            .iter()
-            .map(|(kind, counter)| KindReport {
-                kind: kind.label(),
-                tag: kind.tag.clone(),
-                class: kind.class.clone(),
-                occurrences: counter.occurrences,
-                entries: counter.entries,
-                presence: ratio(counter.entries, scanned),
-            })
-            .collect();
-        kinds.sort_by(|a, b| {
-            b.occurrences
-                .cmp(&a.occurrences)
-                .then_with(|| a.kind.cmp(&b.kind))
-        });
+        let mut coverage = CoverageReport::default();
+        let mut cumulative = 0usize;
+        for (index, cluster) in reports.iter().enumerate() {
+            cumulative += cluster.entries;
+            if coverage.c50 == 0 && cumulative as f64 >= 0.5 * clustered as f64 {
+                coverage.c50 = index + 1;
+            }
+            if coverage.c80 == 0 && cumulative as f64 >= 0.8 * clustered as f64 {
+                coverage.c80 = index + 1;
+            }
+            if coverage.c95 == 0 && cumulative as f64 >= 0.95 * clustered as f64 {
+                coverage.c95 = index + 1;
+                break;
+            }
+        }
 
-        let mut optional: Vec<OptionalKind> = kinds
+        let core_kind_count = core_kinds.len();
+        let cluster_count = reports.len();
+        let top_cluster_share = reports.first().map_or(0.0, |cluster| cluster.share);
+        let outlier_entry_share = ratio(outlier_entries, clustered);
+        let outlier_cluster_share = ratio(outlier_clusters, cluster_count);
+        let decor_entries_touched_pct = ratio(decor_entries, scanned) * 100.0;
+
+        let grade = if scanned == 0 || core_kind_count == 0 {
+            // Nothing was measured, or every slot is decorative noise: call it
+            // manual rather than easy so an unusable run never reads as a pass.
+            Verdict::Manual
+        } else if core_kind_count <= EASY_CORE_KINDS
+            && cluster_count <= EASY_CLUSTERS
+            && outlier_entry_share <= EASY_OUTLIERS
+        {
+            Verdict::Easy
+        } else if core_kind_count <= MEDIUM_CORE_KINDS && cluster_count <= MEDIUM_CLUSTERS {
+            Verdict::Medium
+        } else {
+            Verdict::Manual
+        };
+
+        let total_kinds = core_kind_count + decor_kinds.len();
+        let mut reasons = vec![
+            format!(
+                "core kinds: {core_kind_count} of {total_kinds} reach {:.2}% of entries (easy <= {EASY_CORE_KINDS}, medium <= {MEDIUM_CORE_KINDS})",
+                threshold * 100.0
+            ),
+            format!(
+                "core templates: {cluster_count} over {clustered} entries (easy <= {EASY_CLUSTERS}, medium <= {MEDIUM_CLUSTERS}); coreless entries: {coreless}"
+            ),
+            format!(
+                "decor blocks: {} kinds touching {decor_entries_touched_pct:.2}% of entries",
+                decor_kinds.len()
+            ),
+            format!(
+                "old caliber: {clusters_all_count} templates when every slot kind counted (comparison only)"
+            ),
+            format!(
+                "outlier entry share: {:.2}% of templated entries (easy <= {:.0}%)",
+                outlier_entry_share * 100.0,
+                EASY_OUTLIERS * 100.0
+            ),
+            format!(
+                "outlier clusters: {outlier_clusters} of {cluster_count} ({:.2}%)",
+                outlier_cluster_share * 100.0
+            ),
+        ];
+        if scanned == 0 {
+            reasons.insert(0, "no entry was measured".to_string());
+        } else if core_kind_count == 0 {
+            reasons.insert(0, "no slot kind reaches the core threshold".to_string());
+        }
+
+        let mut optional: Vec<OptionalKind> = core_kinds
             .iter()
+            .chain(decor_kinds.iter())
             .filter(|kind| kind.entries < scanned)
             .map(|kind| OptionalKind {
                 kind: kind.kind.clone(),
@@ -690,44 +941,19 @@ impl Surveyor {
                 .then_with(|| a.kind.cmp(&b.kind))
         });
 
-        let outlier_entry_share = ratio(outlier_entries, scanned);
-        let outlier_cluster_share = ratio(outlier_clusters, total_clusters);
-        let kind_count = kinds.len();
-        let cluster_count = reports.len();
-        let grade = if scanned == 0 {
-            // Nothing was measured; call it manual rather than easy so an empty
-            // run never reads as a pass.
-            Verdict::Manual
-        } else if kind_count <= EASY_KINDS
-            && cluster_count <= EASY_CLUSTERS
-            && outlier_entry_share <= EASY_OUTLIERS
-        {
-            Verdict::Easy
-        } else if kind_count <= MEDIUM_KINDS && cluster_count <= MEDIUM_CLUSTERS {
-            Verdict::Medium
-        } else {
-            Verdict::Manual
+        let decor = DecorReport {
+            kinds: decor_kinds.len(),
+            entries_touched_pct: decor_entries_touched_pct,
+            top: decor_kinds
+                .iter()
+                .take(DECOR_TOP)
+                .map(|kind| DecorKind {
+                    kind: kind.kind.clone(),
+                    count: kind.occurrences,
+                    entries_pct: kind.presence * 100.0,
+                })
+                .collect(),
         };
-        let mut reasons = vec![
-            format!(
-                "slot kinds: {kind_count} (easy <= {EASY_KINDS}, medium <= {MEDIUM_KINDS})"
-            ),
-            format!(
-                "template clusters: {cluster_count} (easy <= {EASY_CLUSTERS}, medium <= {MEDIUM_CLUSTERS})"
-            ),
-            format!(
-                "outlier entry share: {:.2}% (easy <= {:.0}%)",
-                outlier_entry_share * 100.0,
-                EASY_OUTLIERS * 100.0
-            ),
-            format!(
-                "outlier clusters: {outlier_clusters} of {total_clusters} ({:.2}%)",
-                outlier_cluster_share * 100.0
-            ),
-        ];
-        if scanned == 0 {
-            reasons.insert(0, "no entry was measured".to_string());
-        }
 
         let max_depth = self
             .depth_hist
@@ -759,40 +985,29 @@ impl Surveyor {
             })
             .collect();
 
-        let mut cumulative = 0usize;
-        let mut clusters_for_80 = 0usize;
-        let mut clusters_for_90 = 0usize;
-        for (index, cluster) in reports.iter().enumerate() {
-            cumulative += cluster.entries;
-            if clusters_for_80 == 0 && cumulative as f64 >= 0.8 * scanned as f64 {
-                clusters_for_80 = index + 1;
-            }
-            if clusters_for_90 == 0 && cumulative as f64 >= 0.9 * scanned as f64 {
-                clusters_for_90 = index + 1;
-                break;
-            }
-        }
-
-        let top_cluster_share = reports.first().map_or(0.0, |cluster| cluster.share);
-
         SurveyReport {
             tool: "odc survey",
-            schema: 1,
+            schema: 2,
             limit: self.options.limit,
             entry_selector: self.options.entry_selector,
             entry_source,
             records: self.records,
-            entries_scanned: scanned,
+            entries_scanned: self.entries_scanned,
             alias: self.alias,
             empty: self.empty,
             unparsed: self.unparsed,
             multi_entry_records: self.multi_entry_records,
-            kinds,
-            clusters: reports,
+            kinds: KindsReport {
+                core: core_kinds,
+                decor: decor_kinds,
+            },
+            clusters_core: reports,
+            clusters_all: clusters_all_count,
+            coreless,
+            coverage,
+            decor,
             stats: StatsReport {
                 top_cluster_share,
-                clusters_for_80,
-                clusters_for_90,
                 max_depth,
                 mean_depth: ratio(self.depth_sum, scanned),
                 depth,
@@ -802,7 +1017,7 @@ impl Surveyor {
             },
             verdict: VerdictReport {
                 grade,
-                kinds: kind_count,
+                kinds: core_kind_count,
                 clusters: cluster_count,
                 outlier_entry_share,
                 outlier_cluster_share,
@@ -1305,7 +1520,11 @@ mod tests {
     const ENTRY_A: &str = r#"<div class="entry"><span class="a"></span><span class="a"></span><span class="b"></span></div>"#;
 
     fn survey(htmls: &[&str]) -> SurveyReport {
-        let mut surveyor = Surveyor::new(SurveyOptions::default()).expect("options");
+        survey_with(SurveyOptions::default(), htmls)
+    }
+
+    fn survey_with(options: SurveyOptions, htmls: &[&str]) -> SurveyReport {
+        let mut surveyor = Surveyor::new(options).expect("options");
         for (index, html) in htmls.iter().enumerate() {
             surveyor.push(&format!("k{index}"), html);
         }
@@ -1316,12 +1535,16 @@ mod tests {
         format!(r#"<div class="entry">{body}</div>"#)
     }
 
+    fn as_refs(htmls: &[String]) -> Vec<&str> {
+        htmls.iter().map(String::as_str).collect()
+    }
+
     #[test]
     fn folds_consecutive_siblings() {
         let report = survey(&[ENTRY_A]);
         let kind = report
             .kinds
-            .iter()
+            .all()
             .find(|kind| kind.kind == "span.a")
             .expect("span.a measured");
         assert_eq!(kind.occurrences, 2);
@@ -1335,25 +1558,30 @@ mod tests {
         let first = entry(r#"<span class="a"></span><span class="b"></span>"#);
         let second = entry(r#"<span class="b"></span><span class="a"></span>"#);
         let report = survey(&[&first, &second]);
-        assert_eq!(report.clusters.len(), 1);
-        assert_eq!(report.clusters[0].entries, 2);
+        assert_eq!(report.clusters_core.len(), 1);
+        assert_eq!(report.clusters_core[0].entries, 2);
     }
 
     #[test]
-    fn rare_cluster_is_an_outlier() {
-        let common = entry(r#"<p class="x"></p>"#);
-        let rare = entry(r#"<p class="x"></p><p class="rare"></p>"#);
-        let mut htmls = vec![common.as_str(); 200];
-        htmls.push(&rare);
+    fn a_rare_core_combination_is_an_outlier() {
+        let plain = entry(r#"<p class="a"></p>"#);
+        let ab = entry(r#"<p class="a"></p><p class="b"></p>"#);
+        let ac = entry(r#"<p class="a"></p><p class="c"></p>"#);
+        let abc = entry(r#"<p class="a"></p><p class="b"></p><p class="c"></p>"#);
+        let mut htmls = vec![plain.as_str(); 960];
+        htmls.extend(vec![ab.as_str(); 16]);
+        htmls.extend(vec![ac.as_str(); 16]);
+        htmls.extend(vec![abc.as_str(); 4]);
         let report = survey(&htmls);
-        assert_eq!(report.entries_scanned, 201);
-        let outlier = report
-            .clusters
+        assert_eq!(report.kinds.core.len(), 3);
+        assert_eq!(report.kinds.decor.len(), 0);
+        let combined = report
+            .clusters_core
             .iter()
-            .find(|cluster| cluster.entries == 1)
-            .expect("outlier cluster");
-        assert!(outlier.outlier);
-        assert_eq!(report.verdict.grade, Verdict::Easy);
+            .find(|cluster| cluster.kinds.len() == 3)
+            .expect("combined template");
+        assert_eq!(combined.entries, 4);
+        assert!(combined.outlier);
     }
 
     #[test]
@@ -1363,8 +1591,8 @@ mod tests {
         let mut htmls = vec![common.as_str(); 9];
         htmls.push(&rare);
         let report = survey(&htmls);
-        assert_eq!(report.stats.clusters_for_80, 1);
-        assert_eq!(report.stats.clusters_for_90, 1);
+        assert_eq!(report.coverage.c80, 1);
+        assert_eq!(report.coverage.c95, 2);
         assert!((report.stats.top_cluster_share - 0.9).abs() < 1e-9);
     }
 
@@ -1376,7 +1604,7 @@ mod tests {
         assert_eq!(report.alias, 1);
         assert_eq!(report.records, 1);
         assert_eq!(report.entries_scanned, 0);
-        assert!(report.clusters.is_empty());
+        assert!(report.clusters_core.is_empty());
         assert_eq!(report.entry_source, EntrySource::None);
         assert_eq!(report.verdict.grade, Verdict::Manual);
     }
@@ -1403,8 +1631,7 @@ mod tests {
         let report = surveyor.finish();
         assert_eq!(report.entry_source, EntrySource::Selector);
         assert_eq!(report.entries_scanned, 1);
-        assert_eq!(report.kinds.len(), 2);
-        assert!(report.kinds.iter().all(|kind| kind.kind.starts_with("p.")));
+        assert!(report.kinds.all().all(|kind| kind.kind.starts_with("p.")));
     }
 
     #[test]
@@ -1444,11 +1671,11 @@ mod tests {
         let report = survey(&[&html]);
         assert_eq!(report.entries_scanned, 2);
         assert_eq!(report.multi_entry_records, 1);
-        assert_eq!(report.clusters.len(), 2);
+        assert_eq!(report.clusters_core.len(), 2);
     }
 
     #[test]
-    fn too_many_kinds_needs_a_human() {
+    fn too_many_core_kinds_need_a_human() {
         let mut body = String::new();
         for index in 0..26 {
             body.push_str(&format!(r#"<i class="k{index}"></i>"#));
@@ -1492,24 +1719,147 @@ mod tests {
 
     #[test]
     fn sample_names_are_safe_and_unique() {
-        assert_eq!(sample_file_name("a/b c"), "a_b_c.html");
-        assert_eq!(sample_file_name("___"), "entry.html");
-
         let mut surveyor = Surveyor::new(SurveyOptions::default()).expect("options");
         surveyor.push("same", ENTRY_A);
         surveyor.push("same", ENTRY_A);
         let report = surveyor.finish();
-        let samples = &report.clusters[0].samples;
+        let samples = &report.clusters_core[0].samples;
         assert_eq!(samples.len(), 2);
         assert_ne!(samples[0].file, samples[1].file);
     }
 
     #[test]
-    fn markdown_lists_kinds_and_verdict() {
+    fn markdown_lists_kinds_templates_and_verdict() {
         let report = survey(&[ENTRY_A]);
         let markdown = report.to_markdown("demo.mdx", 12);
-        assert!(markdown.contains("## Slot kinds (2)"));
+        assert!(markdown.contains("## Core slot kinds (2)"));
+        assert!(markdown.contains("## Core templates (1)"));
         assert!(markdown.contains("## Verdict: EASY"));
         assert!(markdown.contains("demo.mdx"));
+        assert!(markdown.contains("clusters_all"));
+    }
+
+    #[test]
+    fn decorative_blocks_do_not_multiply_templates() {
+        let plain = entry(r#"<p class="a"></p>"#);
+        let mut htmls = vec![plain.clone(); 100];
+        for index in 0..50 {
+            htmls.push(entry(&format!(
+                r#"<p class="a"></p><span class="noise{index}"></span>"#
+            )));
+        }
+        let refs = as_refs(&htmls);
+        let report = survey(&refs);
+        // Every noisy entry is its own all-kinds signature...
+        assert_eq!(report.clusters_all, 51);
+        // ...but they all share one core template.
+        assert_eq!(report.clusters_core.len(), 1);
+        assert_eq!(report.clusters_core[0].entries, 150);
+        assert_eq!(report.kinds.core.len(), 1);
+        assert_eq!(report.decor.kinds, 50);
+        assert_eq!(report.coreless, 0);
+        assert_eq!(report.verdict.grade, Verdict::Easy);
+    }
+
+    #[test]
+    fn entries_without_a_core_kind_land_in_the_coreless_bucket() {
+        let common = entry(r#"<p class="a"></p>"#);
+        let mut htmls = vec![common.as_str(); 200];
+        let odd = entry(r#"<span class="o1"></span><span class="o2"></span>"#);
+        htmls.push(&odd);
+        let report = survey(&htmls);
+        assert_eq!(report.coreless, 1);
+        assert_eq!(report.clusters_core.len(), 1);
+        assert_eq!(report.clusters_core[0].entries, 200);
+        assert!((report.clusters_core[0].share - 1.0).abs() < 1e-9);
+        assert_eq!(report.decor.kinds, 2);
+    }
+
+    #[test]
+    fn the_core_threshold_is_inclusive() {
+        let plain = entry(r#"<p class="a"></p>"#);
+        let extra = entry(r#"<p class="a"></p><p class="b"></p>"#);
+
+        let mut exact = vec![plain.clone(); 99];
+        exact.push(extra.clone());
+        let refs = as_refs(&exact);
+        let report = survey(&refs);
+        assert_eq!(report.kinds.core.len(), 2);
+        assert_eq!(report.kinds.decor.len(), 0);
+
+        let mut below = vec![plain; 100];
+        below.push(extra);
+        let refs = as_refs(&below);
+        let report = survey(&refs);
+        assert_eq!(report.kinds.core.len(), 1);
+        assert_eq!(report.kinds.decor.len(), 1);
+        assert_eq!(report.kinds.decor[0].kind, "p.b");
+    }
+
+    #[test]
+    fn raising_the_threshold_turns_kinds_into_decor() {
+        let plain = entry(r#"<p class="a"></p>"#);
+        let extra = entry(r#"<p class="a"></p><p class="b"></p>"#);
+        let mut htmls = vec![plain; 90];
+        htmls.extend(vec![extra; 10]);
+        let refs = as_refs(&htmls);
+
+        let default = survey(&refs);
+        assert_eq!(default.kinds.core.len(), 2);
+
+        let strict = survey_with(
+            SurveyOptions {
+                core_threshold: 0.2,
+                ..SurveyOptions::default()
+            },
+            &refs,
+        );
+        assert_eq!(strict.kinds.core.len(), 1);
+        assert_eq!(strict.kinds.decor.len(), 1);
+        assert_eq!(strict.kinds.decor[0].kind, "p.b");
+    }
+
+    #[test]
+    fn coverage_reports_fifty_eighty_and_ninety_five() {
+        let a = entry(r#"<p class="a"></p>"#);
+        let b = entry(r#"<p class="a"></p><p class="b"></p>"#);
+        let c = entry(r#"<p class="a"></p><p class="c"></p>"#);
+        let mut htmls = vec![a.as_str(); 60];
+        htmls.extend(vec![b.as_str(); 20]);
+        htmls.extend(vec![c.as_str(); 20]);
+        let report = survey(&htmls);
+        assert_eq!(report.coverage.c50, 1);
+        assert_eq!(report.coverage.c80, 2);
+        assert_eq!(report.coverage.c95, 3);
+    }
+
+    #[test]
+    fn decor_summary_counts_kinds_and_entries() {
+        let plain = entry(r#"<p class="a"></p>"#);
+        let mut htmls = vec![plain.as_str(); 199];
+        let noisy = entry(r#"<p class="a"></p><span class="n1"></span><span class="n2"></span>"#);
+        htmls.push(&noisy);
+        let report = survey(&htmls);
+        assert_eq!(report.decor.kinds, 2);
+        assert_eq!(report.decor.top.len(), 2);
+        assert_eq!(report.decor.top[0].count, 1);
+        assert!((report.decor.top[0].entries_pct - 0.5).abs() < 1e-9);
+        assert!((report.decor.entries_touched_pct - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_core_threshold_outside_the_unit_interval_is_rejected() {
+        for bad in [0.0, -0.5, 1.5] {
+            assert!(Surveyor::new(SurveyOptions {
+                core_threshold: bad,
+                ..SurveyOptions::default()
+            })
+            .is_err());
+        }
+        assert!(Surveyor::new(SurveyOptions {
+            core_threshold: 1.0,
+            ..SurveyOptions::default()
+        })
+        .is_ok());
     }
 }

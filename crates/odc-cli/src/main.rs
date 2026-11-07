@@ -346,6 +346,9 @@ enum Command {
         /// CSS subset selector for the entry container.
         #[arg(long, value_name = "SEL")]
         entry_selector: Option<String>,
+        /// Share of entries a slot kind needs to shape a template.
+        #[arg(long, value_name = "RATIO", default_value_t = 0.01)]
+        core_threshold: f64,
         /// Print the report as JSON instead of a summary.
         #[arg(long)]
         json: bool,
@@ -905,8 +908,9 @@ fn run() -> odc_core::Result<ExitCode> {
             out,
             limit,
             entry_selector,
+            core_threshold,
             json,
-        } => run_survey(&file, &out, limit, entry_selector, json),
+        } => run_survey(&file, &out, limit, entry_selector, core_threshold, json),
         Command::VerifyRelease {
             dir,
             pub_file,
@@ -2559,6 +2563,7 @@ fn run_survey(
     out: &Path,
     limit: usize,
     entry_selector: Option<String>,
+    core_threshold: f64,
     json: bool,
 ) -> odc_core::Result<ExitCode> {
     let started = std::time::Instant::now();
@@ -2566,6 +2571,7 @@ fn run_survey(
     let mut surveyor = Surveyor::new(SurveyOptions {
         limit: if limit == 0 { None } else { Some(limit) },
         entry_selector,
+        core_threshold,
         ..SurveyOptions::default()
     })?;
     for record in source.records() {
@@ -2589,7 +2595,7 @@ fn run_survey(
     }
 
     std::fs::create_dir_all(out)?;
-    for cluster in &report.clusters {
+    for cluster in &report.clusters_core {
         if cluster.samples.is_empty() {
             continue;
         }
