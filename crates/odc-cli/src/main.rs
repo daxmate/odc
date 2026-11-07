@@ -349,6 +349,16 @@ enum Command {
         /// Share of entries a slot kind needs to shape a template.
         #[arg(long, value_name = "RATIO", default_value_t = 0.01)]
         core_threshold: f64,
+        /// Write a stratified sample of body records as JSONL for
+        /// `profile_compare --source`.
+        #[arg(long, value_name = "PATH")]
+        dump_jsonl: Option<PathBuf>,
+        /// Records to keep in the sample.
+        #[arg(long, value_name = "N", default_value_t = 500)]
+        dump_limit: usize,
+        /// Fixed stride inside every bucket (default: derived from size / quota).
+        #[arg(long, value_name = "N")]
+        dump_stride: Option<usize>,
         /// Print the report as JSON instead of a summary.
         #[arg(long)]
         json: bool,
@@ -909,8 +919,21 @@ fn run() -> odc_core::Result<ExitCode> {
             limit,
             entry_selector,
             core_threshold,
+            dump_jsonl,
+            dump_limit,
+            dump_stride,
             json,
-        } => run_survey(&file, &out, limit, entry_selector, core_threshold, json),
+        } => run_survey(
+            &file,
+            &out,
+            limit,
+            entry_selector,
+            core_threshold,
+            dump_jsonl.as_deref(),
+            dump_limit,
+            dump_stride,
+            json,
+        ),
         Command::VerifyRelease {
             dir,
             pub_file,
@@ -2558,12 +2581,16 @@ fn write_private_key(path: &std::path::Path, contents: &str) -> odc_core::Result
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_survey(
     file: &Path,
     out: &Path,
     limit: usize,
     entry_selector: Option<String>,
     core_threshold: f64,
+    dump_jsonl: Option<&Path>,
+    dump_limit: usize,
+    dump_stride: Option<usize>,
     json: bool,
 ) -> odc_core::Result<ExitCode> {
     let started = std::time::Instant::now();
@@ -2631,7 +2658,73 @@ fn run_survey(
             out.join("survey.json").display()
         );
     }
+    if let Some(path) = dump_jsonl {
+        write_dump(&source, path, dump_limit, dump_stride)?;
+    }
     Ok(ExitCode::SUCCESS)
+}
+
+/// Write a deterministic stratified sample of body records as JSONL.
+///
+/// The same dictionary and the same flags always produce the same file, which
+/// is what makes a dialect measurement reproducible by hand.
+fn write_dump(
+    source: &MdxSource,
+    path: &Path,
+    limit: usize,
+    stride: Option<usize>,
+) -> odc_core::Result<()> {
+    use odc_core::survey_dump::{sample, SamplePlan, SampledRecord};
+
+    let plan = SamplePlan {
+        limit,
+        stride,
+        ..SamplePlan::default()
+    };
+    let records = || {
+        source.records().map(|record| {
+            record.map(|record| SampledRecord {
+                key: record.key,
+                text: record.html,
+            })
+        })
+    };
+    let report = sample(records, plan)?;
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+    let mut jsonl = String::new();
+    let mut keys = String::new();
+    for record in &report.records {
+        let line = json!({ "key": record.key, "text": record.text });
+        jsonl.push_str(&line.to_string());
+        jsonl.push('\n');
+        keys.push_str(&record.key);
+        keys.push('\n');
+    }
+    std::fs::write(path, jsonl)?;
+    let keys_path = path.with_extension("keys");
+    std::fs::write(&keys_path, keys)?;
+
+    eprintln!(
+        "dump {}: {} body records ({} alias, {} empty), kept {} -> {} + {}",
+        path.display(),
+        report.body,
+        report.alias,
+        report.empty,
+        report.records.len(),
+        path.display(),
+        keys_path.display()
+    );
+    for bucket in &report.buckets {
+        eprintln!(
+            "  {} {}/{} of {} (stride {})",
+            bucket.bucket, bucket.taken, bucket.quota, bucket.available, bucket.stride
+        );
+    }
+    Ok(())
 }
 
 fn set_file_mode(path: &std::path::Path, mode: u32) -> odc_core::Result<()> {

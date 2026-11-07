@@ -45,6 +45,7 @@ pub mod snapshot;
 pub mod store;
 pub mod stylesheets;
 pub mod survey;
+pub mod survey_dump;
 pub mod varint;
 
 pub use entry::{Def, Entry};

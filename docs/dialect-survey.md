@@ -90,7 +90,38 @@ verdict:
 
 退出码：`0` 产出成功（**不代表词典好适配**）；`2` 识别不到词条容器；`1` 输入/参数错误。
 
-## 实测（2026-11-07，release 构建，全量）
+## 分层抽样导出（`--dump-jsonl`）
+
+手挑的 60 条证明不了「整本词典」，全量复验又太贵。`--dump-jsonl` 把整本词典压成一份
+**可复现**的小样本，直接喂给 `examples/profile_compare.rs --source`：
+
+```bash
+odc survey 'OALD9.mdx' --out /tmp/odc-oald9/survey \
+  --dump-jsonl /tmp/odc-oald9/stratified.jsonl --dump-limit 500
+
+cargo run --release -q -p odc-core --example profile_compare -- \
+  --profile profiles/oald9.profile.json \
+  --source /tmp/odc-oald9/stratified.jsonl \
+  --report /tmp/oald9-stratified.json
+```
+
+抽样规则（写死、不含随机数，同一个 MDX 永远得到同一份样本）：
+
+1. 按 headword 首字符分桶：`A`–`Z` 各一桶，数字、符号和非 ASCII 首字母统一进 `#` 桶；
+2. 每桶配额 = 该桶正文条数占全量的比例 × `--dump-limit`，不足 5 条按 5 条补
+   （桶本身不够、或总预算撑不起时除外：先削配额最大的桶）；
+3. 桶内按 `--dump-stride` 等距取（默认 `桶大小 / 配额`，至少 1），取满配额为止；
+4. `@@@LINK=` 别名记录和空正文一律不写。
+
+输出两个文件：
+
+| 文件 | 内容 |
+| --- | --- |
+| `<path>` | JSONL，每行 `{"key": …, "text": …}`。`text` 是原始记录 HTML，也正是 `--source` 的输入契约（见 `profile-contract.md` §2） |
+| `<path>.keys` | 抽样清单，一行一个 headword，便于人工复核与二分排查 |
+
+各桶的 `取到/配额/可用/步长` 会打到 stderr，方便直接看出抽样是否覆盖均匀。
+
 
 | 词典 | 口径 | records | entries | 核心 kinds | 装饰 kinds | clusters_core | clusters_all | 离群词条占比 | 覆盖 80% | verdict | 耗时 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |

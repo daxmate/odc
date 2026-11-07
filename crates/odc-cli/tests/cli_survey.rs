@@ -110,3 +110,73 @@ fn survey_rejects_unsupported_selectors() {
         .code(1)
         .stderr(predicate::str::contains("unsupported selector syntax"));
 }
+#[test]
+fn survey_dumps_a_reproducible_stratified_sample() {
+    let temp = TempDir::new().expect("temp dir");
+    let mut rows: Vec<(String, String)> = Vec::new();
+    for (letter, name) in [
+        ("a", "alpha"),
+        ("b", "bravo"),
+        ("c", "charlie"),
+        ("d", "delta"),
+    ] {
+        for index in 0..10 {
+            rows.push((
+                format!("{name}{index}"),
+                format!(
+                    r#"<div class="entry"><span class="hwd">{name}{index}</span><span class="def">{letter}</span></div>"#
+                ),
+            ));
+        }
+    }
+    rows.push(("alpha-alias".to_string(), "@@@LINK=alpha0".to_string()));
+    let entries: Vec<(&str, &str)> = rows
+        .iter()
+        .map(|(key, html)| (key.as_str(), html.as_str()))
+        .collect();
+    let mdx = fixture(temp.path(), &entries);
+    let out = temp.path().join("report");
+    let first = temp.path().join("first.jsonl");
+    let second = temp.path().join("second.jsonl");
+
+    for path in [&first, &second] {
+        odc()
+            .arg("survey")
+            .arg(&mdx)
+            .arg("--out")
+            .arg(&out)
+            .arg("--dump-jsonl")
+            .arg(path)
+            .arg("--dump-limit")
+            .arg("20")
+            .assert()
+            .success();
+    }
+
+    let first_text = fs::read_to_string(&first).expect("jsonl");
+    let second_text = fs::read_to_string(&second).expect("jsonl");
+    assert_eq!(first_text, second_text, "the sample must be reproducible");
+
+    let lines: Vec<&str> = first_text.lines().collect();
+    assert_eq!(lines.len(), 20);
+    let mut buckets = std::collections::BTreeMap::new();
+    for line in &lines {
+        let record: Value = serde_json::from_str(line).expect("jsonl record");
+        assert!(record["key"].is_string());
+        assert!(record["text"].is_string());
+        assert!(!record["text"]
+            .as_str()
+            .unwrap_or("")
+            .starts_with("@@@LINK="));
+        let key = record["key"].as_str().expect("key").to_string();
+        *buckets.entry(key[..1].to_uppercase()).or_insert(0) += 1;
+    }
+    assert_eq!(buckets.len(), 4);
+    for count in buckets.values() {
+        assert!(*count >= 5, "every bucket keeps its floor: {buckets:?}");
+    }
+
+    let keys = fs::read_to_string(first.with_extension("keys")).expect("keys manifest");
+    assert_eq!(keys.lines().count(), lines.len());
+    assert!(!keys.contains("@@@LINK"));
+}
