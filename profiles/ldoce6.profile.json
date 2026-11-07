@@ -52,11 +52,18 @@
       "id": "cleanup.popup-trigger",
       "stage": "cleanup",
       "priority": 90,
-      "op": "drop",
+      "op": "map",
       "match": {
         "selector": "span.popup-button"
       },
-      "rationale": "ldoce6.rs:755-760 drops the popup button label: it is UI chrome (P4), never entry text; the payload itself is the following div.at-link."
+      "emit": {
+        "element": "span",
+        "classes": [
+          "odc-ref-caption"
+        ],
+        "move": "children"
+      },
+      "rationale": "The popup button label is source text (B, 2026-11-07): keep it as span.odc-ref-caption so the engine can move it into the bar summary; it is never invented by the engine."
     },
     {
       "id": "cleanup.version-tag",

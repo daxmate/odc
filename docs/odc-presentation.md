@@ -59,15 +59,15 @@ section.odc-entry[data-odc-dict, data-odc-key, data-odc-lang, data-odc-homograph
 ### P3 引用块折叠
 
 - 每个引用块 → `details.odc-refbar__item[data-odc-kind=<种类>]`
-- `<summary class="odc-refbar__label">` 只带标记 `data-odc-ui="<kind>"`，**不写文案**（D2）：引擎不翻译、不改写、也不发明英文
+- `<summary class="odc-refbar__label">` 的文本 = **源 caption**（B，2026-11-07：源里的折叠条文案算正文）；源里没有 caption 时留空。空格位 `<span data-odc-ui="<kind>"></span>` 保留供客户端按语言覆盖；引擎不翻译、不改写、也不发明英文
 - 内容包在 `div.odc-ref-panel` 内
 - 种类枚举：`toc | thesaurus | collocation | word-family | word-origin | usage | other`
 
 ### P4 UI 文案与内容分离
 
-- 「Entry menu」是 **UI 文案**，不是词典内容。
-- L1 中写成 `<summary class="odc-refbar__label" data-odc-ui="entry-menu"></summary>`（空文本 + 标记），由客户端按语言注入。
-- **理由**：现状把英文硬编码进正文，导致 (a) 中文用户看到英文；(b) 文本保真统计把 UI 文案算成「差异」。
+- 源里写出的折叠条文案（`span.popup-button`）是**正文**，原样保留；只有源里没写的文案才由客户端注入。
+- 源里没有 caption 时写成 `<summary class="odc-refbar__label"><span data-odc-ui="entry-menu"></span></summary>`，客户端按语言填充空槽位。
+- **理由**：引擎硬编码英文会 (a) 让中文用户看到英文；(b) 把引擎自造文案混进正文。`data-odc-ui` 标在空槽位而不是整个 label 上，是因为文本保真统计按 `data-odc-ui` 整棵子树排除——标在 label 上会把源文案也判成 chrome。
 
 ### P5 派生属性（引擎盖章）
 
@@ -147,7 +147,7 @@ section.odc-entry[data-odc-dict, data-odc-key, data-odc-lang, data-odc-homograph
 
 ### D2 落地表述
 
-> UI 文案（Entry menu 等）不进入 L1 文本：`<summary class="odc-refbar__label" data-odc-ui="entry-menu"></summary>`。客户端按语言注入；文本保真统计排除带 `data-odc-ui` 的元素文本。
+> 引擎不产生文案：L1 的 label 文本取自源（`<summary class="odc-refbar__label"><span data-odc-ui="entry-menu"></span>Entry menu</summary>`）；源里没有时只留空槽位，客户端按语言注入。文本保真统计排除带 `data-odc-ui` 的元素文本，所以标记只落在空槽位上。
 
 ### D3 落地表述
 

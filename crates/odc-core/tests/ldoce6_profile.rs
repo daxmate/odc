@@ -60,13 +60,14 @@ fn root_entry_carries_context_attributes() {
 }
 
 #[test]
-fn popup_trigger_label_is_chrome_and_never_reaches_the_text() {
+fn popup_trigger_label_is_kept_as_source_caption() {
     let html = r#"<div><span class="entry"><span class="hwd">alpha</span>
         <span class="buttons"><span class="popup-button">Word Origin<atl></atl></span></span>
         <script>var x = 1;</script></span>"#;
     let out = apply(html);
-    // P4: the trigger caption is UI chrome; only the payload survives.
-    assert!(!out.contains("Word Origin"), "{out}");
+    // B: the trigger caption is source text; only its source classes and the
+    // runtime script are dropped.
+    assert!(out.contains("Word Origin"), "{out}");
     assert!(!out.contains("popup-button\""), "{out}");
     assert!(!out.contains("<script"), "{out}");
     assert!(!out.contains("var x"), "{out}");

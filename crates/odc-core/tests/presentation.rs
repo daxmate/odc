@@ -114,9 +114,12 @@ fn p2_p3_p4_reference_bar_chrome() {
         html.contains(r#"<details class="odc-refbar__item" data-odc-kind="word-origin">"#),
         "{html}"
     );
-    // D2: the caption is a marker, not text; the box title stays source text.
+    // B: a panel the source never captioned keeps only the kind marker; the
+    // box title stays source text.
     assert!(
-        html.contains(r#"<summary class="odc-refbar__label" data-odc-ui="word-origin"></summary>"#),
+        html.contains(
+            r#"<summary class="odc-refbar__label"><span data-odc-ui="word-origin"></span></summary>"#
+        ),
         "{html}"
     );
     assert!(!html.contains("Word Origin<"), "{html}");
@@ -473,4 +476,68 @@ fn split_attribute_conflict_favours_the_split_node() {
     );
     assert_eq!(out.matches(r##"data-y="child""##).count(), 2, "{out}");
     assert!(!out.contains(r##"data-y="container""##), "{out}");
+}
+
+/// A caption the source spelled out becomes the summary label verbatim, and
+/// it is lifted out of the panel body instead of being repeated there.
+#[test]
+fn source_caption_becomes_the_summary_label() {
+    let fragment = r#"<div><span class="entry"><span class="hwd">make</span><span class="buttons"><span class="popup-button">Collocations</span><div class="at-link"><span class="entry"><span class="popheader popcollo">COLLOCATIONS</span></span><span class="collocate">do</span></div></span></span></div>"#;
+    let (html, report) = render(fragment, "make");
+    assert!(
+        html.contains(
+            r#"<summary class="odc-refbar__label"><span data-odc-ui="collocation"></span>Collocations</summary>"#
+        ),
+        "{html}"
+    );
+    assert_eq!(html.matches("Collocations").count(), 1, "{html}");
+    assert!(report.ok(), "{report:?}");
+}
+
+/// Without a source caption the label is empty and carries only the kind
+/// marker: the engine still refuses to invent an English label.
+#[test]
+fn panel_without_a_source_caption_keeps_an_empty_label() {
+    let fragment = r#"<div><span class="entry"><span class="hwd">make</span><div class="at-link"><span class="entry"><span class="popheader popetym">WORD ORIGIN</span></span>from Latin</div></span></div>"#;
+    let (html, report) = render(fragment, "make");
+    assert!(
+        html.contains(
+            r#"<summary class="odc-refbar__label"><span data-odc-ui="word-origin"></span></summary>"#
+        ),
+        "{html}"
+    );
+    assert!(!html.contains("Word Origin"), "{html}");
+    assert!(report.ok(), "{report:?}");
+}
+
+/// Entity characters survive the trip from the source caption to the label.
+#[test]
+fn caption_entities_are_decoded_and_escaped_once() {
+    let fragment = r#"<div><span class="entry"><span class="hwd">make</span><span class="buttons"><span class="popup-button">Dúid &amp; co</span><div class="at-link"><span class="entry"><span class="popheader popcollo">COLLOCATIONS</span></span>body</div></span></span></div>"#;
+    let (html, report) = render(fragment, "make");
+    assert!(html.contains(r#"</span>Dúid &amp; co</summary>"#), "{html}");
+    assert!(report.ok(), "{report:?}");
+}
+
+/// A second block of the same kind cannot share the one summary label; its
+/// caption remains next to the block so no source word disappears.
+#[test]
+fn a_second_block_of_the_same_kind_keeps_its_caption_text() {
+    let fragment = r#"<div><span class="entry"><span class="hwd">make</span><span class="buttons"><span class="popup-button">Collocations</span><div class="at-link"><span class="entry"><span class="popheader popcollo">COLLOCATIONS</span></span>one</div><span class="popup-button">Collocations</span><div class="at-link"><span class="entry"><span class="popheader popcollo">COLLOCATIONS</span></span>two</div></span></span></div>"#;
+    let (html, report) = render(fragment, "make");
+    assert_eq!(html.matches("Collocations").count(), 2, "{html}");
+    assert!(
+        html.contains(r#"<p class="odc-ref-caption">Collocations</p>"#),
+        "{html}"
+    );
+    assert!(report.ok(), "{report:?}");
+}
+
+/// A caption whose payload never arrived stays where the source put it: the
+/// text is source text and must not be dropped silently.
+#[test]
+fn a_caption_without_a_block_stays_source_text() {
+    let fragment = r#"<div><span class="entry"><span class="hwd">make</span><span class="buttons"><span class="popup-button">Examples</span></span></span></div>"#;
+    let (html, _report) = render(fragment, "make");
+    assert!(html.contains("Examples"), "{html}");
 }
