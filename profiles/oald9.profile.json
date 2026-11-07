@@ -1,0 +1,698 @@
+{
+  "schema_version": "odc.profile/v0",
+  "profile_id": "oald9.en",
+  "spec": {
+    "version": "odc-html-spec/0.1",
+    "slot_registry": "odc-slots/0.1"
+  },
+  "dict": {
+    "name": "oald9",
+    "edition": "9th",
+    "lang": "en"
+  },
+  "engine": {
+    "name": "human",
+    "temperature": 0,
+    "host": "local"
+  },
+  "provenance": {
+    "source": "human",
+    "samples": [
+      "/tmp/odc-oald9-samples (60 body + 3 alias records of the OALD9 English-English dump)"
+    ],
+    "note": "Written against the dialect survey in /tmp/odc-oald9-survey.md; rules cite the source shape they adapt. Measured with `profile_compare --source`: structure 60/60, order 60/60, bag 60/60, clean 18/60. The clean failures are all inside engine-owned cross-reference subtrees (see the report), not a missing rule.",
+    "rationale": "One rule per source role rather than one per slot: OALD9 spells the same role with several tags (li/span.sn-g, ol/span.idm-gs) and its record prelude has no L1 slot."
+  },
+  "rules": [
+    {
+      "id": "cleanup.forbidden",
+      "stage": "cleanup",
+      "priority": 100,
+      "op": "drop",
+      "match": {
+        "selector": "link, script, style, head, title, br"
+      },
+      "rationale": "Stylesheet link, escaping <br> and document furniture carry no entry text."
+    },
+    {
+      "id": "cleanup.jump-anchor",
+      "stage": "cleanup",
+      "priority": 90,
+      "op": "drop",
+      "match": {
+        "selector": "a[id]"
+      },
+      "rationale": "a#uuid are jump targets the source links to; they hold no text of their own."
+    },
+    {
+      "id": "root.entry",
+      "stage": "root",
+      "priority": 100,
+      "op": "map",
+      "match": {
+        "selector": "div.entry",
+        "cardinality": {
+          "min": 1
+        }
+      },
+      "emit": {
+        "element": "section",
+        "classes": [
+          "odc-entry"
+        ],
+        "move": "children",
+        "data": {
+          "odc-dict": "@dict",
+          "odc-key": "@key",
+          "odc-lang": "@lang"
+        }
+      },
+      "rationale": "Each div.entry is one homograph / part of speech; a record holds 1-4 of them and every one keeps the record identity, so no head is thrown away."
+    },
+    {
+      "id": "split.head-group",
+      "stage": "split",
+      "priority": 100,
+      "op": "unwrap",
+      "match": {
+        "selector": ".h-g, .top-container, .top-g"
+      },
+      "rationale": "ol.h-g, div.top-container and div.top-g are left open in the source, so the parser nests the whole entry inside them; unwrapping restores the flat sibling run the engine's P1 rebuild reads."
+    },
+    {
+      "id": "slot.head",
+      "stage": "slot",
+      "priority": 100,
+      "op": "map",
+      "match": {
+        "selector": ".webtop-g"
+      },
+      "emit": {
+        "element": "header",
+        "classes": [
+          "odc-head"
+        ],
+        "move": "children"
+      },
+      "rationale": "div.webtop-g is the headword line."
+    },
+    {
+      "id": "slot.hw",
+      "stage": "slot",
+      "priority": 95,
+      "op": "map",
+      "match": {
+        "selector": "h2.h"
+      },
+      "emit": {
+        "element": "h1",
+        "classes": [
+          "odc-hw"
+        ],
+        "move": "children"
+      },
+      "rationale": "h2.h is the headword."
+    },
+    {
+      "id": "slot.head-anchor-pos",
+      "stage": "slot",
+      "priority": 90,
+      "op": "map",
+      "match": {
+        "selector": "a.to-top span.pos, a.to-pos span.pos"
+      },
+      "emit": {
+        "element": "span",
+        "move": "children"
+      },
+      "rationale": "The head repeats the part of speech inside its jump anchors; the repetition keeps its text but must not become a second position marker."
+    },
+    {
+      "id": "slot.phon",
+      "stage": "slot",
+      "priority": 85,
+      "op": "map",
+      "match": {
+        "selector": ".pron-gs"
+      },
+      "emit": {
+        "element": "div",
+        "classes": [
+          "odc-phon"
+        ],
+        "move": "children"
+      },
+      "rationale": "div.pron-gs groups the accent pronunciations."
+    },
+    {
+      "id": "slot.phon-variant",
+      "stage": "slot",
+      "priority": 80,
+      "op": "map",
+      "match": {
+        "selector": ".pron-g[geo]"
+      },
+      "emit": {
+        "element": "span",
+        "classes": [
+          "odc-phon"
+        ],
+        "move": "children"
+      },
+      "rationale": "One span.pron-g per accent; the geo attribute disappears with the map."
+    },
+    {
+      "id": "slot.pos",
+      "stage": "slot",
+      "priority": 75,
+      "op": "map",
+      "match": {
+        "selector": "span.pos",
+        "scope": [
+          "entry"
+        ]
+      },
+      "emit": {
+        "element": "span",
+        "classes": [
+          "odc-pos"
+        ],
+        "move": "children"
+      },
+      "rationale": "The part of speech the engine derives data-odc-pos from."
+    },
+    {
+      "id": "slot.level",
+      "stage": "slot",
+      "priority": 70,
+      "op": "map",
+      "match": {
+        "selector": "a.oxford3000"
+      },
+      "emit": {
+        "element": "span",
+        "classes": [
+          "odc-level"
+        ],
+        "move": "children",
+        "data": {
+          "odc-kind": "oxford3000"
+        }
+      },
+      "rationale": "Oxford 3000 band marker (an empty anchor in the source)."
+    },
+    {
+      "id": "slot.level-academic",
+      "stage": "slot",
+      "priority": 69,
+      "op": "map",
+      "match": {
+        "selector": "a.academic"
+      },
+      "emit": {
+        "element": "span",
+        "classes": [
+          "odc-level"
+        ],
+        "move": "children",
+        "data": {
+          "odc-kind": "academic"
+        }
+      },
+      "rationale": "Academic word list marker."
+    },
+    {
+      "id": "slot.inflection",
+      "stage": "slot",
+      "priority": 65,
+      "op": "map",
+      "match": {
+        "selector": ".if-gs"
+      },
+      "emit": {
+        "element": "span",
+        "classes": [
+          "odc-inflection"
+        ],
+        "move": "children"
+      },
+      "rationale": "span.if-gs is the inflection group."
+    },
+    {
+      "id": "slot.variant",
+      "stage": "slot",
+      "priority": 60,
+      "op": "map",
+      "match": {
+        "selector": ".v-gs"
+      },
+      "emit": {
+        "element": "span",
+        "classes": [
+          "odc-hw-alt"
+        ],
+        "move": "children",
+        "data": {
+          "odc-kind": "variant"
+        }
+      },
+      "rationale": "span.v-gs is the spelling-variant group (also / abbreviation / US spelling)."
+    },
+    {
+      "id": "slot.audio",
+      "stage": "slot",
+      "priority": 55,
+      "op": "attr",
+      "match": {
+        "selector": "a.sound"
+      },
+      "emit": {
+        "classes": [
+          "odc-audio"
+        ],
+        "attributes": {
+          "-class": "",
+          "-otitle": "",
+          "-onclick": "",
+          "-type": ""
+        }
+      },
+      "rationale": "The pronunciation button keeps its href (resolved later into a resource) and loses its behaviour classes."
+    },
+    {
+      "id": "structure.sense-group",
+      "stage": "structure",
+      "priority": 100,
+      "op": "unwrap",
+      "match": {
+        "selector": ".sn-gs"
+      },
+      "rationale": "span.sn-gs only groups the sense list; the source never wraps it in ul/ol."
+    },
+    {
+      "id": "structure.sense",
+      "stage": "structure",
+      "priority": 95,
+      "op": "map",
+      "match": {
+        "selector": ".sn-g"
+      },
+      "emit": {
+        "element": "div",
+        "classes": [
+          "odc-sense"
+        ],
+        "move": "children"
+      },
+      "rationale": "li.sn-g / span.sn-g is one numbered sense; OALD9 mixes both tags for the same role."
+    },
+    {
+      "id": "structure.number",
+      "stage": "structure",
+      "priority": 92,
+      "op": "map",
+      "match": {
+        "selector": ".num"
+      },
+      "emit": {
+        "element": "span",
+        "classes": [
+          "odc-sense-number"
+        ],
+        "move": "children"
+      },
+      "rationale": "The printed sense number stays as text next to the engine's own numbering."
+    },
+    {
+      "id": "structure.def",
+      "stage": "structure",
+      "priority": 90,
+      "op": "map",
+      "match": {
+        "selector": ".def"
+      },
+      "emit": {
+        "element": "span",
+        "classes": [
+          "odc-def"
+        ],
+        "move": "children"
+      },
+      "rationale": "span.def is the definition."
+    },
+    {
+      "id": "structure.examples",
+      "stage": "structure",
+      "priority": 88,
+      "op": "map",
+      "match": {
+        "selector": ".x-gs"
+      },
+      "emit": {
+        "element": "div",
+        "classes": [
+          "odc-examples"
+        ],
+        "move": "children"
+      },
+      "rationale": "span.x-gs groups the examples of one sense."
+    },
+    {
+      "id": "structure.example",
+      "stage": "structure",
+      "priority": 86,
+      "op": "map",
+      "match": {
+        "selector": "span.x"
+      },
+      "emit": {
+        "element": "span",
+        "classes": [
+          "odc-example"
+        ],
+        "move": "children"
+      },
+      "rationale": "span.x is one example sentence."
+    },
+    {
+      "id": "structure.example-inner",
+      "stage": "structure",
+      "priority": 84,
+      "op": "unwrap",
+      "match": {
+        "selector": ".rx-g"
+      },
+      "rationale": "span.rx-g is a transparent example wrapper; three nesting shapes share it."
+    },
+    {
+      "id": "structure.idioms",
+      "stage": "structure",
+      "priority": 80,
+      "op": "map",
+      "match": {
+        "selector": ".idm-gs"
+      },
+      "emit": {
+        "element": "section",
+        "classes": [
+          "odc-idioms"
+        ],
+        "move": "children"
+      },
+      "rationale": "Idiom group container (ol and span both used)."
+    },
+    {
+      "id": "structure.idiom",
+      "stage": "structure",
+      "priority": 78,
+      "op": "map",
+      "match": {
+        "selector": ".idm-g"
+      },
+      "emit": {
+        "element": "article",
+        "classes": [
+          "odc-idiom"
+        ],
+        "move": "children"
+      },
+      "rationale": "One idiom entry."
+    },
+    {
+      "id": "structure.idiom-hw",
+      "stage": "structure",
+      "priority": 76,
+      "op": "map",
+      "match": {
+        "selector": ".idm"
+      },
+      "emit": {
+        "element": "h3",
+        "classes": [
+          "odc-idiom-hw"
+        ],
+        "move": "children"
+      },
+      "rationale": "The idiom headword."
+    },
+    {
+      "id": "structure.pv-group",
+      "stage": "structure",
+      "priority": 74,
+      "op": "map",
+      "match": {
+        "selector": ".pv-gs"
+      },
+      "emit": {
+        "element": "section",
+        "classes": [
+          "odc-phrasal-verbs"
+        ],
+        "move": "children"
+      },
+      "rationale": "Phrasal-verb group container."
+    },
+    {
+      "id": "structure.pv",
+      "stage": "structure",
+      "priority": 72,
+      "op": "map",
+      "match": {
+        "selector": ".pv-g"
+      },
+      "emit": {
+        "element": "article",
+        "classes": [
+          "odc-phrasal-verb"
+        ],
+        "move": "children"
+      },
+      "rationale": "One phrasal verb; a pv-g may hold two headword variants (survey B5)."
+    },
+    {
+      "id": "structure.pv-hw",
+      "stage": "structure",
+      "priority": 70,
+      "op": "map",
+      "match": {
+        "selector": "h4.pv"
+      },
+      "emit": {
+        "element": "h3",
+        "classes": [
+          "odc-phrasal-verb-hw"
+        ],
+        "move": "children"
+      },
+      "rationale": "The phrasal-verb headword."
+    },
+    {
+      "id": "structure.ref-topic",
+      "stage": "structure",
+      "priority": 68,
+      "op": "map",
+      "match": {
+        "selector": ".collapse[otitle^=\"Topic \"]"
+      },
+      "emit": {
+        "element": "div",
+        "classes": [
+          "odc-ref-block"
+        ],
+        "move": "children",
+        "data": {
+          "odc-kind": "topic"
+        }
+      },
+      "rationale": "Topic boxes carry a per-word otitle (Topic Tennis, Topic Sky, ...); prefix matching keeps them in one rule (survey B2)."
+    },
+    {
+      "id": "structure.ref-box",
+      "stage": "structure",
+      "priority": 66,
+      "op": "map",
+      "match": {
+        "selector": ".collapse[otitle]"
+      },
+      "emit": {
+        "element": "div",
+        "classes": [
+          "odc-ref-block"
+        ],
+        "move": "children",
+        "data": {
+          "odc-kind": "reference"
+        }
+      },
+      "rationale": "Every study box shares span.collapse[otitle] > span.unbox > heading + body."
+    },
+    {
+      "id": "structure.ref-inner",
+      "stage": "structure",
+      "priority": 64,
+      "op": "map",
+      "match": {
+        "selector": ".unbox"
+      },
+      "emit": {
+        "element": "div",
+        "classes": [
+          "odc-ref"
+        ],
+        "move": "children"
+      },
+      "rationale": "span.unbox is the box body wrapper."
+    },
+    {
+      "id": "structure.ref-title",
+      "stage": "structure",
+      "priority": 62,
+      "op": "map",
+      "match": {
+        "selector": ".heading"
+      },
+      "emit": {
+        "element": "span",
+        "classes": [
+          "odc-ref-title"
+        ],
+        "move": "children"
+      },
+      "rationale": "Box title; the engine repeats it as the reference-bar label."
+    },
+    {
+      "id": "structure.ref-body",
+      "stage": "structure",
+      "priority": 60,
+      "op": "map",
+      "match": {
+        "selector": ".body"
+      },
+      "emit": {
+        "element": "div",
+        "classes": [
+          "odc-ref-body"
+        ],
+        "move": "children"
+      },
+      "rationale": "Box body."
+    },
+    {
+      "id": "structure.crossref",
+      "stage": "structure",
+      "priority": 58,
+      "op": "attr",
+      "match": {
+        "selector": "a[href^=\"entry://\"]"
+      },
+      "emit": {
+        "classes": [
+          "odc-crossref"
+        ],
+        "attributes": {
+          "-class": "",
+          "-otitle": "",
+          "-onclick": "",
+          "-type": ""
+        }
+      },
+      "rationale": "Jump links keep href, the only attribute clean_ok allows for a link."
+    },
+    {
+      "id": "structure.topic-link",
+      "stage": "structure",
+      "priority": 57,
+      "op": "attr",
+      "match": {
+        "selector": "a.Ref"
+      },
+      "emit": {
+        "classes": [
+          "odc-crossref"
+        ],
+        "attributes": {
+          "-class": "",
+          "-otitle": "",
+          "-onclick": "",
+          "-type": ""
+        }
+      },
+      "rationale": "/topic/ links are site topics, not entries; they keep href and lose the otitle tooltip."
+    },
+    {
+      "id": "structure.deadref",
+      "stage": "structure",
+      "priority": 56,
+      "op": "unwrap",
+      "match": {
+        "selector": ".deadxref, .ndv"
+      },
+      "rationale": "Dead references are plain text in the source (survey 5.8)."
+    },
+    {
+      "id": "structure.image",
+      "stage": "structure",
+      "priority": 54,
+      "op": "attr",
+      "match": {
+        "selector": "img"
+      },
+      "emit": {
+        "classes": [
+          "odc-img"
+        ],
+        "attributes": {
+          "-class": "",
+          "-onclick": "",
+          "-style": "",
+          "-otitle": ""
+        }
+      },
+      "rationale": "A picture is two stacked <img> toggled by onclick; class and handler go, src/alt stay."
+    },
+    {
+      "id": "structure.enlarge",
+      "stage": "structure",
+      "priority": 52,
+      "op": "unwrap",
+      "match": {
+        "selector": ".ox-enlarge, a.topic"
+      },
+      "rationale": "div.ox-enlarge is the image toggle wrapper and a.topic its click target."
+    },
+    {
+      "id": "structure.prelude",
+      "stage": "structure",
+      "priority": 50,
+      "op": "map",
+      "match": {
+        "selector": ".dict-top"
+      },
+      "emit": {
+        "element": "div",
+        "classes": [
+          "odc-unmapped"
+        ],
+        "move": "children",
+        "data": {
+          "odc-kind": "prelude"
+        }
+      },
+      "rationale": "The record prelude (a jump link that repeats the part of speech) has no L1 slot; it becomes the unmapped escape hatch so its text survives the bag."
+    },
+    {
+      "id": "structure.typography",
+      "stage": "structure",
+      "priority": 10,
+      "op": "map",
+      "match": {
+        "selector": ".geo, .sep, .prefix, .bre, .name, .wrap, .separator, .xr-gs, .xr-g, .xh, .cf, .xw, .exp, .eb, .cl, .gl, .strong, .shcut, .reg, .lang, .sym_first, .sym, .bullet, .h1, .h2, .h3, .ptl, .inline, .ve, .if, .if-g, .ebi, .sub, .subj, .st, .wfw-g, .wfw, .wfp, .wx, .wfo, .p-g, .pnc, .n, .xg, .xs, .dh, .hm-g, .eph, .def_qt, .blockquote, .footer, .thumb, .idm-l, .vp, .vp-g, .pvarr, .use, .un, .er, .ei, .ei-g, .etym_i, .deflist, .sense, .no-href, .res-g, .fd, .g, .lb, .lbl, .z, .clear"
+      },
+      "emit": {
+        "element": "span",
+        "move": "children"
+      },
+      "rationale": "Pure typography: the wrappers OALD9 uses for spacing, italics, cross-reference furniture and accent labels. They carry text but no slot of their own, so they become a bare span."
+    }
+  ]
+}
