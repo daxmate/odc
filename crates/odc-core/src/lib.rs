@@ -44,6 +44,7 @@ pub mod signing;
 pub mod snapshot;
 pub mod store;
 pub mod stylesheets;
+pub mod survey;
 pub mod varint;
 
 pub use entry::{Def, Entry};
@@ -66,6 +67,7 @@ pub use signing::{
     signature_path, verify_bytes, verify_bytes_with_key, verify_file, verify_file_with_key,
     write_signature_file, GeneratedKeypair, SignatureTargetV1, SignatureV1, VerifiedSignature,
 };
+pub use survey::{SurveyOptions, SurveyReport, Surveyor};
 
 /// Container format version implemented by this crate.
 pub const FORMAT_VERSION: &str = "0.1";

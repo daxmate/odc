@@ -15,6 +15,10 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 - FFI: `odc_import_mdx_to_repo_with_options` takes
   `options_json = {"max_record_bytes": N}`. The existing entry point keeps
   its ABI and semantics, now with the 4 MiB default.
+- CLI: `odc survey <file.mdx>` measures a dictionary dialect without any
+  profile — slot kinds, template clusters, outlier share, coverage and a fixed
+  easy / medium / manual verdict — and writes `survey.md`, `survey.json` and raw
+  per-cluster samples. Model and baseline numbers: `docs/dialect-survey.md`.
 - Engine: `profile_compare --source` compares an L1 fragment with the source
   fragment it was built from — D1 text bag, order inside a semantic block, P1
   skeleton invariants and source residue — so a dictionary without an adapter

@@ -6,14 +6,16 @@ use odc_core::entry::{normalize_key, Def, Entry};
 use odc_core::hash;
 use odc_core::html::{HtmlImportSummary, HtmlMode, HtmlOptions};
 use odc_core::link::LinkResolution;
+use odc_core::mdx::MdxSource;
 use odc_core::merge::{self, Choice, MergeKind, MergeOutcome, Strategy};
 use odc_core::patch;
 use odc_core::release::{self, PublishOptions};
 use odc_core::repo::{Repo, TRUST_SOURCE_MANUAL};
 use odc_core::signing;
+use odc_core::survey::{SurveyOptions, Surveyor};
 use serde_json::json;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 #[derive(Parser, Debug)]
@@ -330,6 +332,23 @@ enum Command {
     Patch {
         #[command(subcommand)]
         command: PatchCommand,
+    },
+    /// Measure a dictionary's HTML dialect without writing any rule.
+    Survey {
+        /// Input MDX file.
+        file: PathBuf,
+        /// Directory for survey.md, survey.json and samples/.
+        #[arg(long, value_name = "DIR", default_value = "odc-survey")]
+        out: PathBuf,
+        /// Maximum records to read (0 = every record).
+        #[arg(long, default_value_t = 2000)]
+        limit: usize,
+        /// CSS subset selector for the entry container.
+        #[arg(long, value_name = "SEL")]
+        entry_selector: Option<String>,
+        /// Print the report as JSON instead of a summary.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -881,6 +900,13 @@ fn run() -> odc_core::Result<ExitCode> {
                 json,
             },
         ),
+        Command::Survey {
+            file,
+            out,
+            limit,
+            entry_selector,
+            json,
+        } => run_survey(&file, &out, limit, entry_selector, json),
         Command::VerifyRelease {
             dir,
             pub_file,
@@ -2526,6 +2552,78 @@ fn write_private_key(path: &std::path::Path, contents: &str) -> odc_core::Result
     file.write_all(contents.as_bytes())?;
     set_file_mode(path, 0o600)?;
     Ok(())
+}
+
+fn run_survey(
+    file: &Path,
+    out: &Path,
+    limit: usize,
+    entry_selector: Option<String>,
+    json: bool,
+) -> odc_core::Result<ExitCode> {
+    let started = std::time::Instant::now();
+    let source = MdxSource::open(file)?;
+    let mut surveyor = Surveyor::new(SurveyOptions {
+        limit: if limit == 0 { None } else { Some(limit) },
+        entry_selector,
+        ..SurveyOptions::default()
+    })?;
+    for record in source.records() {
+        let record = record?;
+        if !surveyor.push(&record.key, &record.html) {
+            break;
+        }
+    }
+    let elapsed = started.elapsed().as_millis();
+    let report = surveyor.finish();
+    if report.entries_scanned == 0 {
+        eprintln!(
+            "survey: no usable entry container in {} ({} records, {} alias, {} empty, {} unparsed)",
+            file.display(),
+            report.records,
+            report.alias,
+            report.empty,
+            report.unparsed
+        );
+        return Ok(ExitCode::from(2));
+    }
+
+    std::fs::create_dir_all(out)?;
+    for cluster in &report.clusters {
+        if cluster.samples.is_empty() {
+            continue;
+        }
+        let directory = out.join("samples").join(&cluster.id);
+        std::fs::create_dir_all(&directory)?;
+        for sample in &cluster.samples {
+            std::fs::write(directory.join(&sample.file), &sample.html)?;
+        }
+    }
+    let markdown = report.to_markdown(&file.display().to_string(), elapsed);
+    std::fs::write(out.join("survey.md"), markdown)?;
+    let json_text = serde_json::to_string_pretty(&report).map_err(|error| {
+        odc_core::Error::Inconsistent(format!("survey report is not serialisable: {error}"))
+    })?;
+    std::fs::write(out.join("survey.json"), &json_text)?;
+
+    if json {
+        println!("{json_text}");
+    } else {
+        println!(
+            "survey {}: {} entries, {} kinds, {} clusters -> {}",
+            file.display(),
+            report.entries_scanned,
+            report.verdict.kinds,
+            report.verdict.clusters,
+            report.verdict.grade.as_str()
+        );
+        println!(
+            "wrote {} and {}",
+            out.join("survey.md").display(),
+            out.join("survey.json").display()
+        );
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 fn set_file_mode(path: &std::path::Path, mode: u32) -> odc_core::Result<()> {
