@@ -6,7 +6,7 @@
 //! real one shipped in profiles/oald9.profile.json.
 
 use odc_core::adapters::ParseContext;
-use odc_core::profile::{Outcome, Profile};
+use odc_core::profile::{contract, Outcome, Profile};
 
 fn profile() -> Profile {
     let text = include_str!("../../../profiles/oald9.profile.json");
@@ -107,6 +107,71 @@ fn phrasal_verbs_keep_their_group() {
     assert!(out.contains(r#"class="odc-phrasal-verbs""#), "{out}");
     assert!(out.contains(r#"class="odc-phrasal-verb""#), "{out}");
     assert!(out.contains(r#"class="odc-phrasal-verb-hw""#), "{out}");
+}
+
+/// A cross reference exactly as OALD9 writes it: an entry link that carries a
+/// tooltip and holds a group span with its own source `type`.
+const CROSSREF: &str = r#"<span class="xr-gs"><a class="Ref" href="entry://able" otitle="able definition"><span class="xr-g" type="pv"><span class="xh">able</span></span></a></span>"#;
+
+/// One entry with a cross reference inside it.
+fn entry_with_crossref() -> String {
+    record(&format!(
+        "{}{CROSSREF}",
+        entry("alpha", "noun", "first thing")
+    ))
+}
+
+#[test]
+fn a_claimed_crossref_drops_the_source_tooltip() {
+    let out = apply(&entry_with_crossref());
+    assert!(out.contains(r#"class="odc-crossref""#), "{out}");
+    assert!(!out.contains("otitle"), "source tooltip survived: {out}");
+}
+
+#[test]
+fn a_claimed_crossref_drops_source_attributes_below_it() {
+    let out = apply(&entry_with_crossref());
+    assert!(!out.contains(r#"type="pv""#), "source type survived: {out}");
+    assert!(
+        out.contains(r#"data-odc-orig-class="xr-g""#),
+        "the source class becomes provenance: {out}"
+    );
+}
+
+#[test]
+fn a_claimed_crossref_keeps_its_link_class_and_text() {
+    let out = apply(&entry_with_crossref());
+    assert!(out.contains("href=\"#able\""), "{out}");
+    assert!(out.contains(r#"class="odc-crossref""#), "{out}");
+    assert!(out.contains(r#"data-odc-target="able""#), "{out}");
+    assert!(
+        out.contains(r#"data-odc-orig-target="entry://able""#),
+        "{out}"
+    );
+    assert!(out.contains(">able<"), "the link text survives: {out}");
+}
+
+#[test]
+fn a_claimed_crossref_leaves_no_source_residue() {
+    let source = entry_with_crossref();
+    let out = apply(&source);
+    let verdict = contract::check(&source, &out);
+    assert!(verdict.clean_ok, "{:?}\n{out}", verdict.reasons);
+}
+
+#[test]
+fn a_plain_link_keeps_its_source_attributes() {
+    // Only the engine's own claims are cleaned; a link the engine never takes
+    // over keeps the attributes the rule pack chose to leave.
+    let html = record(&format!(
+        r#"{}<a href="https://example.com/x" title="see also">outside</a>"#,
+        entry("alpha", "noun", "first thing")
+    ));
+    let out = apply(&html);
+    assert!(
+        out.contains(r#"title="see also""#),
+        "an unclaimed link must be untouched: {out}"
+    );
 }
 
 #[test]

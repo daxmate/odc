@@ -115,9 +115,35 @@ fn note_unresolved(
     }
 }
 
+/// Attributes an engine-owned node keeps: the link target, the engine class
+/// list and the engine's own provenance. Everything else is source furniture.
+fn engine_attr(name: &str) -> bool {
+    name.eq_ignore_ascii_case("href")
+        || name.eq_ignore_ascii_case("class")
+        || name.to_ascii_lowercase().starts_with("data-odc-")
+}
+
+/// Claim a subtree as engine-owned: only the engine's own attributes survive.
+///
+/// The executor skips a locked subtree (D3), so no rule can strip the source
+/// attributes afterwards, while the contract's clean check still sees them.
+/// A claim that rewrites a node in place therefore has to leave the subtree in
+/// the shape a rule pack would have produced; `audio()` gets the same result
+/// for free because it replaces the node instead of editing it.
+fn claim(node: &Handle) {
+    doc::retain_attrs(node, engine_attr);
+    for child in node.children.borrow().clone() {
+        if crate::profile::selector::is_element(&child) {
+            claim(&child);
+        }
+    }
+}
+
 /// Turn an entry link into a cross reference.
 fn crossref(spot: &Spot, href: &str) {
     let target = href.trim_start_matches("entry://").trim_start_matches('#');
+    // The link and everything below it become engine-owned from here on.
+    claim(&spot.node);
     doc::set_attr(&spot.node, "href", &format!("#{target}"));
     doc::set_attr(&spot.node, "class", "odc-crossref");
     doc::set_attr(&spot.node, "data-odc-target", target);

@@ -40,6 +40,14 @@ pub(crate) fn set_attr(node: &Handle, name: &str, value: &str) {
     }
 }
 
+/// Drop every attribute whose name 'keep' rejects.
+pub(crate) fn retain_attrs(node: &Handle, mut keep: impl FnMut(&str) -> bool) {
+    let NodeData::Element { attrs, .. } = &node.data else {
+        return;
+    };
+    attrs.borrow_mut().retain(|a| keep(a.name.local.as_ref()));
+}
+
 /// Drop 'name' when present.
 pub(crate) fn remove_attr(node: &Handle, name: &str) {
     let NodeData::Element { attrs, .. } = &node.data else {
