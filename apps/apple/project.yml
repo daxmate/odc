@@ -50,7 +50,7 @@ targets:
       path: ODict/Info.plist
       properties:
         CFBundleDisplayName: ODict
-        CFBundleShortVersionString: "0.14.0"
+        CFBundleShortVersionString: "0.15.0"
         CFBundleVersion: "16"
         UILaunchScreen: {}
         LSSupportsOpeningDocumentsInPlace: false
@@ -90,7 +90,7 @@ targets:
       path: ODictDesktop/Info.plist
       properties:
         CFBundleDisplayName: ODict Desktop
-        CFBundleShortVersionString: "0.14.0"
+        CFBundleShortVersionString: "0.15.0"
         CFBundleVersion: "16"
         LSApplicationCategoryType: public.app-category.reference
         UTExportedTypeDeclarations:
