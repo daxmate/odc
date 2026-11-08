@@ -12,6 +12,14 @@
 //!   P1 skeleton invariants and source residue. This is the only ruler a
 //!   dictionary without an adapter can be measured with.
 //!
+//!   The contract prints one line: `coverage <adapted>/<total> (<pct>%) |
+//!   mapped <pass>/<adapted> four-dim | unadapted <n>`. An unadapted record
+//!   (raw fallback, spec section 6) is a copy of its source and would pass the
+//!   four checks by construction, so the rates only count adapted records.
+//!   `--strict` adds a gate: exit 6 unless every record was adapted and every
+//!   adapted record passed all four checks. Without the flag the exit code is
+//!   0 — the ruler measures, it does not judge.
+//!
 //! The comparison is semantic, not byte-wise: both sides are parsed into a
 //! minimal element tree, whitespace-only text nodes are dropped, text runs are
 //! whitespace-collapsed, class lists are sorted and attributes are compared as
@@ -26,6 +34,7 @@ use std::sync::OnceLock;
 
 use odc_core::adapters::ldoce6::Ldoce6;
 use odc_core::adapters::{Adapter, ParseContext};
+use odc_core::profile::contract::ContractSummary;
 use odc_core::profile::{Outcome, Profile};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -78,8 +87,7 @@ impl Diff {
 
 fn main() -> ExitCode {
     match run() {
-        Ok(true) => ExitCode::SUCCESS,
-        Ok(false) => ExitCode::FAILURE,
+        Ok(code) => ExitCode::from(code),
         Err(error) => {
             eprintln!("profile_compare: {error}");
             ExitCode::FAILURE
@@ -87,42 +95,38 @@ fn main() -> ExitCode {
     }
 }
 
-fn run() -> Result<bool, Box<dyn std::error::Error>> {
+fn run() -> Result<u8, Box<dyn std::error::Error>> {
     let args = Args::parse()?;
     let profile = Profile::from_json(&fs::read_to_string(&args.profile)?)?;
+    let mut contract = None;
     let report = if let Some(golden) = &args.golden {
         compare_golden(&profile, golden, args.dump.as_deref(), args.limit)?
     } else if let Some(raw) = &args.raw {
         compare_raw(&profile, raw, args.limit)?
     } else if let Some(source) = &args.source {
-        compare_source(&profile, source, args.dump.as_deref(), args.limit)?
+        let (report, summary) = compare_source(&profile, source, args.dump.as_deref(), args.limit)?;
+        contract = Some(summary);
+        report
     } else {
         return Err("either --raw, --golden or --source is required".into());
     };
     if let Some(path) = &args.report {
         fs::write(path, serde_json::to_string_pretty(&report)? + "\n")?;
     }
-    let summary = &report["summary"];
-    if report["mode"] == "source-contract" {
-        let count = |name: &str| summary[name].as_u64().unwrap_or(0);
-        println!(
-            "source-contract: {} body + {} alias | bag {}/{} order {}/{} structure {}/{} clean {}/{} ({} raw exempt)",
-            count("body"),
-            count("alias"),
-            count("bag_ok"),
-            count("body"),
-            count("order_ok"),
-            count("body"),
-            count("structure_ok"),
-            count("body"),
-            count("clean_ok"),
-            count("body"),
-            count("clean_exempt_raw"),
-        );
-        // Non-zero until every body record passes: the ruler measures, it does
-        // not excuse a partial pass.
-        return Ok(count("body") > 0 && count("equal") == count("body"));
+    // The source contract is a measurement: it reports coverage and the four
+    // rates over the adapted slice, and only `--strict` turns that into a
+    // gate. Without the flag a partial pass is information, not an error.
+    if let Some(summary) = contract {
+        println!("{}", summary.render_line());
+        if args.strict {
+            if let Some(violation) = summary.strict_violation() {
+                eprintln!("strict: {violation}");
+                return Ok(6);
+            }
+        }
+        return Ok(0);
     }
+    let summary = &report["summary"];
     println!(
         "{}: {}/{} equal ({} text-equal)",
         report["mode"].as_str().unwrap_or("?"),
@@ -130,7 +134,7 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
         summary["total"].as_u64().unwrap_or(0),
         summary["text_equal"].as_u64().unwrap_or(0),
     );
-    Ok(summary["equal"] == summary["total"])
+    Ok(u8::from(summary["equal"] != summary["total"]))
 }
 
 /// Parsed command line.
@@ -142,6 +146,7 @@ struct Args {
     report: Option<PathBuf>,
     dump: Option<PathBuf>,
     limit: Option<usize>,
+    strict: bool,
 }
 
 impl Args {
@@ -154,6 +159,7 @@ impl Args {
         let mut report = None;
         let mut dump = None;
         let mut limit = None;
+        let mut strict = false;
         let mut index = 0usize;
         while index < argv.len() {
             let flag = argv[index].clone();
@@ -175,6 +181,9 @@ impl Args {
                     let _ = IGNORED.set(list);
                 }
                 "--limit" => limit = Some(value_of(&argv, &mut index, &flag)?.parse()?),
+                // Only the source contract has a gate; the flag is inert in
+                // the other modes, which stay pass/fail comparisons.
+                "--strict" => strict = true,
                 other => return Err(format!("unknown argument {other}").into()),
             }
         }
@@ -186,6 +195,7 @@ impl Args {
             report,
             dump,
             limit,
+            strict,
         })
     }
 }
@@ -221,6 +231,7 @@ fn compare_golden(
     let mut text_equal = 0usize;
     let mut bag_equal = 0usize;
     let mut payload_equal = 0usize;
+    let mut dump_index: BTreeMap<String, String> = BTreeMap::new();
     // Body records are compared; alias records have no body to compare.
     let mut body = 0usize;
     let alias = lines
@@ -244,9 +255,11 @@ fn compare_golden(
                 continue;
             }
         };
-        if let Some(dump) = dump {
-            fs::create_dir_all(dump)?;
-            fs::write(dump.join(format!("{key}.html")), &produced)?;
+        if let Some(dir) = dump {
+            fs::create_dir_all(dir)?;
+            let file = format!("{}.html", dump_file_name(&key));
+            fs::write(dir.join(&file), &produced)?;
+            dump_index.insert(key.clone(), file);
         }
         let left = parse_html(&expected);
         let right = parse_html(&produced);
@@ -279,6 +292,9 @@ fn compare_golden(
             "first_text_diff": if text_same { Value::Null } else { first_text_diff(&left, &right).unwrap_or(Value::Null) },
             "stats": stats_json(&stats),
         }));
+    }
+    if let Some(dir) = dump {
+        write_dump_index(dir, &dump_index)?;
     }
     let total = lines.len();
     Ok(json!({
@@ -423,24 +439,55 @@ fn profile_dict(profile: &Profile) -> String {
 ///
 /// A record passes only when the four contract checks pass; the reasons are
 /// counted by code so the next profile change has a target instead of a vibe.
+/// File name for one dumped fragment.
+///
+/// A headword is not a file name: `Action Man`, `a/b` and `1:2` are all legal
+/// record keys and all illegal as a path segment. Percent-encode every byte
+/// outside the safe set so the name stays reversible; `index.json` is the way
+/// back to the original key.
+fn dump_file_name(key: &str) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::with_capacity(key.len() + 8);
+    for byte in key.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.') {
+            out.push(char::from(byte));
+        } else {
+            let _ = write!(out, "%{byte:02X}");
+        }
+    }
+    if out.is_empty() {
+        out.push('_');
+    }
+    out
+}
+
+/// Write the key → file name map that makes a dump directory auditable.
+fn write_dump_index(
+    dir: &Path,
+    index: &BTreeMap<String, String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let body = serde_json::to_string_pretty(index)? + "\n";
+    fs::write(dir.join("index.json"), body)?;
+    Ok(())
+}
+
 fn compare_source(
     profile: &Profile,
     path: &Path,
     dump: Option<&Path>,
     limit: Option<usize>,
-) -> Result<Value, Box<dyn std::error::Error>> {
+) -> Result<(Value, ContractSummary), Box<dyn std::error::Error>> {
     let records = read_records(path, limit)?;
     let dict = profile_dict(profile);
     let mut failures: Vec<Value> = Vec::new();
     let mut codes: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut alias = 0usize;
-    let mut body = 0usize;
-    let mut equal = 0usize;
-    let mut bag_ok = 0usize;
-    let mut order_ok = 0usize;
-    let mut structure_ok = 0usize;
-    let mut clean_ok = 0usize;
-    let mut clean_exempt_raw = 0usize;
+    let mut summary = ContractSummary::default();
+    let mut dump_index: BTreeMap<String, String> = BTreeMap::new();
+    if let Some(dir) = dump {
+        fs::create_dir_all(dir)?;
+    }
     for record in &records {
         let ctx = ParseContext::new(record.key.clone(), dict.clone(), "en");
         let produced = match profile.apply(&record.text, &ctx) {
@@ -451,29 +498,17 @@ fn compare_source(
                 continue;
             }
         };
-        if let Some(dump) = dump {
-            fs::create_dir_all(dump)?;
-            fs::write(dump.join(format!("{}.html", record.key)), &produced)?;
+        if let Some(dir) = dump {
+            let file = format!("{}.html", dump_file_name(&record.key));
+            fs::write(dir.join(&file), &produced)?;
+            dump_index.insert(record.key.clone(), file);
         }
         let verdict = odc_core::profile::contract::check(&record.text, &produced);
-        body += 1;
-        if verdict.bag_ok {
-            bag_ok += 1;
-        }
-        if verdict.order_ok {
-            order_ok += 1;
-        }
-        if verdict.structure_ok {
-            structure_ok += 1;
-        }
-        if verdict.clean_ok {
-            clean_ok += 1;
-        }
-        if verdict.clean_exempt_raw {
-            clean_exempt_raw += 1;
-        }
-        if verdict.ok() {
-            equal += 1;
+        summary.record(&verdict);
+        if verdict.adapted_ok() || verdict.unadapted {
+            // A pass, or a record the profile never adapted: an unadapted
+            // record is a copy of its source and is reported through the
+            // coverage line, not as a failure of the four checks.
             continue;
         }
         for reason in &verdict.reasons {
@@ -494,6 +529,9 @@ fn compare_source(
             "first_diff": verdict.first_diff(),
         }));
     }
+    if let Some(dir) = dump {
+        write_dump_index(dir, &dump_index)?;
+    }
     let mut reasons: Vec<Value> = codes
         .iter()
         .map(|(code, count)| json!({ "code": code, "count": count }))
@@ -504,22 +542,27 @@ fn compare_source(
             .cmp(&a["count"].as_u64())
             .then_with(|| a["code"].as_str().cmp(&b["code"].as_str()))
     });
-    Ok(json!({
-        "mode": "source-contract",
-        "summary": {
-            "total": records.len(),
-            "body": body,
-            "alias": alias,
-            "equal": equal,
-            "bag_ok": bag_ok,
-            "order_ok": order_ok,
-            "structure_ok": structure_ok,
-            "clean_ok": clean_ok,
-            "clean_exempt_raw": clean_exempt_raw,
-        },
-        "reason_counts": reasons,
-        "failures": failures,
-    }))
+    Ok((
+        json!({
+            "mode": "source-contract",
+            "summary": {
+                "total": records.len(),
+                "body": summary.total,
+                "alias": alias,
+                "adapted": summary.adapted,
+                "unadapted": summary.unadapted,
+                "equal": summary.adapted_all_pass,
+                "bag_ok": summary.bag_pass,
+                "order_ok": summary.order_pass,
+                "structure_ok": summary.structure_pass,
+                "clean_ok": summary.clean_pass,
+                "clean_exempt_raw": summary.unadapted,
+            },
+            "reason_counts": reasons,
+            "failures": failures,
+        }),
+        summary,
+    ))
 }
 
 /// Compact per-record rule statistics.

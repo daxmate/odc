@@ -180,3 +180,44 @@ fn survey_dumps_a_reproducible_stratified_sample() {
     assert_eq!(keys.lines().count(), lines.len());
     assert!(!keys.contains("@@@LINK"));
 }
+
+#[test]
+fn a_zero_dump_limit_writes_every_record() {
+    let temp = TempDir::new().expect("temp dir");
+    let mut rows: Vec<(String, String)> = Vec::new();
+    for (letter, name) in [("a", "alpha"), ("b", "bravo")] {
+        for index in 0..6 {
+            rows.push((
+                format!("{name}{index}"),
+                format!(
+                    r#"<div class="entry"><span class="hwd">{name}{index}</span><span class="def">{letter}</span></div>"#
+                ),
+            ));
+        }
+    }
+    rows.push(("alpha-alias".to_string(), "@@@LINK=alpha0".to_string()));
+    let entries: Vec<(&str, &str)> = rows
+        .iter()
+        .map(|(key, html)| (key.as_str(), html.as_str()))
+        .collect();
+    let mdx = fixture(temp.path(), &entries);
+    let out = temp.path().join("report");
+    let jsonl = temp.path().join("all.jsonl");
+
+    odc()
+        .arg("survey")
+        .arg(&mdx)
+        .arg("--out")
+        .arg(&out)
+        .arg("--dump-jsonl")
+        .arg(&jsonl)
+        .arg("--dump-limit")
+        .arg("0")
+        .assert()
+        .success();
+
+    let text = fs::read_to_string(&jsonl).expect("jsonl");
+    let lines = text.lines().filter(|line| !line.trim().is_empty()).count();
+    // 12 body records, alias skipped: zero means "everything", not "nothing".
+    assert_eq!(lines, 12);
+}

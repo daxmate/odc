@@ -102,14 +102,19 @@ odc survey 'OALD9.mdx' --out /tmp/odc-oald9/survey \
 cargo run --release -q -p odc-core --example profile_compare -- \
   --profile profiles/oald9.profile.json \
   --source /tmp/odc-oald9/stratified.jsonl \
-  --report /tmp/oald9-stratified.json
+  --report /tmp/oald9-stratified.json [--strict]
 ```
+
+`--strict` 是门禁：coverage 100% 且 unadapted 0 且已适配记录四维全过才 `exit 0`，
+否则 `exit 6`；不带 `--strict` 时 `exit 0`，只输出测量行。coverage 与四维率的口径见
+`profile-contract.md` §4。
 
 抽样规则（写死、不含随机数，同一个 MDX 永远得到同一份样本）：
 
 1. 按 headword 首字符分桶：`A`–`Z` 各一桶，数字、符号和非 ASCII 首字母统一进 `#` 桶；
 2. 每桶配额 = 该桶正文条数占全量的比例 × `--dump-limit`，不足 5 条按 5 条补
    （桶本身不够、或总预算撑不起时除外：先削配额最大的桶）；
+   **`--dump-limit 0` = 全量**（每桶配额即该桶全部正文，用于整本复验）；
 3. 桶内按 `--dump-stride` 等距取（默认 `桶大小 / 配额`，至少 1），取满配额为止；
 4. `@@@LINK=` 别名记录和空正文一律不写。
 

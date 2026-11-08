@@ -354,6 +354,8 @@ enum Command {
         #[arg(long, value_name = "PATH")]
         dump_jsonl: Option<PathBuf>,
         /// Records to keep in the sample.
+        ///
+        /// `0` keeps every body record (full dump).
         #[arg(long, value_name = "N", default_value_t = 500)]
         dump_limit: usize,
         /// Fixed stride inside every bucket (default: derived from size / quota).

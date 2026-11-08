@@ -13,21 +13,22 @@
 
 ````
 profile_compare --profile profiles/<dict>.profile.json \
-  --source <raw.jsonl> [--report out.json] [--dump <dir>] [--limit N]
+  --source <raw.jsonl> [--report out.json] [--dump <dir>] [--limit N] [--strict]
 ````
 
 - 输入格式与 `--raw` 相同：每行 `{'key': ..., 'text': <源片段>}`；`@@@LINK` 记录按 alias 跳过。
-- `--dump` 落每条 L1 片段（`<key>.html`），便于定位。
-- 退出码：全部 body 记录四条全过才 0；否则 1（尺子只测量，不放过半绿）。
+- `--dump` 落每条 L1 片段，文件名取词头的 percent-encoding（`/` / `:` / 空白都不再炸路径），
+  同目录写 `index.json`（原词头 → 文件名），保证可回查。
+- 默认模式只测量，**退出码恒为 0**；`--strict` 才是门禁，不达标 `exit 6`（规则见 §4）。
 
 输出：
 
 ````json
 {
   "mode": "source-contract",
-  "summary": { "total": 202, "body": 45, "alias": 157, "equal": 21,
-               "bag_ok": 23, "order_ok": 45, "structure_ok": 41, "clean_ok": 45,
-               "clean_exempt_raw": 0 },
+  "summary": { "total": 202, "body": 45, "alias": 157, "adapted": 45, "unadapted": 0,
+               "equal": 21, "bag_ok": 23, "order_ok": 45, "structure_ok": 41,
+               "clean_ok": 45, "clean_exempt_raw": 0 },
   "reason_counts": [ { "code": "bag.missing", "count": 46 }, ... ],
   "failures": [ { "key": "...", "bag_ok": false, "order_ok": true,
                   "structure_ok": true, "clean_ok": true, "clean_exempt_raw": false,
@@ -36,7 +37,8 @@ profile_compare --profile profiles/<dict>.profile.json \
 }
 ````
 
-`summary` 的四个 `*_ok` 都是**在 45 条 body 上**计数；`equal` 是四条全过的条数。
+`summary` 的四个 `*_ok` 都是**在 adapted 记录上**计数（这里是 45 条全部适配）；`equal` 是四条全过的条数。
+`clean_exempt_raw` 与 `unadapted` 同义，保留旧键名以免破坏既有报告脚本。
 
 ## 3. 四条判定（精确规则）
 
@@ -93,21 +95,54 @@ profile_compare --profile profiles/<dict>.profile.json \
 - **raw 兜底豁免**（规范 §6）：L1 根节点是 `section.odc-entry--raw`（或带 `data-odc-unadapted="1"`）时，
   该词条子树跳过 clean 检查——兜底按设计保留净化后的源结构，把它的源类名当成泄漏只是噪声；
   豁免**必须计数**，报告里 `summary.clean_exempt_raw` 记条数，不许静默。
-  `bag` / `order` / `structure` 三条照旧不豁免。
+  `bag` / `order` / `structure` 三条照旧不豁免 —— 记录层面的判定不变，但**统计口径**里未适配记录不进四维率分母（见 §4）。
 
 ### 3.5 不计入比较的文本
 
 - 带 `data-odc-ui` 的元素（D2：文案由客户端注入）；
 - `script` / `style`。
 
-## 4. 可复现性
+## 4. coverage 与四维率的适用域
+
+`--source` 的输出只有一行：`coverage <adapted>/<total> (<pct>%) | mapped <pass>/<adapted> four-dim | unadapted <n>`。
+
+- **coverage** = 真实适配条数 / 总条数（`adapted / total`）。「适配」指 profile 真的改写了这条记录；
+  走 raw 兜底（`section.odc-entry--raw` 或 `data-odc-unadapted="1"`）的记录算**未适配**。
+  alias 记录只是跳转指针、没有正文，不进分母。
+- **四维率**（`bag` / `order` / `structure` / `clean`）的分母是 **adapted**，不是 total。
+  未适配记录是「把源 HTML 原样包一层」，拿它和源比等于「源自比源」，四维必然全过；
+  把它算进通过率就是把「没适配」读成「通过」。OALD10 用 OALD9 profile 跑出 `500/500`
+  正是这个陷阱：51,310 条里 51,309 条是 raw 兜底 —— 旧口径给出 99.998% 的空转数字。
+- **unadapted** 单独成列，不掺进通过率：它度量「这本词典还差多少」，四维率度量
+  「已适配的部分做得好不好」，两个问题分开回答。
+- `mapped <pass>/<adapted> four-dim`：已适配记录里四维全过的条数。
+- 百分比保留三位小数：`59644/59645` 显示 `99.998%`，不会被四舍五入成 `100.0%`
+  而掩盖掉未适配记录。
+- verdict 层面 `ok()` 仍是四维判定（原有语义不变）；`adapted_ok() = ok() && !unadapted`
+  才是「既适配又干净」。
+
+`--strict` 退出码：
+
+| 条件 | 退出码 |
+| --- | --- |
+| 默认模式（不带 `--strict`） | `0`（尺子只测量，不判定） |
+| `--strict`：coverage 100% 且 unadapted 0 且已适配记录四维全过 | `0` |
+| `--strict`：coverage < 100%，或 unadapted > 0，或已适配记录有四维失败 | `6` |
+
+````
+cargo run --release -q -p odc-core --example profile_compare -- \
+  --profile profiles/oald9.profile.json --source /tmp/oald10-stratified.jsonl
+# coverage 0/500 (0.000%) | mapped 0/0 four-dim | unadapted 500
+````
+
+## 5. 可复现性
 
 - 无随机、无外部依赖、无网络：同一输入两次运行输出逐字节相同（`serde_json::to_string_pretty`）。
 - 词条级判定互不影响；`--limit` 只截断输入，不改变判定。
 - 每条记录的 `reasons` 每种 code 最多 3 条（`MAX_PER_CODE`），避免单个记录刷屏；
   `reason_counts` 是**记录数**维度的计数（一条记录同一 code 记一次）。
 
-## 5. LDOCE6 实测（2026-11-06，基线 0254ed9 + 本任务）
+## 6. LDOCE6 实测（2026-11-06，基线 0254ed9 + 本任务）
 
 样本：`/tmp/odc-dialect-survey/raw/ldoce6encn.jsonl`（202 行 = 45 条正文 + 157 条别名）。
 
@@ -133,7 +168,7 @@ profile_compare --profile profiles/<dict>.profile.json \
    `proceeds` 四条里，源弹窗内的 `span.entry` 被规则标成 `odc-entry`，于是词条里出现
    第二个顶层词条（内含 `odc-pos` 标记却无词性块）→ `structure.pos_block`。
 
-## 6. 已知局限（判不了的情况）
+## 7. 已知局限（判不了的情况）
 
 1. **文案类的「改写」判不出来**：只要两侧 token 多重集相同，把 "Word Sets" 改成
    "Word Sets" 之外的任何同词重排都不会被发现（顺序只在块内判）。
@@ -151,7 +186,7 @@ profile_compare --profile profiles/<dict>.profile.json \
    chrome，让尺子漏掉它。LDOCE6 45 条实测：`bag` / `order` / `structure` / `clean`
    全部 45/45。
 
-## 7. 已知差异（2026-11-08）
+## 8. 已知差异（2026-11-08）
 
 OALD9 全量 59,645 条 body：`structure` / `clean` 都是 59,645（另计 1 条 raw 兜底豁免），
 `bag` / `order` 是 59,621 —— 剩下的 **24 条 bag/order 失败全部是同一类 ref-panel 切分口径差异**，

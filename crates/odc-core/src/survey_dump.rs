@@ -108,7 +108,13 @@ fn quotas(sizes: &BTreeMap<char, usize>, plan: SamplePlan) -> BTreeMap<char, usi
     if total == 0 {
         return quota;
     }
-    let target = plan.limit.min(total);
+    // `--dump-limit 0` means "keep everything": the CLI documents zero as a
+    // full dump, so a zero budget must not collapse the sample to nothing.
+    let target = if plan.limit == 0 {
+        total
+    } else {
+        plan.limit.min(total)
+    };
     for (&bucket, &size) in sizes {
         let share = target * size / total;
         let floor = plan.min_per_bucket.min(size);
@@ -368,6 +374,30 @@ mod tests {
         let picked = selection(7, 4, 3);
         assert_eq!(picked.len(), 4);
         assert_eq!(picked, vec![0, 1, 3, 6]);
+    }
+
+    #[test]
+    fn a_zero_limit_keeps_every_body_record() {
+        // `--dump-limit 0` is documented as "keep everything"; before the fix
+        // `limit.min(total)` collapsed that to an empty sample.
+        let rows: Vec<Result<SampledRecord>> = (0..7)
+            .map(|index| {
+                Ok(SampledRecord {
+                    key: format!("able{index}"),
+                    text: format!("<p>able{index}</p>"),
+                })
+            })
+            .collect();
+        let report = sample(
+            || rows.clone().into_iter(),
+            SamplePlan {
+                limit: 0,
+                ..SamplePlan::default()
+            },
+        )
+        .expect("sample");
+        assert_eq!(report.body, 7);
+        assert_eq!(report.records.len(), 7);
     }
 
     #[test]

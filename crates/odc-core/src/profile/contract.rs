@@ -129,21 +129,140 @@ pub struct Verdict {
     /// classes and attributes as leakage would be noise. Counted, never
     /// silent.
     pub clean_exempt_raw: bool,
+    /// The L1 fragment is a raw fallback: the profile did not adapt this
+    /// record at all (spec section 6). Such a record passes the four checks by
+    /// construction — source compared with itself — so it must stay out of the
+    /// pass rates and be reported through the coverage line instead.
+    pub unadapted: bool,
     /// One entry per failed check, capped at `MAX_PER_CODE` per code.
     pub reasons: Vec<Reason>,
 }
 
 impl Verdict {
     /// Whether all four checks passed.
+    ///
+    /// This says nothing about whether the record was adapted: a raw fallback
+    /// passes by construction. Use [`Verdict::adapted_ok`] when the question
+    /// is "did the profile both adapt and keep this record intact?".
     #[must_use]
     pub fn ok(&self) -> bool {
         self.bag_ok && self.order_ok && self.structure_ok && self.clean_ok
+    }
+
+    /// Whether the record was adapted **and** passed all four checks.
+    #[must_use]
+    pub fn adapted_ok(&self) -> bool {
+        !self.unadapted && self.ok()
     }
 
     /// The first failure in check order, for a compact report line.
     #[must_use]
     pub fn first_diff(&self) -> Option<String> {
         self.reasons.first().map(Reason::render)
+    }
+}
+
+/// Aggregate of one comparison run: how much was really adapted, and how the
+/// adapted slice scored.
+///
+/// The four per-check counts only cover **adapted** records. An unadapted
+/// record is the source markup wrapped in `section.odc-entry--raw`, so
+/// comparing it with its source is comparing a tree with itself: it passes
+/// every check by construction. Counting those passes as wins is what made a
+/// 99.99% unadapted run read as a full pass. The summary keeps the two
+/// questions apart — [`ContractSummary::coverage`] says how much was adapted,
+/// the four counts say how well the adapted part held up.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ContractSummary {
+    /// Records handed to the ruler (aliases are not records).
+    pub total: usize,
+    /// Records the profile adapted.
+    pub adapted: usize,
+    /// Records the profile could not adapt (raw fallback, spec section 6).
+    pub unadapted: usize,
+    /// Adapted records whose text bag matched.
+    pub bag_pass: usize,
+    /// Adapted records whose block order matched.
+    pub order_pass: usize,
+    /// Adapted records whose skeleton invariants held.
+    pub structure_pass: usize,
+    /// Adapted records with no source class or attribute left.
+    pub clean_pass: usize,
+    /// Adapted records that passed all four checks.
+    pub adapted_all_pass: usize,
+}
+
+impl ContractSummary {
+    /// Fold one record's verdict into the run.
+    pub fn record(&mut self, verdict: &Verdict) {
+        self.total += 1;
+        if verdict.unadapted {
+            self.unadapted += 1;
+            return;
+        }
+        self.adapted += 1;
+        self.bag_pass += usize::from(verdict.bag_ok);
+        self.order_pass += usize::from(verdict.order_ok);
+        self.structure_pass += usize::from(verdict.structure_ok);
+        self.clean_pass += usize::from(verdict.clean_ok);
+        self.adapted_all_pass += usize::from(verdict.adapted_ok());
+    }
+
+    /// Share of records the profile really adapted, inside `[0, 1]`.
+    ///
+    /// An empty run has no coverage: this returns `0.0`, so a strict gate
+    /// fails instead of passing on nothing.
+    #[must_use]
+    pub fn coverage(&self) -> f64 {
+        if self.total == 0 {
+            return 0.0;
+        }
+        self.adapted as f64 / self.total as f64
+    }
+
+    /// One machine-readable line, shared by the example and the tests.
+    ///
+    /// `coverage <adapted>/<total> (<pct>%) | mapped <pass>/<adapted>
+    /// four-dim | unadapted <unadapted>`
+    #[must_use]
+    pub fn render_line(&self) -> String {
+        format!(
+            "coverage {}/{} ({:.3}%) | mapped {}/{} four-dim | unadapted {}",
+            self.adapted,
+            self.total,
+            self.coverage() * 100.0,
+            self.adapted_all_pass,
+            self.adapted,
+            self.unadapted
+        )
+    }
+
+    /// Why the strict gate rejects this run, or `None` when it passes.
+    ///
+    /// Strict means: every record adapted, and every adapted record passed
+    /// the four checks. It is the only mode in which the four pass rates are
+    /// allowed to stand in for "the profile works on this dictionary".
+    #[must_use]
+    pub fn strict_violation(&self) -> Option<String> {
+        if self.total == 0 {
+            return Some(String::from("no records compared"));
+        }
+        if self.unadapted > 0 {
+            return Some(format!("{} unadapted record(s)", self.unadapted));
+        }
+        if self.adapted < self.total {
+            return Some(format!(
+                "coverage {}/{} below 100%",
+                self.adapted, self.total
+            ));
+        }
+        if self.adapted_all_pass < self.adapted {
+            return Some(format!(
+                "{} adapted record(s) failed the four-dim check",
+                self.adapted - self.adapted_all_pass
+            ));
+        }
+        None
     }
 }
 
@@ -222,6 +341,7 @@ fn judge(source_root: &Handle, l1_root: &Handle, reading: Reading) -> Verdict {
     verdict.clean_ok = clean.is_empty();
     verdict.reasons.extend(clean);
 
+    verdict.unadapted = unadapted_entry(l1_root);
     verdict
 }
 
@@ -727,6 +847,20 @@ fn is_raw_fallback(node: &Handle) -> bool {
     has_class(node, RAW_ENTRY) || attr(node, RAW_FLAG).as_deref() == Some("1")
 }
 
+/// Whether the L1 fragment is a raw fallback, i.e. not adapted at all.
+///
+/// The engine marks the whole record: `section.odc-entry--raw` plus
+/// `data-odc-unadapted="1"`. A fragment can hold several top-level entries, so
+/// either the root or any top-level entry marks the record as unadapted.
+fn unadapted_entry(root: &Handle) -> bool {
+    if is_element(root) && is_raw_fallback(root) {
+        return true;
+    }
+    // Fragment parsing wraps the input in `html`/`body`; `top_level` peels
+    // those off and hands back the record entries.
+    top_level(root).iter().any(is_raw_fallback)
+}
+
 fn tag_is(node: &Handle, name: &str) -> bool {
     element_name(node).as_deref() == Some(name)
 }
@@ -803,6 +937,82 @@ mod tests {
         assert!(out.clean_exempt_raw);
         assert!(out.clean_ok, "{:?}", out.reasons);
         assert!(out.reasons.is_empty(), "{:?}", out.reasons);
+    }
+
+    #[test]
+    fn a_raw_fallback_record_is_unadapted_yet_still_passes_the_four_checks() {
+        let source = r#"<div class="dict-merge"><p>a b</p></div>"#;
+        let l1 = r#"<section class="odc-entry odc-entry--raw" data-odc-key="k" data-odc-unadapted="1"><div class="dict-merge"><p>a b</p></div></section>"#;
+        let out = verdict(source, l1);
+        assert!(out.unadapted);
+        // `ok()` keeps its old meaning: the four checks passed.
+        assert!(out.ok(), "{:?}", out.reasons);
+        // The new question: was this record adapted at all? No.
+        assert!(!out.adapted_ok());
+        let mut summary = ContractSummary::default();
+        summary.record(&out);
+        assert_eq!(summary.total, 1);
+        assert_eq!(summary.adapted, 0);
+        assert_eq!(summary.unadapted, 1);
+        assert_eq!(summary.coverage(), 0.0);
+        assert_eq!(summary.adapted_all_pass, 0);
+    }
+
+    #[test]
+    fn summary_keeps_unadapted_records_out_of_the_pass_rates() {
+        let mapped_pass = verdict(
+            "<p>a b</p>",
+            r#"<section class="odc-entry"><p>a b</p></section>"#,
+        );
+        let mapped_fail = verdict(
+            "<p>a b</p>",
+            r#"<section class="odc-entry"><p>a c</p></section>"#,
+        );
+        let raw_source = r#"<div class="dict-merge"><p>a b</p></div>"#;
+        let raw_l1 = r#"<section class="odc-entry odc-entry--raw" data-odc-key="k" data-odc-unadapted="1"><div class="dict-merge"><p>a b</p></div></section>"#;
+        assert!(mapped_pass.adapted_ok(), "{:?}", mapped_pass.reasons);
+        assert!(!mapped_fail.adapted_ok());
+        let mut summary = ContractSummary::default();
+        for item in [
+            &mapped_pass,
+            &mapped_pass,
+            &mapped_fail,
+            &verdict(raw_source, raw_l1),
+            &verdict(raw_source, raw_l1),
+        ] {
+            summary.record(item);
+        }
+        assert_eq!(summary.total, 5);
+        assert_eq!(summary.adapted, 3);
+        assert_eq!(summary.unadapted, 2);
+        assert_eq!(summary.bag_pass, 2);
+        assert_eq!(summary.adapted_all_pass, 2);
+        // The four rates never use the five-record total as their base.
+        assert!(summary.order_pass <= summary.adapted);
+        assert!(summary.structure_pass <= summary.adapted);
+        assert!(summary.clean_pass <= summary.adapted);
+        assert_eq!(summary.coverage(), 0.6);
+        assert_eq!(
+            summary.render_line(),
+            "coverage 3/5 (60.000%) | mapped 2/3 four-dim | unadapted 2"
+        );
+        assert!(summary.strict_violation().is_some());
+    }
+
+    #[test]
+    fn a_fully_adapted_run_has_full_coverage_and_no_strict_violation() {
+        let out = verdict(
+            "<p>a b</p>",
+            r#"<section class="odc-entry"><p>a b</p></section>"#,
+        );
+        let mut summary = ContractSummary::default();
+        summary.record(&out);
+        assert_eq!(summary.coverage(), 1.0);
+        assert_eq!(
+            summary.render_line(),
+            "coverage 1/1 (100.000%) | mapped 1/1 four-dim | unadapted 0"
+        );
+        assert!(summary.strict_violation().is_none());
     }
 
     #[test]
