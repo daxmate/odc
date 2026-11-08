@@ -25,8 +25,10 @@
 //!      reference bar also carries `section.odc-pos-block[data-odc-pos]` as a
 //!      direct child (reference panels quote other entries, so their markers do
 //!      not count);
-//!    * a sense block is never a sibling of a position block inside one entry:
-//!      senses belong inside a position container;
+//!    * a sense block is never a sibling *after* a position block inside one
+//!      entry: senses belong inside a position container. A sense that leads the
+//!      entry *before* the first position block is allowed (some dictionaries
+//!      print a run-in sense ahead of the part-of-speech container);
 //!    * every child of `nav.odc-refbar` is a reference block (`odc-ref*`).
 //! 4. `clean` — no source class name and no source attribute survives the
 //!    translation. Every class token starts with `odc-`; every attribute is
@@ -508,11 +510,7 @@ fn structure_reasons(root: &Handle) -> Vec<Reason> {
 
     for entry in entries {
         let children = element_children(&entry);
-        let has_pos_block = children.iter().any(|child| {
-            tag_is(child, "section")
-                && has_class(child, POS_BLOCK)
-                && attr(child, "data-odc-pos").is_some_and(|value| !value.trim().is_empty())
-        });
+        let has_pos_block = children.iter().any(is_pos_block);
         if has_pos_marker(&entry) && !has_pos_block {
             out.push(Reason::new(
                 "structure.pos_block",
@@ -520,10 +518,19 @@ fn structure_reasons(root: &Handle) -> Vec<Reason> {
             ));
         }
         if has_pos_block {
-            if let Some(sense) = children
-                .iter()
-                .find(|child| has_class(child, "odc-sense") || has_class(child, "odc-subsense"))
-            {
+            // Senses that lead the entry (before the first position block) are
+            // allowed; once a position block has been seen, a following sense
+            // sibling is still a structural error.
+            let mut seen_pos_block = false;
+            let after_pos_block = children.iter().find(|child| {
+                if is_pos_block(child) {
+                    seen_pos_block = true;
+                    return false;
+                }
+                seen_pos_block
+                    && (has_class(child, "odc-sense") || has_class(child, "odc-subsense"))
+            });
+            if let Some(sense) = after_pos_block {
                 let class = class_list(sense).join(".");
                 out.push(Reason::new(
                     "structure.sense_sibling",
@@ -572,6 +579,14 @@ fn top_level(node: &Handle) -> Vec<Handle> {
     let mut out = Vec::new();
     walk(node, &mut out);
     out
+}
+
+/// Whether `node` is a position container
+/// (`section.odc-pos-block[data-odc-pos]`).
+fn is_pos_block(node: &Handle) -> bool {
+    tag_is(node, "section")
+        && has_class(node, POS_BLOCK)
+        && attr(node, "data-odc-pos").is_some_and(|value| !value.trim().is_empty())
 }
 
 fn element_children(node: &Handle) -> Vec<Handle> {
@@ -936,6 +951,49 @@ mod tests {
             .reasons
             .iter()
             .any(|item| item.code == "structure.sense_sibling"));
+    }
+
+    #[test]
+    fn a_leading_sense_may_sit_before_a_position_block() {
+        // Some dictionaries print a run-in sense ahead of the part-of-speech
+        // container; that sense has no position block to live in yet.
+        let source = "<p>lead verb move</p>";
+        let l1 = r#"<section class="odc-entry">
+            <div class="odc-sense">lead</div>
+            <section class="odc-pos-block" data-odc-pos="verb"><p>verb move</p></section>
+        </section>"#;
+        let out = verdict(source, l1);
+        assert!(out.structure_ok, "{:?}", out.reasons);
+    }
+
+    #[test]
+    fn a_sense_between_position_blocks_is_still_a_structure_failure() {
+        let source = "<p>verb move noun walk</p>";
+        let l1 = r#"<section class="odc-entry">
+            <section class="odc-pos-block" data-odc-pos="verb"><p>verb</p></section>
+            <div class="odc-sense">move</div>
+            <section class="odc-pos-block" data-odc-pos="noun"><p>noun walk</p></section>
+        </section>"#;
+        let out = verdict(source, l1);
+        assert!(!out.structure_ok);
+        assert!(out
+            .reasons
+            .iter()
+            .any(|item| item.code == "structure.sense_sibling"));
+    }
+
+    #[test]
+    fn a_nested_entry_keeps_its_own_boundary() {
+        // The nested entry starts with a sense and has no position block of its
+        // own; the outer entry's position block is not its business.
+        let source = "<p>verb lead</p>";
+        let l1 = r#"<section class="odc-entry">
+            <section class="odc-pos-block" data-odc-pos="verb"><p>verb</p>
+                <section class="odc-entry"><div class="odc-sense">lead</div></section>
+            </section>
+        </section>"#;
+        let out = verdict(source, l1);
+        assert!(out.structure_ok, "{:?}", out.reasons);
     }
 
     #[test]

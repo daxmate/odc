@@ -77,7 +77,10 @@ profile_compare --profile profiles/<dict>.profile.json \
 2. 词条内有词性标记（`odc-pos`）时，必须有 `section.odc-pos-block[data-odc-pos]`，
    且它是词条的**直接子元素**（P1 骨架）。**引用条 `nav.odc-refbar` 内的标记不算**：
    那些面板引用的是别的词条；嵌套 `section.odc-entry` 的标记也不算；
-3. 义项（`odc-sense` / `odc-subsense`）不得与词性块同级：义项必须在词性块内部；
+3. 义项（`odc-sense` / `odc-subsense`）不得**跟在**词性块之后与它同级：义项必须在词性块内部。
+   例外：**前置义项**——出现在词条内第一个词性块**之前**的无词性义项块是允许的
+   （有些词典在词性容器之前先印一条 run-in 义项）；判定按文档顺序追踪「是否已遇到词性块」，
+   一旦遇到过，后续任何同级义项仍然报 `structure.sense_sibling`；
 4. `nav.odc-refbar` 的直接子元素必须都是引用类块（类名以 `odc-ref` 开头）。
 
 ### 3.4 源标签残留 `clean_ok`
@@ -147,3 +150,33 @@ profile_compare --profile profiles/<dict>.profile.json \
    一个空槽位 `<span data-odc-ui="<kind>"></span>`：标在整个 label 上会把源文本判成
    chrome，让尺子漏掉它。LDOCE6 45 条实测：`bag` / `order` / `structure` / `clean`
    全部 45/45。
+
+## 7. 已知差异（2026-11-08）
+
+OALD9 全量 59,645 条 body：`structure` / `clean` 都是 59,645（另计 1 条 raw 兜底豁免），
+`bag` / `order` 是 59,621 —— 剩下的 **24 条 bag/order 失败全部是同一类 ref-panel 切分口径差异**，
+不是文本丢失，也不打算修：
+
+- key：`angling` / `blood sport` / `blues` / `breakfast` / `cartoon` / `comic` / `comic strip` /
+  `dinner` / `field sports` / `fishing` / `gcse` / `hunting` / `jazz` / `lunch` / `meal` / `nct` /
+  `oxbridge` / `religion` / `shooting` / `supper` / `tea` / `the church of england` /
+  `the national curriculum` / `union`
+- 形态：topic / wordfinder 折叠框。源里框标题与正文是两个**紧邻的行内 `span`，中间没有空白**，
+  例如 `<span class="heading">More About</span><span class="body"><span class="h1">meals</span>…`；
+  口径 A（inline 边界不切词）把它们拼成一个 token，报告里因此出现 `bag.missing "Aboutmeals"`。
+- L1 把同一个框提升成块级结构：`p.odc-ref-panel__title`（`More About`）+ `div.odc-ref`（`meals`…），
+  块边界把同一个词分开，L1 侧是两个 token `About` / `meals`。
+- 结论：**字符零丢失**——24 条记录逐条比对，源文本与 L1 文本的字母数字字符多重集完全相等（24/24）。
+  这只是切分点不同（源用行内 `span`、L1 用块级标题 + 正文），渲染上「标题一行 + 正文一段」更合理。
+  **不修**，也**不放宽尺子的块边界守卫**：放宽会让真正的「把一个词拆成两块」漏判。
+
+复核命令（样本重建见 [`dialect-survey.md`](dialect-survey.md)）：
+
+````
+profile_compare --profile profiles/oald9.profile.json \
+  --source /tmp/odc-oald9-full/all-body.jsonl --report /tmp/all.json
+````
+
+同一天结构规则 3 的放宽（前置义项豁免，见 §3.3 第 3 条）把这批之外的 6 条
+`structure.sense_sibling`（`ayrshire` / `dagwood` / `detroit` / `hereford` / `lancashire` / `said`）
+从失败名单里消掉了：`structure` 由 59,639 升到 59,645，`bag` / `order` 不变。
