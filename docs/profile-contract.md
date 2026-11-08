@@ -26,10 +26,11 @@ profile_compare --profile profiles/<dict>.profile.json \
 {
   "mode": "source-contract",
   "summary": { "total": 202, "body": 45, "alias": 157, "equal": 21,
-               "bag_ok": 23, "order_ok": 45, "structure_ok": 41, "clean_ok": 45 },
+               "bag_ok": 23, "order_ok": 45, "structure_ok": 41, "clean_ok": 45,
+               "clean_exempt_raw": 0 },
   "reason_counts": [ { "code": "bag.missing", "count": 46 }, ... ],
   "failures": [ { "key": "...", "bag_ok": false, "order_ok": true,
-                  "structure_ok": true, "clean_ok": true,
+                  "structure_ok": true, "clean_ok": true, "clean_exempt_raw": false,
                   "reasons": [ { "code": "bag.missing", "detail": "\"sets\" x1 absent from L1" } ],
                   "first_diff": "bag.missing: \"sets\" x1 absent from L1" } ]
 }
@@ -44,11 +45,25 @@ profile_compare --profile profiles/<dict>.profile.json \
 
 ### 3.1 文本词袋 `bag_ok`
 
-- 取两棵树的文本节点，按文档顺序切词：
-  - 拉丁/数字连成一段 → 一个 token（`don't` → `don` + `t`）；
-  - 中日韩/假名/谚文**每字符一个 token**（这些文字不用空格分词）；
-  - 标点与空白只作分隔，不比较；**大小写保留**（改写词头也算失真）。
-- 两个多重集必须完全相等；差异按 `bag.missing` / `bag.extra`（漏词 / 多词）报告。
+- 词袋在**同一份文本的两种切分口径**下各算一次，任一通过即通过（见下面的「为什么两种口径」）：
+
+  **口径 A —— 连续文本（默认，报告用这一口径）**：
+  - **inline 边界不切词**：`span` / `b` / `i` / `em` / `a` / `u` / `strong` 等行内元素两侧的文字
+    处于同一渲染位置，先拼接再切词 —— `sandwich<span>es</span>` 与 `sandwiches` 都得到 `sandwiches`；
+  - **块级边界切词**：`div` / `p` / `li` / `section` / `td` / `br` / `h1..h6` 等（以及 `data-odc-ui` 注入的 chrome）
+    结束当前文本段，绝不把两个段落粘成一个词；
+
+  **口径 B —— 逐文本节点**：每个文本节点各自切词，被元素隔开的词不会拼接。
+
+  两口径共用词法：拉丁/数字连成一段 → 一个 token（`don't` → `don` + `t`）；
+  中日韩/假名/谚文**每字符一个 token**；标点与空白只作分隔，不比较；**大小写保留**（改写词头也算失真）。
+- 两个多重集必须相等；差异按 `bag.missing` / `bag.extra`（漏词 / 多词）报告。
+
+**为什么两种口径**：源片段与 L1 是两棵不同的树。源用行内 `span` 承载视觉上的块
+（OALD9 的 `span.heading` + `span.p` 被 presentation 提升为 `p.odc-ref-panel__title` + `div.odc-ref`），
+引擎又会把源里的元素 unwrap 掉（`.ndv` → 子节点），于是**同一个词在两棵树里的切分点不同**，
+这在标签层面不可比。两种口径都对块边界切词，所以「L1 把一个词切成两块」「丢词 / 造词」
+在两边都判失败；只有切分差异被容忍。报告只在口径 A 下记录失败项。
 
 ### 3.2 块内顺序 `order_ok`
 
@@ -72,6 +87,10 @@ profile_compare --profile profiles/<dict>.profile.json \
   `lang` / `dir` / `colspan` / `rowspan` / `width` / `height`，或以 `data-odc-` 开头
   （含 `data-odc-orig-class`——那是引擎**有意**记录原类名的地方）；
 - 标签名不判：`h2` / `li` / `b` 这类中性标签允许保留，只要求类名与属性归引擎。
+- **raw 兜底豁免**（规范 §6）：L1 根节点是 `section.odc-entry--raw`（或带 `data-odc-unadapted="1"`）时，
+  该词条子树跳过 clean 检查——兜底按设计保留净化后的源结构，把它的源类名当成泄漏只是噪声；
+  豁免**必须计数**，报告里 `summary.clean_exempt_raw` 记条数，不许静默。
+  `bag` / `order` / `structure` 三条照旧不豁免。
 
 ### 3.5 不计入比较的文本
 

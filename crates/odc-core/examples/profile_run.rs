@@ -21,6 +21,21 @@ use odc_core::profile::{Outcome, Profile};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
+/// Dictionary slug the profile was written for: the first segment of its id.
+///
+/// The slug names the source in every L1 root (`data-odc-dict`), so it must
+/// come from the profile and never from a constant in this runner. Same rule
+/// as `profile_compare`; `dict.name` is a human label ('Longman Dictionary of
+/// Contemporary English 6 (En-Cn)'), not a slug.
+fn dict_slug(profile: &Profile) -> String {
+    profile
+        .profile_id
+        .split('.')
+        .next()
+        .unwrap_or("unknown")
+        .to_string()
+}
+
 /// One JSONL sample.
 #[derive(Deserialize)]
 struct Record {
@@ -75,10 +90,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut samples = Vec::new();
     let mut hits: BTreeMap<String, u64> = BTreeMap::new();
     let mut totals = Totals::default();
-    let ctx_dict = "mwaled";
+    let ctx_dict = dict_slug(&profile);
 
     for record in &records {
-        let ctx = ParseContext::new(record.key.clone(), ctx_dict, "en");
+        let ctx = ParseContext::new(record.key.clone(), &ctx_dict, "en");
         let outcome = profile.apply(&record.text, &ctx);
         let clean =
             odc_core::html::repair_sanitize(&record.text).unwrap_or_else(|| record.text.clone());

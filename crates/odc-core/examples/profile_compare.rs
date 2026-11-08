@@ -106,7 +106,7 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
     if report["mode"] == "source-contract" {
         let count = |name: &str| summary[name].as_u64().unwrap_or(0);
         println!(
-            "source-contract: {} body + {} alias | bag {}/{} order {}/{} structure {}/{} clean {}/{}",
+            "source-contract: {} body + {} alias | bag {}/{} order {}/{} structure {}/{} clean {}/{} ({} raw exempt)",
             count("body"),
             count("alias"),
             count("bag_ok"),
@@ -117,6 +117,7 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
             count("body"),
             count("clean_ok"),
             count("body"),
+            count("clean_exempt_raw"),
         );
         // Non-zero until every body record passes: the ruler measures, it does
         // not excuse a partial pass.
@@ -439,6 +440,7 @@ fn compare_source(
     let mut order_ok = 0usize;
     let mut structure_ok = 0usize;
     let mut clean_ok = 0usize;
+    let mut clean_exempt_raw = 0usize;
     for record in &records {
         let ctx = ParseContext::new(record.key.clone(), dict.clone(), "en");
         let produced = match profile.apply(&record.text, &ctx) {
@@ -467,6 +469,9 @@ fn compare_source(
         if verdict.clean_ok {
             clean_ok += 1;
         }
+        if verdict.clean_exempt_raw {
+            clean_exempt_raw += 1;
+        }
         if verdict.ok() {
             equal += 1;
             continue;
@@ -480,6 +485,7 @@ fn compare_source(
             "order_ok": verdict.order_ok,
             "structure_ok": verdict.structure_ok,
             "clean_ok": verdict.clean_ok,
+            "clean_exempt_raw": verdict.clean_exempt_raw,
             "reasons": verdict
                 .reasons
                 .iter()
@@ -509,6 +515,7 @@ fn compare_source(
             "order_ok": order_ok,
             "structure_ok": structure_ok,
             "clean_ok": clean_ok,
+            "clean_exempt_raw": clean_exempt_raw,
         },
         "reason_counts": reasons,
         "failures": failures,

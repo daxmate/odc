@@ -7,7 +7,10 @@
 //! and never repairs anything.
 //!
 //! 1. `bag` — the two trees yield the same text-token multiset. A token is a
-//!    run of alphanumeric characters; CJK text contributes one token per
+//!    run of alphanumeric characters cut out of the *rendered* text: inline
+//!    boundaries (`span`, `b`, `i`, ...) are transparent, so
+//!    `sandwich<span>es</span>` and `sandwiches` both yield `sandwiches`, while
+//!    block boundaries still separate. CJK text contributes one token per
 //!    character, because it is not written with spaces. Punctuation and
 //!    whitespace only separate tokens, they are not compared. Case is kept, so
 //!    a rule that re-cases a headword is still reported.
@@ -59,6 +62,10 @@ const ODC_CLASS: &str = "odc-";
 const ODC_ATTR: &str = "data-odc-";
 /// Marker of chrome text a client injects (D2).
 const UI: &str = "data-odc-ui";
+/// Class of the raw fallback entry (spec section 6).
+const RAW_ENTRY: &str = "odc-entry--raw";
+/// Flag that marks a fragment the profile could not adapt.
+const RAW_FLAG: &str = "data-odc-unadapted";
 
 /// Blocks whose internal text order D1 constrains.
 const SEMANTIC_BLOCKS: [&str; 6] = [
@@ -115,6 +122,11 @@ pub struct Verdict {
     pub structure_ok: bool,
     /// No source class or source attribute survived.
     pub clean_ok: bool,
+    /// The clean check was skipped for a raw fallback entry (spec section 6):
+    /// that entry keeps the source markup on purpose, so reporting its source
+    /// classes and attributes as leakage would be noise. Counted, never
+    /// silent.
+    pub clean_exempt_raw: bool,
     /// One entry per failed check, capped at `MAX_PER_CODE` per code.
     pub reasons: Vec<Reason>,
 }
@@ -134,12 +146,58 @@ impl Verdict {
 }
 
 /// Compare one L1 fragment with the source fragment it was built from.
+///
+/// The four checks run under two readings of the same text. Source and L1 are
+/// different trees: an element the source writes as an inline `span` can be a
+/// block in the L1 (`p.odc-ref-panel__title`), and an element the engine
+/// unwraps disappears from the L1 entirely. Segmentation is therefore not
+/// comparable across the two trees, so a record passes when *either* reading
+/// keeps the text intact:
+///
+/// * `Reading::Run` — a word may continue across inline boundaries
+///   (`sandwich<span>es</span>` reads as `sandwiches`); block boundaries cut;
+/// * `Reading::Node` — every text node is its own unit, which is how a
+///   fragment looks before serialisation joins two mapped text nodes into one.
+///
+/// Both readings still cut at block boundaries and at whitespace, so a word
+/// dropped, invented or glued across a paragraph fails under both. A record
+/// is only reported under the strict reading.
 #[must_use]
 pub fn check(source: &str, l1: &str) -> Verdict {
     let source_dom = parse_fragment(source);
     let l1_dom = parse_fragment(l1);
-    let source_tokens = tokens_of(&source_dom.document);
-    let l1_tokens = tokens_of(&l1_dom.document);
+    let strict = judge(&source_dom.document, &l1_dom.document, Reading::Run);
+    if strict.ok() {
+        return strict;
+    }
+    let relaxed = judge(&source_dom.document, &l1_dom.document, Reading::Node);
+    if relaxed.ok() {
+        return relaxed;
+    }
+    strict
+}
+
+/// How a tree's text is cut into comparison tokens.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Reading {
+    /// A word runs across inline boundaries, block boundaries cut.
+    Run,
+    /// Every text node is its own unit.
+    Node,
+}
+
+impl Reading {
+    fn tokens(self, root: &Handle) -> Vec<String> {
+        match self {
+            Reading::Run => tokens_of(root),
+            Reading::Node => tokens_by_node(root),
+        }
+    }
+}
+
+fn judge(source_root: &Handle, l1_root: &Handle, reading: Reading) -> Verdict {
+    let source_tokens = reading.tokens(source_root);
+    let l1_tokens = reading.tokens(l1_root);
     let mut verdict = Verdict::default();
 
     let expected = multiset(&source_tokens);
@@ -149,15 +207,16 @@ pub fn check(source: &str, l1: &str) -> Verdict {
         bag_reasons(&expected, &actual, &mut verdict.reasons);
     }
 
-    let order = order_reasons(&l1_dom.document, &source_tokens);
+    let order = order_reasons(l1_root, &source_tokens, reading);
     verdict.order_ok = order.is_empty();
     verdict.reasons.extend(order);
 
-    let structure = structure_reasons(&l1_dom.document);
+    let structure = structure_reasons(l1_root);
     verdict.structure_ok = structure.is_empty();
     verdict.reasons.extend(structure);
 
-    let clean = clean_reasons(&l1_dom.document);
+    let mut clean = Vec::new();
+    verdict.clean_exempt_raw = clean_reasons(l1_root, &mut clean);
     verdict.clean_ok = clean.is_empty();
     verdict.reasons.extend(clean);
 
@@ -165,24 +224,65 @@ pub fn check(source: &str, l1: &str) -> Verdict {
 }
 
 /// Text tokens of one tree, in document order.
+///
+/// Tokens are cut out of a *run of rendered text*, not out of one text node:
+/// pieces that share a rendering position (`sandwich` followed by
+/// `<span>es</span>`, or a text node the engine had to split while mapping)
+/// are joined before they are split into words. Only a block boundary ends a
+/// run, so two paragraphs are never glued into one word.
 #[must_use]
 pub fn tokens_of(root: &Handle) -> Vec<String> {
     let mut out = Vec::new();
-    collect_tokens(root, &mut out);
+    let mut run = String::new();
+    collect_tokens(root, &mut run, &mut out);
+    flush(&mut run, &mut out);
     out
 }
 
-fn collect_tokens(node: &Handle, out: &mut Vec<String>) {
+fn collect_tokens(node: &Handle, run: &mut String, out: &mut Vec<String>) {
     if let NodeData::Text { contents } = &node.data {
-        push_tokens(&contents.borrow(), out);
+        push_text(&contents.borrow(), run, out);
+        return;
+    }
+    if is_element(node) && skipped(node) {
+        // Chrome is not source text, and it is not a place a word may run
+        // through either: an injected label ends the visible run.
+        flush(run, out);
+        return;
+    }
+    let block = is_element(node) && is_block(node);
+    if block {
+        flush(run, out);
+    }
+    let children = node.children.borrow().clone();
+    for child in children {
+        collect_tokens(&child, run, out);
+    }
+    if block {
+        flush(run, out);
+    }
+}
+
+/// Text tokens of one tree under the per-node reading: every text node is
+/// cut into words on its own, so a word split by an element stays split.
+fn tokens_by_node(root: &Handle) -> Vec<String> {
+    let mut out = Vec::new();
+    collect_node_tokens(root, &mut out);
+    out
+}
+
+fn collect_node_tokens(node: &Handle, out: &mut Vec<String>) {
+    if let NodeData::Text { contents } = &node.data {
+        let mut run = String::new();
+        push_text(&contents.borrow(), &mut run, out);
+        flush(&mut run, out);
         return;
     }
     if is_element(node) && skipped(node) {
         return;
     }
-    let children = node.children.borrow().clone();
-    for child in children {
-        collect_tokens(&child, out);
+    for child in node.children.borrow().clone() {
+        collect_node_tokens(&child, out);
     }
 }
 
@@ -194,23 +294,79 @@ fn skipped(node: &Handle) -> bool {
     matches!(element_name(node).as_deref(), Some("script" | "style"))
 }
 
-/// Split one text run into comparison tokens.
+/// Add one text node to the current run, cutting words out of it.
 ///
 /// Latin runs stay whole (`don't` is `don` + `t`); every CJK character is its
-/// own token, because those scripts are not space-separated.
-fn push_tokens(text: &str, out: &mut Vec<String>) {
-    let mut word = String::new();
+/// own token, because those scripts are not space-separated. The word in
+/// flight is *not* flushed at the end: the run may continue in the next text
+/// node.
+fn push_text(text: &str, run: &mut String, out: &mut Vec<String>) {
     for ch in text.chars() {
         if is_cjk(ch) {
-            flush(&mut word, out);
+            flush(run, out);
             out.push(ch.to_string());
         } else if ch.is_alphanumeric() {
-            word.push(ch);
+            run.push(ch);
         } else {
-            flush(&mut word, out);
+            flush(run, out);
         }
     }
-    flush(&mut word, out);
+}
+
+/// Elements that end a text run: their content sits on its own line.
+///
+/// Inline elements (`span`, `b`, `i`, `em`, `a`, `u`, `strong`, ...) are
+/// transparent — text on both sides of them shares one rendering position, so
+/// a word may continue across the boundary.
+const BLOCKS: [&str; 43] = [
+    "address",
+    "article",
+    "aside",
+    "blockquote",
+    "body",
+    "br",
+    "caption",
+    "dd",
+    "details",
+    "dialog",
+    "div",
+    "dl",
+    "dt",
+    "fieldset",
+    "figcaption",
+    "figure",
+    "footer",
+    "form",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "header",
+    "hr",
+    "html",
+    "li",
+    "main",
+    "nav",
+    "ol",
+    "p",
+    "pre",
+    "section",
+    "summary",
+    "table",
+    "tbody",
+    "td",
+    "tfoot",
+    "th",
+    "thead",
+    "tr",
+    "ul",
+];
+
+/// Whether an element ends a text run.
+fn is_block(node: &Handle) -> bool {
+    element_name(node).is_some_and(|name| BLOCKS.contains(&name.as_str()))
 }
 
 fn flush(word: &mut String, out: &mut Vec<String>) {
@@ -275,12 +431,12 @@ fn bag_reasons(
 }
 
 /// Check the internal order of every semantic block.
-fn order_reasons(root: &Handle, source: &[String]) -> Vec<Reason> {
+fn order_reasons(root: &Handle, source: &[String], reading: Reading) -> Vec<Reason> {
     let mut out = Vec::new();
     let mut blocks: Vec<Handle> = Vec::new();
     collect_blocks(root, &mut blocks);
     for block in blocks {
-        let tokens = tokens_of(&block);
+        let tokens = reading.tokens(&block);
         if tokens.is_empty() {
             continue;
         }
@@ -479,44 +635,81 @@ fn collect_elements(node: &Handle, out: &mut Vec<Handle>) {
 }
 
 /// Check that no source class name and no source attribute survived.
-fn clean_reasons(root: &Handle) -> Vec<Reason> {
-    let mut out = Vec::new();
-    let mut elements = Vec::new();
-    collect_elements(root, &mut elements);
-    let mut classes = 0usize;
-    let mut attrs = 0usize;
-    for element in elements {
-        let tag = element_name(&element).unwrap_or_default();
-        for class in class_list(&element) {
-            if class.starts_with(ODC_CLASS) {
-                continue;
-            }
-            classes += 1;
-            if classes <= MAX_PER_CODE {
-                out.push(Reason::new(
-                    "clean.class",
-                    format!("source class {class:?} on <{tag}>"),
-                ));
-            }
-        }
-        let NodeData::Element { attrs: names, .. } = &element.data else {
+///
+/// A raw fallback entry (spec section 6) is exempt: the profile could not
+/// adapt the fragment, so the sanitiser kept the source markup on purpose.
+/// Its subtree is skipped and the caller is told that the exemption happened,
+/// so the report can count it instead of hiding it.
+fn clean_reasons(root: &Handle, out: &mut Vec<Reason>) -> bool {
+    let mut counters = CleanCounters::default();
+    check_clean(root, false, &mut counters, out);
+    counters.exempted
+}
+
+/// Running counters of one clean pass.
+#[derive(Default)]
+struct CleanCounters {
+    /// Source classes reported so far, across every non-exempt element.
+    classes: usize,
+    /// Source attributes reported so far.
+    attrs: usize,
+    /// Whether a raw fallback entry was met.
+    exempted: bool,
+}
+
+fn check_clean(
+    node: &Handle,
+    inherited: bool,
+    counters: &mut CleanCounters,
+    out: &mut Vec<Reason>,
+) {
+    let exempt = inherited || (is_element(node) && is_raw_fallback(node));
+    if exempt {
+        counters.exempted = true;
+    } else if is_element(node) {
+        report_leaks(node, counters, out);
+    }
+    for child in node.children.borrow().clone() {
+        check_clean(&child, exempt, counters, out);
+    }
+}
+
+/// Report the source classes and attributes of one non-exempt element.
+fn report_leaks(element: &Handle, counters: &mut CleanCounters, out: &mut Vec<Reason>) {
+    let tag = element_name(element).unwrap_or_default();
+    for class in class_list(element) {
+        if class.starts_with(ODC_CLASS) {
             continue;
-        };
-        for name in names.borrow().iter() {
-            let name = name.name.local.to_string();
-            if name.starts_with(ODC_ATTR) || NEUTRAL_ATTRS.contains(&name.as_str()) {
-                continue;
-            }
-            attrs += 1;
-            if attrs <= MAX_PER_CODE {
-                out.push(Reason::new(
-                    "clean.attr",
-                    format!("source attribute {name:?} on <{tag}>"),
-                ));
-            }
+        }
+        counters.classes += 1;
+        if counters.classes <= MAX_PER_CODE {
+            out.push(Reason::new(
+                "clean.class",
+                format!("source class {class:?} on <{tag}>"),
+            ));
         }
     }
-    out
+    let NodeData::Element { attrs: names, .. } = &element.data else {
+        return;
+    };
+    for name in names.borrow().iter() {
+        let name = name.name.local.to_string();
+        if name.starts_with(ODC_ATTR) || NEUTRAL_ATTRS.contains(&name.as_str()) {
+            continue;
+        }
+        counters.attrs += 1;
+        if counters.attrs <= MAX_PER_CODE {
+            out.push(Reason::new(
+                "clean.attr",
+                format!("source attribute {name:?} on <{tag}>"),
+            ));
+        }
+    }
+}
+
+/// Whether an element is a raw fallback entry (spec section 6).
+fn is_raw_fallback(node: &Handle) -> bool {
+    has_class(node, RAW_ENTRY) || attr(node, RAW_FLAG).as_deref() == Some("1")
 }
 
 fn tag_is(node: &Handle, name: &str) -> bool {
@@ -533,6 +726,81 @@ mod tests {
 
     fn verdict(source: &str, l1: &str) -> Verdict {
         check(source, l1)
+    }
+
+    fn tokens(html: &str) -> Vec<String> {
+        tokens_of(&parse_fragment(html).document)
+    }
+
+    #[test]
+    fn an_inline_boundary_does_not_split_a_word() {
+        // Mapping `span.ndv` to its children leaves two text nodes behind:
+        // `sandwich` + `es`. Cutting tokens per node used to give
+        // ["sandwich", "es"], which the source ("sandwiches") never matches.
+        assert_eq!(tokens("<p>sandwich<span>es</span></p>"), ["sandwiches"]);
+        assert_eq!(tokens("<p>sandwiches</p>"), ["sandwiches"]);
+
+        let out = verdict(
+            "<p>sandwiches</p>",
+            r#"<section class="odc-entry"><div class="odc-sense">sandwich<span>es</span></div></section>"#,
+        );
+        assert!(out.bag_ok, "{:?}", out.reasons);
+        assert!(out.order_ok, "{:?}", out.reasons);
+    }
+
+    #[test]
+    fn a_block_boundary_still_separates_words() {
+        assert_eq!(tokens("<p>sand</p><p>wiches</p>"), ["sand", "wiches"]);
+
+        let out = verdict(
+            "<p>sand</p><p>wiches</p>",
+            r#"<section class="odc-entry"><p>sandwiches</p></section>"#,
+        );
+        assert!(!out.bag_ok, "{:?}", out.reasons);
+    }
+
+    #[test]
+    fn a_word_lost_inside_a_run_is_still_reported() {
+        let source = "<p>sandwich<span>es</span> and tea</p>";
+        let l1 = r#"<section class="odc-entry"><div class="odc-sense">sandwich<span>es</span></div></section>"#;
+        let out = verdict(source, l1);
+        assert!(!out.bag_ok);
+        assert!(out
+            .reasons
+            .iter()
+            .any(|item| item.code == "bag.missing" && item.detail.contains("and")));
+    }
+
+    #[test]
+    fn a_reordered_run_is_still_reported() {
+        let source = "<p>one <b>two</b> three</p>";
+        let l1 = r#"<section class="odc-entry"><div class="odc-sense">three one <b>two</b></div></section>"#;
+        let out = verdict(source, l1);
+        assert!(!out.order_ok);
+        assert!(out.reasons.iter().any(|item| item.code == "order.block"));
+    }
+
+    #[test]
+    fn a_raw_fallback_entry_is_exempt_from_the_clean_check() {
+        let source = r#"<div class="dict-merge"><p>a b</p></div>"#;
+        let l1 = r#"<section class="odc-entry odc-entry--raw" data-odc-key="k" data-odc-unadapted="1"><div class="dict-merge"><p>a b</p></div></section>"#;
+        let out = verdict(source, l1);
+        assert!(out.clean_exempt_raw);
+        assert!(out.clean_ok, "{:?}", out.reasons);
+        assert!(out.reasons.is_empty(), "{:?}", out.reasons);
+    }
+
+    #[test]
+    fn an_ordinary_entry_is_still_checked_for_source_classes() {
+        let source = r#"<div class="dict-merge"><p>a b</p></div>"#;
+        let l1 = r#"<section class="odc-entry"><div class="dict-merge"><p>a b</p></div></section>"#;
+        let out = verdict(source, l1);
+        assert!(!out.clean_ok);
+        assert!(!out.clean_exempt_raw);
+        assert!(out
+            .reasons
+            .iter()
+            .any(|item| item.code == "clean.class" && item.detail.contains("dict-merge")));
     }
 
     #[test]
