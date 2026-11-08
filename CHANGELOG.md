@@ -6,6 +6,8 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-08
+
 ### Added
 - Import: ``odc import --format mdx --max-record-bytes BYTES`` and
   `MdxImportOptions::max_record_bytes` raise the single-record limit
@@ -29,6 +31,18 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   fragment it was built from — D1 text bag, order inside a semantic block, P1
   skeleton invariants and source residue — so a dictionary without an adapter
   can be measured. Rules, numbers and limits: `docs/profile-contract.md`.
+- Contract: the source↔L1 ruler splits tokens per continuous text run, so an
+  inline element (or a node the engine had to unwrap) never splits a word;
+  block boundaries still cut. A per-text-node reading stays as a fallback, and
+  failures always report the run reading.
+- Contract: entries that fall back to raw HTML (`odc-entry--raw`,
+  `data-odc-unadapted`) are exempt from the `clean` check and counted as
+  `clean_exempt_raw`; `bag`, `order` and `structure` still apply.
+- Contract: structure rule 3 now allows unmarked sense blocks before the first
+  position block, while a sense between or after position blocks is still a
+  failure. Known ref-panel differences (24 OALD9 entries) are documented.
+- Examples: `profile_run` derives the dictionary slug from `profile_id`
+  instead of a hard-coded `mwaled`.
 
 ### Changed
 - Import: the MDX record limit grows from 1 MiB to 4 MiB by default, so large
