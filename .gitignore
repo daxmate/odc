@@ -9,6 +9,9 @@
 # Build artifacts (unified layout: <root>/build/)
 build/
 
+# Local git worktrees (git worktree add .worktrees/<name>)
+.worktrees/
+
 # Apple build artifacts
 apps/apple/ODictKit/Frameworks/
 apps/apple/build/
