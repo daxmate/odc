@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-31T03:28:19Z",
-  "updated_at": "2026-11-08T10:48:35Z",
+  "updated_at": "2026-11-08T11:27:19Z",
   "files": {
     ".gitattributes": {
       "role": "index",
@@ -17,9 +17,9 @@
     },
     ".gitignore": {
       "role": "index",
-      "sha256": "5778220c4e6c9a6cd092526dd4d1306a14e3e12d7202693f9e70b64a19b125b6",
-      "size": 388,
-      "normalized_sha256": "5778220c4e6c9a6cd092526dd4d1306a14e3e12d7202693f9e70b64a19b125b6"
+      "sha256": "e3920c9e50262b317c6f197908b514c4dffe407877c33b84519e04bbdc3f3a5e",
+      "size": 460,
+      "normalized_sha256": "e3920c9e50262b317c6f197908b514c4dffe407877c33b84519e04bbdc3f3a5e"
     },
     "AGENTS.md": {
       "role": "index",
@@ -59,9 +59,9 @@
     },
     "README.md": {
       "role": "index",
-      "sha256": "b17552e319d84d2cfd0642d18b75ff3a91a4da1bf9b4e9ac82c80ddf555e910d",
-      "size": 12260,
-      "normalized_sha256": "b17552e319d84d2cfd0642d18b75ff3a91a4da1bf9b4e9ac82c80ddf555e910d"
+      "sha256": "064684c5e67b9411fe9e0fbf61edb86dbf55e434ce8f6f8d288f35bb88fbd2cb",
+      "size": 12562,
+      "normalized_sha256": "064684c5e67b9411fe9e0fbf61edb86dbf55e434ce8f6f8d288f35bb88fbd2cb"
     },
     "SECURITY.md": {
       "role": "index",
@@ -71,9 +71,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "9f421410e40255dbbdef4da27fc978c9414eb7634d54c8bceea827876b824459",
-      "size": 85590,
-      "normalized_sha256": "9f421410e40255dbbdef4da27fc978c9414eb7634d54c8bceea827876b824459"
+      "sha256": "724339b2452d14a8d8b0bff09bedbc4f6f8e4e448dc2ce95e12856fa4a0d75b1",
+      "size": 85701,
+      "normalized_sha256": "724339b2452d14a8d8b0bff09bedbc4f6f8e4e448dc2ce95e12856fa4a0d75b1"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -779,9 +779,9 @@
     },
     "apps/apple/README.md": {
       "role": "index",
-      "sha256": "23751edfe3c8bc52c4829fbaa044a98b1fbe3d34814bdb51a044a72ee18d3c61",
-      "size": 11608,
-      "normalized_sha256": "23751edfe3c8bc52c4829fbaa044a98b1fbe3d34814bdb51a044a72ee18d3c61"
+      "sha256": "fd12a5392ed30ceb788d59d81846785ee571eb42faaf0f1b641b14e428e959c7",
+      "size": 12315,
+      "normalized_sha256": "fd12a5392ed30ceb788d59d81846785ee571eb42faaf0f1b641b14e428e959c7"
     },
     "apps/apple/Shared/Assets.xcassets/AppIcon.appiconset/Contents.json": {
       "role": "index",
@@ -1637,9 +1637,9 @@
     },
     "scripts/build-app.sh": {
       "role": "index",
-      "sha256": "681af1e76b4adc86bf0ac36f1cc2fb5bbe4bfeb1ee68b4e3e4ded1188cce8fe6",
-      "size": 4389,
-      "normalized_sha256": "681af1e76b4adc86bf0ac36f1cc2fb5bbe4bfeb1ee68b4e3e4ded1188cce8fe6"
+      "sha256": "04623322e545974ba71a87b555109a5aafa05c4f90b7ae4e3e46c558ca8f7c18",
+      "size": 7071,
+      "normalized_sha256": "04623322e545974ba71a87b555109a5aafa05c4f90b7ae4e3e46c558ca8f7c18"
     },
     "scripts/build-apple.sh": {
       "role": "index",
