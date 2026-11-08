@@ -48,6 +48,23 @@ xcodebuild -project apps/apple/ODict.xcodeproj -scheme ODictDesktop \
 be re-run after changing the Rust side; `ODict.xcodeproj` is generated and is
 not meant to be edited by hand.
 
+To build and install the macOS app in one go, pass `--install`:
+
+```bash
+./scripts/build-app.sh --install           # build both targets, install macOS only
+./scripts/build-app.sh macos --install     # build macOS, then install it
+```
+
+`--install` copies the built bundle over the previous one and launches it. The
+previous bundle is moved to `/tmp/ODict Desktop-old-<timestamp>.app` instead of
+being deleted, so it can be restored. Supported environment variables:
+
+- `ODC_INSTALL_DIR` — install destination (default `/Applications`).
+- `ODC_SKIP_LAUNCH=1` — install without launching the app.
+
+Installation is macOS only: `ios --install` exits with status 2 because the iOS
+app is not available yet.
+
 Package tests (macOS slice, no simulator needed):
 
 ```bash

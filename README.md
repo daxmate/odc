@@ -210,6 +210,10 @@ cd apps/apple && xcodegen generate      # project.yml -> ODict.xcodeproj
 一条命令构建两端：`./scripts/build-app.sh`（根目录 `./build-app.sh` 为兼容别名，旧入口 `scripts/build-apple.sh` 仍可用）。包测试：
 `swift test --package-path apps/apple/ODictKit`。
 
+打包安装 macOS（覆盖安装并启动）：`./scripts/build-app.sh --install`；安装目录用
+`ODC_INSTALL_DIR` 覆盖（默认 `/Applications`），`ODC_SKIP_LAUNCH=1` 跳过启动。
+iOS 端尚未开发，`ios --install` 会报错退出（状态码 2）。细节见 `apps/apple/README.md`。
+
 **导入 MDX（仅 macOS）**：`Open Dictionary or MDX…`（⌘O）选一个 `.mdx`，
 App 在后台调用 `odc_import_mdx_to_odc` 转换成独立 `<name>.odc`（与源文件同
 目录，不可写时回退 `~/Documents`，已存在则加 `-1`、`-2` 后缀），完成后自动
