@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-31T03:28:19Z",
-  "updated_at": "2026-11-08T11:27:19Z",
+  "updated_at": "2026-11-08T14:27:11Z",
   "files": {
     ".gitattributes": {
       "role": "index",
@@ -71,9 +71,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "724339b2452d14a8d8b0bff09bedbc4f6f8e4e448dc2ce95e12856fa4a0d75b1",
-      "size": 85701,
-      "normalized_sha256": "724339b2452d14a8d8b0bff09bedbc4f6f8e4e448dc2ce95e12856fa4a0d75b1"
+      "sha256": "9b8a372a4dd7dba857a8fecef9ddd29fceceff6f139f7936f2f201b4ff2916f0",
+      "size": 85742,
+      "normalized_sha256": "9b8a372a4dd7dba857a8fecef9ddd29fceceff6f139f7936f2f201b4ff2916f0"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -737,9 +737,9 @@
     },
     "apps/apple/ODictKit/Tests/ODictKitTests/ReleaseImportTests.swift": {
       "role": "index",
-      "sha256": "3ef4cadf4690fbe3e571547f6f609a885a7a87ce57d75088ba7d1b4610ce95cf",
+      "sha256": "bd3e070fcea1279b631615936475f6728de6e216d78eaebd998ebce38f8c03aa",
       "size": 11636,
-      "normalized_sha256": "3ef4cadf4690fbe3e571547f6f609a885a7a87ce57d75088ba7d1b4610ce95cf"
+      "normalized_sha256": "bd3e070fcea1279b631615936475f6728de6e216d78eaebd998ebce38f8c03aa"
     },
     "apps/apple/ODictKit/Tests/ODictKitTests/SearchFieldReturnTests.swift": {
       "role": "index",
@@ -803,9 +803,9 @@
     },
     "apps/apple/project.yml": {
       "role": "index",
-      "sha256": "b4e1fc2eacf4fa0cdfd2feab6b65ed7d03a7e286279c3c008451a2eb87076182",
+      "sha256": "16a37f6406fee78659000855168f9031bf37021e7eef8a558994ac893dc17d34",
       "size": 3063,
-      "normalized_sha256": "b4e1fc2eacf4fa0cdfd2feab6b65ed7d03a7e286279c3c008451a2eb87076182"
+      "normalized_sha256": "16a37f6406fee78659000855168f9031bf37021e7eef8a558994ac893dc17d34"
     },
     "assets/odc.css": {
       "role": "index",
