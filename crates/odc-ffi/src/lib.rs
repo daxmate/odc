@@ -30,6 +30,7 @@ use odc_core::cbor::Value as CborValue;
 use odc_core::html::{process_html, HtmlMode, HtmlOptions};
 use odc_core::link::LinkResolution;
 use odc_core::pack::PackOptions;
+use odc_core::profile::Profile;
 use odc_core::release::{self, PublishOptions};
 use odc_core::repo::{
     ChangeKind, DiffKind, EntryDiff, EntryWriteOutcome, FieldDiff, Publisher, Status, TrustOutcome,
@@ -835,7 +836,7 @@ pub unsafe extern "C" fn odc_import_mdx_to_odc(
         // SAFETY: both pointers follow the contract documented above.
         let mdx = unsafe { text_arg(mdx_path, "mdx_path") }?;
         let out = unsafe { text_arg(out_odc_path, "out_odc_path") }?;
-        let converted = import_mdx_to_odc(Path::new(&mdx), Path::new(&out), None, None)?;
+        let converted = import_mdx_to_odc(Path::new(&mdx), Path::new(&out), None, None, None)?;
         let payload = import_report_to_json(&converted.report, converted.output_bytes);
         store_json(report_json_out, &payload)?;
         Ok(0)
@@ -878,6 +879,46 @@ pub unsafe extern "C" fn odc_import_mdx_to_odc_with_mdd(
     }
 }
 
+/// Import an MDX file with a profile into one `.odc`.
+///
+/// Same contract as [`odc_import_mdx_to_odc_with_mdd`]; `profile_path` is a
+/// NUL-terminated UTF-8 path to a profile document (`*.profile.json`) or NULL
+/// for an import without a profile. The profile decides the L1 body of every
+/// record it claims; unclaimed records keep the built-in HTML pass and are
+/// counted as unadapted in the report, which now also carries a `contract`
+/// summary and the P0-failure counters.
+///
+/// # Safety
+///
+/// `mdx_path`, `out_odc_path`, `mdd_paths_json` and `profile_path` must be
+/// NULL or NUL-terminated UTF-8 strings; `report_json_out` and
+/// `error_message` must be `NULL` or point to writable storage for one
+/// `char *`.
+#[no_mangle]
+pub unsafe extern "C" fn odc_import_mdx_to_odc_with_profile(
+    mdx_path: *const c_char,
+    out_odc_path: *const c_char,
+    mdd_paths_json: *const c_char,
+    profile_path: *const c_char,
+    report_json_out: *mut *mut c_char,
+    error_message: *mut *mut c_char,
+) -> i32 {
+    // A stale report pointer must never survive a failed import.
+    clear_error(report_json_out);
+    guarded(error_message, -1, || {
+        // SAFETY: every pointer follows the contract documented above.
+        let mdx = unsafe { text_arg(mdx_path, "mdx_path") }?;
+        let out = unsafe { text_arg(out_odc_path, "out_odc_path") }?;
+        let volumes = unsafe { mdd_paths(mdd_paths_json) }?;
+        let profile = unsafe { profile_arg(profile_path) }?;
+        let converted =
+            import_mdx_to_odc(Path::new(&mdx), Path::new(&out), volumes, None, profile)?;
+        let payload = import_report_to_json(&converted.report, converted.output_bytes);
+        store_json(report_json_out, &payload)?;
+        Ok(0)
+    })
+}
+
 /// Import an MDX file plus MDD volumes into one `.odc`, reporting progress.
 ///
 /// Same contract as [`odc_import_mdx_to_odc_with_mdd`], plus a `callback` that
@@ -917,7 +958,8 @@ pub unsafe extern "C" fn odc_import_mdx_to_odc_with_mdd_progress(
             let mut sink = FfiProgress { callback, context };
             Box::new(move |sample| sink.send(sample)) as Box<dyn FnMut(ImportProgress)>
         });
-        let converted = import_mdx_to_odc(Path::new(&mdx), Path::new(&out), volumes, progress)?;
+        let converted =
+            import_mdx_to_odc(Path::new(&mdx), Path::new(&out), volumes, progress, None)?;
         let payload = import_report_to_json(&converted.report, converted.output_bytes);
         store_json(report_json_out, &payload)?;
         Ok(0)
@@ -953,6 +995,24 @@ unsafe fn mdd_paths(value: *const c_char) -> Result<Option<Vec<PathBuf>>, String
     }
     Ok(Some(volumes))
 }
+
+/// Profile document named by the caller, or `None` when the pointer is NULL.
+///
+/// # Safety
+///
+/// `value` must be `NULL` or a NUL-terminated UTF-8 string holding a path.
+unsafe fn profile_arg(value: *const c_char) -> Result<Option<Profile>, String> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    let text = unsafe { text_arg(value, "profile_path") }?;
+    let document = std::fs::read_to_string(&text)
+        .map_err(|error| format!("cannot read profile {text}: {error}"))?;
+    let profile = Profile::from_json(&document)
+        .map_err(|error| format!("invalid profile {text}: {error}"))?;
+    Ok(Some(profile))
+}
+
 /// Outcome of one `odc_import_mdx_to_odc` run.
 struct ConvertedMdx {
     report: MdxImportReport,
@@ -964,6 +1024,7 @@ fn import_mdx_to_odc(
     out: &Path,
     mdd_volumes: Option<Vec<PathBuf>>,
     progress: Option<Box<dyn FnMut(ImportProgress)>>,
+    profile: Option<Profile>,
 ) -> Result<ConvertedMdx, String> {
     if out.exists() {
         return Err(format!("output file already exists: {}", out.display()));
@@ -993,6 +1054,7 @@ fn import_mdx_to_odc(
         MdxImportOptions {
             skip_corrupt_blocks: true,
             mdd_volumes,
+            profile,
             progress,
             ..MdxImportOptions::default()
         },
@@ -1152,6 +1214,12 @@ fn import_report_to_json(report: &MdxImportReport, output_bytes: u64) -> JsonVal
         "resource_count": report.resource_count,
         "resource_bytes": report.resource_bytes,
         "warnings": report.warnings,
+        "contract": report
+            .contract
+            .as_ref()
+            .map(odc_core::profile::contract::ContractSummary::to_json),
+        "p0_failed": report.p0_failed,
+        "p0_failed_samples": report.p0_failed_samples,
         "html": {
             "entries_checked": report.html.entries_checked,
             "entries_changed": report.html.entries_changed,

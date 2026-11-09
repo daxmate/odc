@@ -396,6 +396,118 @@ fn max_record_bytes_rejects_out_of_range_values() {
     }
 }
 
+// --- Profile-driven imports -------------------------------------------------
+
+fn ldoce6_profile_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../profiles/ldoce6.profile.json")
+}
+
+/// One record the LDOCE6 profile claims and one it does not.
+fn profile_fixture(dir: &Path) -> PathBuf {
+    let path = dir.join("profile-fixture.mdx");
+    odc_testkit::write_v2_mdx(
+        &path,
+        &[
+            (
+                "alpha",
+                "<div><span class=\"entry\">alpha</span><span class=\"def\">first meaning</span></div>",
+            ),
+            ("plain", "<p>no entry wrapper here</p>"),
+        ],
+    )
+    .expect("write profile fixture");
+    path
+}
+
+#[test]
+fn import_with_a_profile_prints_the_contract_line() {
+    let repo = TempDir::new().expect("tempdir");
+    let source = TempDir::new().expect("tempdir");
+    let mdx = profile_fixture(source.path());
+    init_repo(repo.path());
+
+    let output = stdout_of(
+        odc(repo.path())
+            .arg("import")
+            .arg(&mdx)
+            .arg("--format")
+            .arg("mdx")
+            .arg("--profile")
+            .arg(ldoce6_profile_path()),
+    );
+    assert!(
+        output.contains("imported 2 records | coverage 1/2 (50.0%)"),
+        "{output}"
+    );
+    assert!(
+        output.contains("mapped four-dim 1/1 | unadapted 1"),
+        "{output}"
+    );
+    assert!(output.contains("1 record(s) missed a P0 rule"), "{output}");
+}
+
+#[test]
+fn a_profile_is_refused_for_non_mdx_imports() {
+    let repo = TempDir::new().expect("tempdir");
+    let source = TempDir::new().expect("tempdir");
+    let csv = source.path().join("entries.csv");
+    fs::write(&csv, "word,display,pos,sense\nalpha,alpha,noun,a\n").expect("write csv");
+    init_repo(repo.path());
+
+    odc(repo.path())
+        .arg("import")
+        .arg(&csv)
+        .arg("--format")
+        .arg("csv")
+        .arg("--profile")
+        .arg(ldoce6_profile_path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "--profile is only supported with --format mdx",
+        ));
+}
+
+#[test]
+fn import_json_carries_the_contract() {
+    let with_profile = TempDir::new().expect("tempdir");
+    let source = TempDir::new().expect("tempdir");
+    let mdx = profile_fixture(source.path());
+    init_repo(with_profile.path());
+
+    let json = stdout_of(
+        odc(with_profile.path())
+            .arg("import")
+            .arg(&mdx)
+            .arg("--format")
+            .arg("mdx")
+            .arg("--profile")
+            .arg(ldoce6_profile_path())
+            .arg("--json"),
+    );
+    let value: Value = serde_json::from_str(&json).expect("json");
+    assert_eq!(value["imported_entries"], 2);
+    assert_eq!(value["contract"]["total"], 2);
+    assert_eq!(value["contract"]["adapted"], 1);
+    assert_eq!(value["contract"]["unadapted"], 1);
+    assert_eq!(value["p0_failed"], 1);
+    assert_eq!(value["p0_failed_samples"][0], "plain");
+
+    let without = TempDir::new().expect("tempdir");
+    init_repo(without.path());
+    let json = stdout_of(
+        odc(without.path())
+            .arg("import")
+            .arg(&mdx)
+            .arg("--format")
+            .arg("mdx")
+            .arg("--json"),
+    );
+    let value: Value = serde_json::from_str(&json).expect("json");
+    assert!(value["contract"].is_null(), "{value}");
+    assert_eq!(value["p0_failed"], 0);
+}
+
 #[test]
 fn max_record_bytes_rejects_a_non_integer() {
     let repo = TempDir::new().expect("tempdir");

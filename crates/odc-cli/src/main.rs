@@ -62,6 +62,15 @@ enum Command {
         /// HTML handling for imported entry bodies (MDX only).
         #[arg(long, value_parser = ["format", "check", "off"], default_value = "format")]
         html: String,
+        /// Profile applied to every record (MDX only).
+        ///
+        /// A record the profile does not claim keeps the built-in HTML pass
+        /// and is counted as unadapted in the report.
+        #[arg(long, value_name = "PATH")]
+        profile: Option<PathBuf>,
+        /// Emit the import report as JSON (MDX only).
+        #[arg(long)]
+        json: bool,
     },
     /// Record the working set as a new commit.
     Commit {
@@ -469,18 +478,34 @@ fn run() -> odc_core::Result<ExitCode> {
             max_record_bytes,
             progress,
             html,
+            profile,
+            json,
         } => {
             let mut repo = Repo::open(&cli.repo)?;
+            if format != "mdx" {
+                if profile.is_some() {
+                    return Err(odc_core::Error::InvalidArgument(
+                        "--profile is only supported with --format mdx".to_string(),
+                    ));
+                }
+                if json {
+                    return Err(odc_core::Error::InvalidArgument(
+                        "--json is only supported with --format mdx".to_string(),
+                    ));
+                }
+            }
             if format == "mdx" {
-                return import_mdx(
-                    &mut repo,
-                    &file,
+                return import_mdx(MdxImportArgs {
+                    repo: &mut repo,
+                    path: &file,
                     prune,
                     limit,
                     max_record_bytes,
                     progress,
-                    &html,
-                );
+                    html: &html,
+                    profile_path: profile.as_deref(),
+                    json,
+                });
             }
             let entries = if format == "csv" {
                 read_csv(&file)?
@@ -1331,17 +1356,26 @@ fn thousands(value: u64) -> String {
     out
 }
 
-fn import_mdx(
-    repo: &mut Repo,
-    path: &std::path::Path,
-    prune: bool,
-    limit: Option<usize>,
-    max_record_bytes: Option<usize>,
-    progress: bool,
-    html: &str,
-) -> odc_core::Result<ExitCode> {
+fn import_mdx(args: MdxImportArgs<'_>) -> odc_core::Result<ExitCode> {
     use odc_core::mdx::MdxSource;
     use odc_core::MdxImportOptions;
+
+    let MdxImportArgs {
+        repo,
+        path,
+        prune,
+        limit,
+        max_record_bytes,
+        progress,
+        html,
+        profile_path,
+        json,
+    } = args;
+
+    let profile = match profile_path {
+        Some(path) => Some(load_profile(path)?),
+        None => None,
+    };
 
     // Keep the header line ahead of the import, exactly where it used to be.
     let header = MdxSource::open(path)?.header();
@@ -1375,6 +1409,7 @@ fn import_mdx(
         },
         import_mdd: true,
         mdd_volumes: None,
+        profile,
         progress: if progress {
             Some(Box::new(move |sample: odc_core::ImportProgress| {
                 if let Some(line) = tally.observe(sample) {
@@ -1386,6 +1421,15 @@ fn import_mdx(
         },
     };
     let report = odc_core::import_mdx(path, repo, options)?;
+
+    if json {
+        let payload = import_report_json(&report);
+        let text = serde_json::to_string_pretty(&payload).map_err(|error| {
+            odc_core::Error::InvalidArgument(format!("cannot encode the import report: {error}"))
+        })?;
+        println!("{text}");
+        return Ok(ExitCode::SUCCESS);
+    }
 
     if let Some(warning) = &report.scan_warning {
         eprintln!(
@@ -1453,6 +1497,25 @@ fn import_mdx(
         );
     }
     print_html_summary("html", html.name(), &report.html);
+    if let Some(contract) = &report.contract {
+        println!(
+            "imported {} records | coverage {}/{} ({:.1}%) | mapped four-dim {}/{} | unadapted {}",
+            report.imported_entries,
+            contract.adapted,
+            contract.total,
+            contract.coverage() * 100.0,
+            contract.adapted_all_pass,
+            contract.adapted,
+            contract.unadapted
+        );
+    }
+    if report.p0_failed > 0 {
+        println!(
+            "mdx: {} record(s) missed a P0 rule: {}",
+            report.p0_failed,
+            report.p0_failed_samples.join(", ")
+        );
+    }
     if report.skipped_blocks > 0 {
         println!(
             "mdx: skipped {} corrupt record block{} ({} entries)",
@@ -1462,6 +1525,59 @@ fn import_mdx(
         );
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// Everything `odc import --format mdx` needs, gathered from the command line.
+struct MdxImportArgs<'a> {
+    repo: &'a mut Repo,
+    path: &'a std::path::Path,
+    prune: bool,
+    limit: Option<usize>,
+    max_record_bytes: Option<usize>,
+    progress: bool,
+    html: &'a str,
+    profile_path: Option<&'a std::path::Path>,
+    json: bool,
+}
+
+/// `odc import --json`: the report as one object.
+fn import_report_json(report: &odc_core::MdxImportReport) -> serde_json::Value {
+    json!({
+        "imported_entries": report.imported_entries,
+        "written": report.written,
+        "removed": report.removed,
+        "working_set": report.working_set,
+        "deduplicated": report.deduplicated,
+        "skipped_empty": report.skipped_empty,
+        "skipped_oversized": report.skipped_oversized,
+        "skipped_blocks": report.skipped_blocks,
+        "skipped_entries": report.skipped_entries,
+        "corrupt_blocks": report.corrupt_blocks.len(),
+        "scan_warning": report.scan_warning.as_deref(),
+        "resources": {
+            "count": report.resource_count,
+            "bytes": report.resource_bytes,
+            "volumes": report.mdd_files.len(),
+        },
+        "stylesheets": report.stylesheets,
+        "html": html_summary_json(&report.html),
+        "contract": report
+            .contract
+            .as_ref()
+            .map(odc_core::profile::contract::ContractSummary::to_json),
+        "p0_failed": report.p0_failed,
+        "p0_failed_samples": &report.p0_failed_samples,
+    })
+}
+
+/// Read and parse the profile named by `--profile`.
+fn load_profile(path: &std::path::Path) -> odc_core::Result<odc_core::profile::Profile> {
+    let text = std::fs::read_to_string(path).map_err(|error| {
+        odc_core::Error::InvalidArgument(format!("cannot read profile {}: {error}", path.display()))
+    })?;
+    odc_core::profile::Profile::from_json(&text).map_err(|error| {
+        odc_core::Error::InvalidArgument(format!("invalid profile {}: {error}", path.display()))
+    })
 }
 
 /// JSON shape shared by `check-html` and `normalize`.

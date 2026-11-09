@@ -250,6 +250,23 @@ int32_t odc_import_mdx_to_odc_with_mdd(const char *mdx_path,
                                       char **error_message);
 
 /*
+ * Import an MDX file with a profile.
+ *
+ * Same contract as odc_import_mdx_to_odc_with_mdd. profile_path is NULL for
+ * an import without a profile, or a NUL-terminated path to a *.profile.json
+ * document. The profile decides the L1 body of every record it claims;
+ * unclaimed records keep the built-in HTML pass and count as unadapted. The
+ * report gains "contract" (null without a profile), "p0_failed" and
+ * "p0_failed_samples".
+ */
+int32_t odc_import_mdx_to_odc_with_profile(const char *mdx_path,
+                                           const char *out_odc_path,
+                                           const char *mdd_paths_json,
+                                           const char *profile_path,
+                                           char **report_json_out,
+                                           char **error_message);
+
+/*
  * Stage of an import, as passed to odc_import_progress_fn.
  *
  * ODC_IMPORT_STAGE_PREPARING: the MDD volumes are being opened to learn the

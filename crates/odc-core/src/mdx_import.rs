@@ -9,6 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use crate::adapters::ParseContext;
 use crate::error::{Error, Result};
 use crate::html::{self, HtmlImportSummary, HtmlMode, HtmlOptions};
 use crate::mdd_import::{self, MddImportReport, MddScan, MddVolumeReport};
@@ -17,6 +18,8 @@ use crate::mdx::{
     DEFAULT_MAX_RECORD_BYTES,
 };
 use crate::mdx_scan::{self, CorruptBlock};
+use crate::profile::contract::{self, ContractSummary};
+use crate::profile::{Outcome, Profile};
 use crate::repo::Repo;
 use crate::stylesheets;
 
@@ -62,6 +65,13 @@ pub struct MdxImportOptions {
     /// already listed the files (a sandboxed app, for instance) passes them
     /// here; unreadable entries still only produce warnings.
     pub mdd_volumes: Option<Vec<PathBuf>>,
+    /// Profile applied to every record before the built-in HTML pass.
+    ///
+    /// When set, the profile decides the L1 body of a record. A record the
+    /// profile does not claim keeps the historical behaviour and falls back to
+    /// [`html::process_html`]; those records are counted as unadapted. `None`
+    /// (the default) leaves the import identical to earlier releases.
+    pub profile: Option<Profile>,
 }
 
 impl Default for MdxImportOptions {
@@ -75,6 +85,7 @@ impl Default for MdxImportOptions {
             progress: None,
             import_mdd: true,
             mdd_volumes: None,
+            profile: None,
         }
     }
 }
@@ -90,6 +101,13 @@ impl std::fmt::Debug for MdxImportOptions {
             .field("progress", &self.progress.is_some())
             .field("import_mdd", &self.import_mdd)
             .field("mdd_volumes", &self.mdd_volumes)
+            .field(
+                "profile",
+                &self
+                    .profile
+                    .as_ref()
+                    .map(|profile| profile.profile_id.as_str()),
+            )
             .finish()
     }
 }
@@ -279,6 +297,14 @@ pub struct MdxImportReport {
     pub stylesheets: usize,
     /// HTML repair, sanitiser and formatter tallies for this import.
     pub html: HtmlImportSummary,
+    /// Contract measurement of the profile-driven records, or `None` when no
+    /// profile was supplied.
+    pub contract: Option<ContractSummary>,
+    /// Records whose profile run missed a P0 rule (the import continues with
+    /// the fallback markup); zero without a profile.
+    pub p0_failed: usize,
+    /// Keys of the first records that missed a P0 rule.
+    pub p0_failed_samples: Vec<String>,
 }
 
 /// Import an MDX file into `repo`.
@@ -301,11 +327,26 @@ pub fn import_mdx(
         progress,
         import_mdd,
         mdd_volumes,
+        profile,
         html,
     } = options;
     validate_max_record_bytes(max_record_bytes)?;
     let mut reporter = ProgressSink::new(progress);
     let mut html_summary = HtmlImportSummary::default();
+    // The profile slug is the first segment of the profile id (`oald10encn`
+    // for `oald10encn.en`), which is the dictionary name the rules expect in
+    // their parse context.
+    let profile_dict = profile.as_ref().map(|profile| {
+        profile
+            .profile_id
+            .split('.')
+            .next()
+            .unwrap_or("unknown")
+            .to_string()
+    });
+    let mut contract_summary = profile.as_ref().map(|_| ContractSummary::default());
+    let mut p0_failed = 0_usize;
+    let mut p0_failed_samples: Vec<String> = Vec::new();
 
     // The repaired copy owns a temporary file that is removed when dropped, so
     // it stays alive until the import (including error paths) has finished.
@@ -397,9 +438,32 @@ pub fn import_mdx(
                 continue;
             }
             // The sentinel check ran on the original payload; from here on the
-            // body is a normal entry and may be repaired, sanitised and
-            // formatted. A formatting failure keeps the original text.
-            if html.mode != HtmlMode::Off {
+            // body is a normal entry. Order: the profile runs first, on the
+            // source payload, and owns the L1 body. `Profile::apply` sanitises
+            // the source itself and returns either adapted markup or a raw
+            // fallback carrying the unadapted marker, so no second sanitiser
+            // pass is needed for its output. Only a record the profile does not
+            // turn into a body at all (an `@@@LINK=` alias) falls through to
+            // the built-in repair/format pass, which keeps the historical
+            // behaviour; without a profile every record takes that path.
+            let mut profile_source: Option<String> = None;
+            let mut p0_hit = false;
+            if let (Some(profile), Some(dict)) = (profile.as_ref(), profile_dict.as_deref()) {
+                let context =
+                    ParseContext::new(record.key.trim(), dict, profile.dict.lang.as_str());
+                match profile.apply(&record.html, &context) {
+                    // An alias is a pointer, not a record: it keeps its raw
+                    // payload and stays out of the contract measurement.
+                    Outcome::Alias { .. } => {}
+                    Outcome::Adapted { html: l1, stats }
+                    | Outcome::Unadapted { html: l1, stats } => {
+                        p0_hit = stats.p0_failed();
+                        profile_source = Some(std::mem::take(&mut record.html));
+                        record.html = l1;
+                    }
+                }
+            }
+            if profile_source.is_none() && html.mode != HtmlMode::Off {
                 let outcome = html::process_html(&record.html, &html);
                 let changed = outcome.changed && !outcome.failed;
                 if changed {
@@ -425,6 +489,25 @@ pub fn import_mdx(
             }
             for key in stylesheets::link_targets(entry.raw_html.as_deref().unwrap_or_default()) {
                 style_keys.insert(key);
+            }
+            // Only a record that became an entry is measured: empty and
+            // oversized records never reach the working set.
+            if let (Some(summary), Some(source)) =
+                (contract_summary.as_mut(), profile_source.as_ref())
+            {
+                let mut verdict = contract::check(source, &record.html);
+                // A missed P0 rule means the profile did not adapt the record,
+                // even when the fallback markup would pass the four checks.
+                if p0_hit && !verdict.unadapted {
+                    verdict.unadapted = true;
+                }
+                summary.record(&verdict);
+                if p0_hit {
+                    p0_failed += 1;
+                    if p0_failed_samples.len() < SKIPPED_OVERSIZED_LIST_LIMIT {
+                        p0_failed_samples.push(record.key.trim().to_string());
+                    }
+                }
             }
             taken += 1;
             return Ok(Some(entry));
@@ -484,6 +567,9 @@ pub fn import_mdx(
         resource_bytes: mdd.resource_bytes,
         warnings,
         html: html_summary,
+        contract: contract_summary,
+        p0_failed,
+        p0_failed_samples,
     })
 }
 

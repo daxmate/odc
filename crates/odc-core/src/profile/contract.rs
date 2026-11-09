@@ -220,6 +220,28 @@ impl ContractSummary {
         self.adapted as f64 / self.total as f64
     }
 
+    /// JSON shape used by the import report.
+    ///
+    /// The field names mirror the source-contract summary in
+    /// `examples/profile_compare.rs`, so one run reads the same wherever it is
+    /// printed. `coverage` is a fraction in `[0, 1]`; `line` is
+    /// [`Self::render_line`].
+    #[must_use]
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "total": self.total,
+            "adapted": self.adapted,
+            "unadapted": self.unadapted,
+            "coverage": self.coverage(),
+            "bag_ok": self.bag_pass,
+            "order_ok": self.order_pass,
+            "structure_ok": self.structure_pass,
+            "clean_ok": self.clean_pass,
+            "equal": self.adapted_all_pass,
+            "line": self.render_line(),
+        })
+    }
+
     /// One machine-readable line, shared by the example and the tests.
     ///
     /// `coverage <adapted>/<total> (<pct>%) | mapped <pass>/<adapted>

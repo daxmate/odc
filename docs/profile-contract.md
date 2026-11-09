@@ -238,3 +238,36 @@ profile_compare --profile profiles/oald9.profile.json \
 同一天结构规则 3 的放宽（前置义项豁免，见 §3.3 第 3 条）把这批之外的 6 条
 `structure.sense_sibling`（`ayrshire` / `dagwood` / `detroit` / `hereford` / `lancashire` / `said`）
 从失败名单里消掉了：`structure` 由 59,639 升到 59,645，`bag` / `order` 不变。
+
+## 9. 导入时使用 profile
+
+`odc import` 可以直接用 profile 产出 L1，并把契约测量写进导入报告；
+macOS App 的转换链路走 FFI 的同名能力。
+
+````
+odc import dictionary.mdx --format mdx --profile profiles/ldoce6.profile.json [--json]
+odc_import_mdx_to_odc_with_profile(mdx, out, mdd_paths_json, profile_path, &report, &error)
+```
+
+- `--profile` 只对 `--format mdx` 生效，其他格式给了会报错退出；
+  同理，`--json`（导入报告 JSON）也只在 MDX 上可用。
+- 顺序：profile 先跑，输入是**源记录体**。`Profile::apply` 自己会做 repair/sanitize
+  （`repair_sanitize` + `raw_fallback`），所以 profile 输出不再经过第二遍净化；
+  如果 profile 不把记录变成正文（`@@@LINK=` 别名），该记录回落到原来的
+  `process_html` 路径，行为与不带 profile 时一致。
+- 回退语义：P0 规则未命中的记录用 `raw_fallback`（带 `data-odc-unadapted`，
+  `odc-entry--raw`）落盘，计入 `contract.unadapted`，导入不中断；
+  别名记录不进 contract 统计（它是指针，不是记录）。
+- 报告字段（人类输出一行；`--json` 与 FFI 报告同名）：
+
+````
+imported 2 records | coverage 1/2 (50.0%) | mapped four-dim 1/1 | unadapted 1
+```
+
+| 字段 | 含义 |
+| --- | --- |
+| `contract` | 无 profile 时为 `null`；否则 `total` / `adapted` / `unadapted` / `coverage`（0–1 小数）/ `bag_ok` / `order_ok` / `structure_ok` / `clean_ok` / `equal` / `line` |
+| `p0_failed` / `p0_failed_samples` | P0 未命中的记录数与样本 key（前若干条）；P0 命中但记录本身已带 `odc-entry` 时仍计入这里 |
+| `imported_entries` | 只统计真正落盘的记录（空 key、超限记录不计入 `contract.total`） |
+
+不带 `--profile` 时报告与旧版本逐字段一致（`contract` 为 `null`，`p0_failed` 为 0）。

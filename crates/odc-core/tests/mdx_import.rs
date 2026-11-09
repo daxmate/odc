@@ -1,6 +1,7 @@
 //! MDX import pipeline tests: corrupt-block skipping and report bookkeeping.
 
 use odc_core::mdx_scan::{scan, RecordSection, ScanOutcome};
+use odc_core::profile::Profile;
 use odc_core::{
     import_mdx, ImportProgress, ImportStage, MdxImportOptions, OversizedRecord, Repo,
     DEFAULT_MAX_RECORD_BYTES, HARD_MAX_RECORD_BYTES,
@@ -24,6 +25,17 @@ struct Fixture {
 
 impl Fixture {
     fn new(label: &str, count: usize) -> Self {
+        let entries: Vec<(String, String)> = (0..count)
+            .map(|index| {
+                let key = format!("word{index:04}");
+                let body = format!("<p>{index}</p>{}", "x".repeat(8 * 1024));
+                (key, body)
+            })
+            .collect();
+        Self::from_entries(label, entries)
+    }
+
+    fn from_entries(label: &str, entries: Vec<(String, String)>) -> Self {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("clock")
@@ -32,13 +44,6 @@ impl Fixture {
         std::fs::create_dir_all(&root).expect("temp dir");
         let mdx = root.join("fixture.mdx");
         let repo = root.join("repo");
-        let entries: Vec<(String, String)> = (0..count)
-            .map(|index| {
-                let key = format!("word{index:04}");
-                let body = format!("<p>{index}</p>{}", "x".repeat(8 * 1024));
-                (key, body)
-            })
-            .collect();
         let rows: Vec<(&str, &str)> = entries
             .iter()
             .map(|(key, body)| (key.as_str(), body.as_str()))
@@ -68,11 +73,17 @@ impl Fixture {
 
     fn body_of(&self, repo: &Repo, index: usize) -> Option<String> {
         let (key, expected) = &self.entries[index];
-        repo.working_entry(key).expect("lookup").map(|entry| {
-            let html = entry.raw_html.clone().expect("raw html");
-            assert_eq!(&html, expected, "payload of {key} survives intact");
-            html
-        })
+        let html = self.stored_body(repo, index)?;
+        assert_eq!(&html, expected, "payload of {key} survives intact");
+        Some(html)
+    }
+
+    /// The body as stored, whatever the profile made of it.
+    fn stored_body(&self, repo: &Repo, index: usize) -> Option<String> {
+        let (key, _) = &self.entries[index];
+        repo.working_entry(key)
+            .expect("lookup")
+            .map(|entry| entry.raw_html.clone().expect("raw html"))
     }
 }
 
@@ -442,4 +453,101 @@ fn out_of_range_record_limits_are_rejected() {
         "{too_big}"
     );
     cleanup(&mdx);
+}
+
+// --- Profile-driven imports -------------------------------------------------
+
+/// A record the LDOCE6 profile claims: `div > span.entry` is its P0 rule.
+fn ldoce6_body(word: &str) -> String {
+    format!(
+        "<div><span class=\"entry\">{word}</span>\
+         <span class=\"def\">{word} means something</span></div>"
+    )
+}
+
+fn ldoce6_profile() -> Profile {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../profiles/ldoce6.profile.json");
+    let text = std::fs::read_to_string(&path).expect("read profile");
+    Profile::from_json(&text).expect("parse profile")
+}
+
+#[test]
+fn a_profile_import_reports_the_contract() {
+    let fixture = Fixture::from_entries(
+        "profile",
+        vec![
+            ("alpha".to_string(), ldoce6_body("alpha")),
+            ("bravo".to_string(), ldoce6_body("bravo")),
+        ],
+    );
+    let mut repo = fixture.open_repo();
+    let report = import_mdx(
+        &fixture.mdx,
+        &mut repo,
+        MdxImportOptions {
+            profile: Some(ldoce6_profile()),
+            ..options()
+        },
+    )
+    .expect("import");
+
+    let contract = report.contract.expect("contract summary");
+    assert!(contract.total > 0, "records measured: {contract:?}");
+    assert!(contract.coverage() > 0.0, "coverage: {contract:?}");
+    assert_eq!(report.p0_failed, 0, "P0 failures: {contract:?}");
+    let body = fixture.stored_body(&repo, 0).expect("entry body");
+    assert!(body.contains("odc-entry"), "L1 slots missing: {body}");
+    assert!(body.contains("odc-def"), "L1 slots missing: {body}");
+}
+
+#[test]
+fn an_unclaimed_record_falls_back_and_counts_as_unadapted() {
+    let fixture = Fixture::from_entries(
+        "profile-fallback",
+        vec![
+            ("alpha".to_string(), ldoce6_body("alpha")),
+            (
+                "plain".to_string(),
+                "<p>plain text without the entry wrapper</p>".to_string(),
+            ),
+        ],
+    );
+    let mut repo = fixture.open_repo();
+    let report = import_mdx(
+        &fixture.mdx,
+        &mut repo,
+        MdxImportOptions {
+            profile: Some(ldoce6_profile()),
+            ..options()
+        },
+    )
+    .expect("import");
+
+    let contract = report.contract.expect("contract summary");
+    assert_eq!(contract.total, 2, "{contract:?}");
+    assert_eq!(contract.unadapted, 1, "{contract:?}");
+    assert_eq!(report.p0_failed, 1);
+    assert_eq!(report.p0_failed_samples, vec![String::from("plain")]);
+    let body = fixture.stored_body(&repo, 1).expect("fallback body");
+    assert!(
+        body.contains("odc-entry--raw") || body.contains("data-odc-unadapted"),
+        "raw fallback marker missing: {body}"
+    );
+}
+
+#[test]
+fn without_a_profile_the_import_is_unchanged() {
+    let expected = ldoce6_body("alpha");
+    let fixture =
+        Fixture::from_entries("profile-off", vec![("alpha".to_string(), expected.clone())]);
+    let mut repo = fixture.open_repo();
+    let report = import_mdx(&fixture.mdx, &mut repo, options()).expect("import");
+
+    assert!(report.contract.is_none(), "no profile, no contract");
+    assert_eq!(report.p0_failed, 0);
+    assert_eq!(
+        fixture.body_of(&repo, 0).as_deref(),
+        Some(expected.as_str()),
+        "records are stored verbatim without a profile"
+    );
 }

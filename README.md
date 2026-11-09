@@ -79,7 +79,7 @@ odc --repo ./demo export --format jsonl -o dump.jsonl
 | 命令 | 作用 |
 | --- | --- |
 | `odc init` | 新建仓库（含 genesis 提交） |
-| `odc import FILE --format jsonl\|csv\|mdx [--prune] [--limit N] [--progress] [--html format\|check\|off]` | 导入 / 更新工作区（MDX 支持限量、进度与 HTML 模式） |
+| `odc import FILE --format jsonl\|csv\|mdx [--prune] [--limit N] [--progress] [--html format\|check\|off] [--profile PATH] [--json]` | 导入 / 更新工作区（MDX 支持限量、进度、HTML 模式、profile 产出 L1 与 JSON 报告） |
 | `odc check-html [FILE] [--json] [-n N]` | 只读检查 MDX 文件或仓库词条的 HTML / CSS |
 | `odc normalize [--apply] [--json]` | 规范化工作区 HTML（默认 dry-run，`--apply` 写回并提交） |
 | `odc commit -m MSG` | 提交工作区 |

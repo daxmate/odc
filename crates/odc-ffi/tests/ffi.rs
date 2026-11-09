@@ -13,8 +13,9 @@ use odc_core::{Def, Entry, Repo};
 use odc_ffi::{
     odc_copy_pack_to_repo, odc_html_process_json, odc_import_mdx_to_odc,
     odc_import_mdx_to_odc_with_mdd, odc_import_mdx_to_odc_with_mdd_progress,
-    odc_import_mdx_to_repo_with_mdd_progress, odc_import_mdx_to_repo_with_options, odc_repo_close,
-    odc_repo_commit_json, odc_repo_discard_json, odc_repo_entries_page_json, odc_repo_entry_count,
+    odc_import_mdx_to_odc_with_profile, odc_import_mdx_to_repo_with_mdd_progress,
+    odc_import_mdx_to_repo_with_options, odc_repo_close, odc_repo_commit_json,
+    odc_repo_discard_json, odc_repo_entries_page_json, odc_repo_entry_count,
     odc_repo_entry_delete_json, odc_repo_entry_diff_json, odc_repo_entry_json,
     odc_repo_entry_link_json, odc_repo_entry_link_working_json, odc_repo_entry_put_json,
     odc_repo_open, odc_repo_resource_copy, odc_repo_resource_count, odc_repo_resource_len,
@@ -348,6 +349,54 @@ fn import(mdx: &Path, out: &Path) -> (i32, Option<String>, Option<String>) {
         Some(take_string(report))
     };
     (code, report, take_error_if_any(error))
+}
+
+#[test]
+fn import_with_a_profile_reports_the_contract() {
+    let dir = TempDir::new().expect("tempdir");
+    let mdx = dir.path().join("dictionary.mdx");
+    odc_testkit::write_v2_mdx(
+        &mdx,
+        &[
+            (
+                "alpha",
+                "<div><span class=\"entry\">alpha</span><span class=\"def\">first meaning</span></div>",
+            ),
+            ("plain", "<p>no entry wrapper</p>"),
+        ],
+    )
+    .expect("write fixture");
+    let profile = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../profiles/ldoce6.profile.json");
+    let out = dir.path().join("dictionary.odc");
+
+    let mdx_c = CString::new(mdx.to_str().expect("utf8 mdx path")).expect("mdx cstring");
+    let out_c = CString::new(out.to_str().expect("utf8 out path")).expect("out cstring");
+    let profile_c =
+        CString::new(profile.to_str().expect("utf8 profile path")).expect("profile cstring");
+    let mut report: *mut c_char = ptr::null_mut();
+    let mut error: *mut c_char = ptr::null_mut();
+    // SAFETY: every path outlives the call, `NULL` mdd_paths_json asks the core
+    // to discover the volumes, and both out pointers are writable.
+    let code = unsafe {
+        odc_import_mdx_to_odc_with_profile(
+            mdx_c.as_ptr(),
+            out_c.as_ptr(),
+            ptr::null(),
+            profile_c.as_ptr(),
+            &mut report,
+            &mut error,
+        )
+    };
+    assert_eq!(code, 0, "unexpected error: {:?}", take_error_if_any(error));
+
+    let report: Value = serde_json::from_str(&take_string(report)).expect("report is json");
+    assert_eq!(report["imported_entries"], 2);
+    assert_eq!(report["contract"]["total"], 2);
+    assert_eq!(report["contract"]["adapted"], 1);
+    assert_eq!(report["contract"]["unadapted"], 1);
+    assert_eq!(report["p0_failed"], 1);
+    assert_eq!(report["p0_failed_samples"][0], "plain");
+    assert!(report["contract"]["coverage"].as_f64().expect("coverage") > 0.0);
 }
 
 #[derive(Clone, Copy, Debug)]
