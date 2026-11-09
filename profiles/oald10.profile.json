@@ -1,0 +1,1389 @@
+{
+  "schema_version": "odc.profile/v0",
+  "profile_id": "oald10encn.en",
+  "spec": {
+    "version": "odc-html-spec/0.1",
+    "slot_registry": "odc-slots/0.1"
+  },
+  "dict": {
+    "name": "oald10",
+    "edition": "10th",
+    "lang": "en",
+    "source": {
+      "format": "mdx",
+      "sha256": "SHA",
+      "records": 133571,
+      "aliases": 82261,
+      "entries": 51310
+    }
+  },
+  "engine": {
+    "name": "human",
+    "temperature": 0,
+    "host": "local"
+  },
+  "provenance": {
+    "source": "human",
+    "note": "Written against the OALD10 dialect survey in /tmp/odc-oald10-full/REPORT.md; every surviving source class is either mapped to an odc slot, cleared by the inline-decoration whitelist, or declared odc-unmapped. Validated on 500 stratified and 51,310 full body records."
+  },
+  "rules": [
+    {
+      "id": "cleanup.head",
+      "stage": "cleanup",
+      "priority": 100,
+      "op": "drop",
+      "match": {
+        "selector": "base, link, script, style, meta"
+      },
+      "rationale": "OALD10 records embed a full document head; base/link/script/style/meta carry no entry text. <title> is kept because the contract bag includes it."
+    },
+    {
+      "id": "cleanup.noise",
+      "stage": "cleanup",
+      "priority": 95,
+      "op": "drop",
+      "match": {
+        "selector": "input, button, noscript, iframe, audio, video"
+      },
+      "rationale": "Radio inputs and widget buttons hold no text; audio/video elements are placeholder-only."
+    },
+    {
+      "id": "cleanup.attrs",
+      "stage": "cleanup",
+      "priority": 90,
+      "op": "drop",
+      "match": {
+        "selector": "*"
+      },
+      "rationale": "L1 keeps only allowlisted attributes; data-odc-* is re-added by later rules.",
+      "attributes": [
+        "style",
+        "name",
+        "type",
+        "value",
+        "for",
+        "on*",
+        "data-*",
+        "aria-*",
+        "tabindex",
+        "content",
+        "role",
+        "hmhtml",
+        "charset",
+        "rel",
+        "checked",
+        "focusable",
+        "viewbox",
+        "points",
+        "stroke*",
+        "fill*",
+        "cx",
+        "cy",
+        "r",
+        "d",
+        "transform",
+        "x",
+        "y",
+        "rx",
+        "x1",
+        "y1",
+        "x2",
+        "y2",
+        "font*"
+      ]
+    },
+    {
+      "id": "root.entry",
+      "stage": "root",
+      "priority": 100,
+      "op": "map",
+      "match": {
+        "selector": "main.oald-entry"
+      },
+      "emit": {
+        "element": "section",
+        "classes": [
+          "odc-entry"
+        ],
+        "move": "children",
+        "data": {
+          "odc-dict": "@dict",
+          "odc-key": "@key",
+          "odc-lang": "@lang"
+        }
+      },
+      "rationale": "One record = one main.oald-entry (plain, phrase or supplemental); its class triple becomes data-odc-dict/key/lang."
+    },
+    {
+      "id": "split.pos-switch",
+      "stage": "split",
+      "priority": 100,
+      "op": "unwrap",
+      "match": {
+        "selector": "div.o-pos-switch"
+      },
+      "rationale": "Pure layout wrapper (radios + tab labels + panels); flatten so panels are direct children."
+    },
+    {
+      "id": "split.pos-panels",
+      "stage": "split",
+      "priority": 99,
+      "op": "unwrap",
+      "match": {
+        "selector": "div.o-pos-panels"
+      },
+      "rationale": "Pure layout wrapper around the POS panels; flatten."
+    },
+    {
+      "id": "slot.pos-block",
+      "stage": "slot",
+      "priority": 100,
+      "op": "map",
+      "match": {
+        "selector": "section.o-pos.o-pos-panel"
+      },
+      "emit": {
+        "element": "section",
+        "classes": [
+          "odc-pos-block"
+        ],
+        "move": "children",
+        "data": {
+          "odc-pos": "pos"
+        }
+      },
+      "rationale": "Each section.o-pos panel is one POS block; data-odc-pos is fixed because the engine cannot copy the tab label into an attribute."
+    },
+    {
+      "id": "slot.head",
+      "stage": "slot",
+      "priority": 99,
+      "op": "map",
+      "match": {
+        "selector": ".o-entry-header, .o-entry-header-static"
+      },
+      "emit": {
+        "classes": [
+          "odc-head"
+        ],
+        "element": "header",
+        "move": "children"
+      },
+      "rationale": "header.o-entry-header / .o-entry-header-static"
+    },
+    {
+      "id": "slot.hw",
+      "stage": "slot",
+      "priority": 98,
+      "op": "map",
+      "match": {
+        "selector": ".o-headword"
+      },
+      "emit": {
+        "classes": [
+          "odc-hw"
+        ],
+        "element": "h1",
+        "move": "children"
+      },
+      "rationale": "odc-hw"
+    },
+    {
+      "id": "slot.head-line",
+      "stage": "slot",
+      "priority": 97,
+      "op": "map",
+      "match": {
+        "selector": ".o-word-line"
+      },
+      "emit": {
+        "classes": [
+          "odc-head-line"
+        ],
+        "move": "children"
+      },
+      "rationale": "div.o-word-line (headword line)"
+    },
+    {
+      "id": "slot.hw-main",
+      "stage": "slot",
+      "priority": 96,
+      "op": "map",
+      "match": {
+        "selector": ".o-head-main"
+      },
+      "emit": {
+        "classes": [
+          "odc-hw-main"
+        ],
+        "move": "children"
+      },
+      "rationale": "span.o-head-main (headword inner wrapper)"
+    },
+    {
+      "id": "slot.hw-text",
+      "stage": "slot",
+      "priority": 95,
+      "op": "map",
+      "match": {
+        "selector": ".o-h"
+      },
+      "emit": {
+        "classes": [
+          "odc-hw-text"
+        ],
+        "move": "children"
+      },
+      "rationale": "span.o-tag.o-h (headword text run)"
+    },
+    {
+      "id": "slot.pos-body",
+      "stage": "slot",
+      "priority": 93,
+      "op": "map",
+      "match": {
+        "selector": ".o-pos-body"
+      },
+      "emit": {
+        "classes": [
+          "odc-pos-body"
+        ],
+        "move": "children"
+      },
+      "rationale": "div.o-pos-body"
+    },
+    {
+      "id": "slot.pos-detail",
+      "stage": "slot",
+      "priority": 92,
+      "op": "map",
+      "match": {
+        "selector": ".o-pos-detail"
+      },
+      "emit": {
+        "classes": [
+          "odc-pos-detail"
+        ],
+        "move": "children"
+      },
+      "rationale": "div.o-pos-detail"
+    },
+    {
+      "id": "slot.pos-extra",
+      "stage": "slot",
+      "priority": 91,
+      "op": "map",
+      "match": {
+        "selector": ".o-pos-extra"
+      },
+      "emit": {
+        "classes": [
+          "odc-pos-extra"
+        ],
+        "move": "children"
+      },
+      "rationale": "div.o-pos-extra"
+    },
+    {
+      "id": "slot.pos-tabs",
+      "stage": "slot",
+      "priority": 90,
+      "op": "map",
+      "match": {
+        "selector": ".o-pos-tabs"
+      },
+      "emit": {
+        "classes": [
+          "odc-pos-tabs"
+        ],
+        "move": "children"
+      },
+      "rationale": "nav.o-pos-tabs"
+    },
+    {
+      "id": "slot.pos-tab",
+      "stage": "slot",
+      "priority": 89,
+      "op": "map",
+      "match": {
+        "selector": ".o-pos-tab"
+      },
+      "emit": {
+        "classes": [
+          "odc-pos-tab"
+        ],
+        "element": "span",
+        "move": "children"
+      },
+      "rationale": "label.o-pos-tab (radio tab label)"
+    },
+    {
+      "id": "slot.pos-tag",
+      "stage": "slot",
+      "priority": 88,
+      "op": "map",
+      "match": {
+        "selector": ".o-pos-tag, .o-pos-tag-italic, .o-pos-tag-small, .o-pos-tag-secondary, .o-pos-tag-gray"
+      },
+      "emit": {
+        "classes": [
+          "odc-pos-tag"
+        ],
+        "move": "children"
+      },
+      "rationale": "span.o-pos-tag (+italic/small/secondary/gray)"
+    },
+    {
+      "id": "slot.pos-tag-icon",
+      "stage": "slot",
+      "priority": 87,
+      "op": "map",
+      "match": {
+        "selector": ".o-pos-tag-triangle, .o-pos-tag-triangle-polygon, .o-pos-tag-triangle-path"
+      },
+      "emit": {
+        "classes": [
+          "odc-pos-tag-icon"
+        ],
+        "move": "children"
+      },
+      "rationale": "svg.o-pos-tag-triangle(+polygon/path)"
+    },
+    {
+      "id": "slot.phon",
+      "stage": "slot",
+      "priority": 86,
+      "op": "map",
+      "match": {
+        "selector": ".o-pronunciation-sets, .o-pron-g"
+      },
+      "emit": {
+        "classes": [
+          "odc-phon"
+        ],
+        "move": "children"
+      },
+      "rationale": "div.o-pronunciation-sets / span.o-pron-g"
+    },
+    {
+      "id": "slot.phon-set",
+      "stage": "slot",
+      "priority": 85,
+      "op": "map",
+      "match": {
+        "selector": ".o-pronunciation-set"
+      },
+      "emit": {
+        "classes": [
+          "odc-phon-set"
+        ],
+        "move": "children"
+      },
+      "rationale": "div.o-pronunciation-set"
+    },
+    {
+      "id": "slot.phon-group",
+      "stage": "slot",
+      "priority": 84,
+      "op": "map",
+      "match": {
+        "selector": ".o-pronunciation"
+      },
+      "emit": {
+        "classes": [
+          "odc-phon-group"
+        ],
+        "move": "children"
+      },
+      "rationale": "div.o-pronunciation"
+    },
+    {
+      "id": "slot.phon-variant",
+      "stage": "slot",
+      "priority": 83,
+      "op": "map",
+      "match": {
+        "selector": ".o-pron-chunk, .o-pron-BrE, .o-pron-NAmE, .o-pron-EAfrE, .o-pron-SAfrE, .o-pron-WAfrE"
+      },
+      "emit": {
+        "classes": [
+          "odc-phon-variant"
+        ],
+        "move": "children"
+      },
+      "rationale": "span.o-pron-chunk (+o-pron-BrE/NAmE/...)"
+    },
+    {
+      "id": "slot.phon-geo",
+      "stage": "slot",
+      "priority": 82,
+      "op": "map",
+      "match": {
+        "selector": ".o-pron-geo, .o-geo, .o-geo-NAmE"
+      },
+      "emit": {
+        "classes": [
+          "odc-phon-geo"
+        ],
+        "move": "children"
+      },
+      "rationale": "span.o-pron-geo / .o-geo (BrE/NAmE labels)"
+    },
+    {
+      "id": "slot.phon-text",
+      "stage": "slot",
+      "priority": 81,
+      "op": "map",
+      "match": {
+        "selector": ".o-pron-phon, .o-phon, .phon"
+      },
+      "emit": {
+        "classes": [
+          "odc-phon-text"
+        ],
+        "move": "children"
+      },
+      "rationale": "b.o-pron-phon / span.o-phon"
+    },
+    {
+      "id": "slot.phon-form",
+      "stage": "slot",
+      "priority": 80,
+      "op": "map",
+      "match": {
+        "selector": ".o-pron-form"
+      },
+      "emit": {
+        "classes": [
+          "odc-phon-form"
+        ],
+        "move": "children"
+      },
+      "rationale": "span.o-pron-form"
+    },
+    {
+      "id": "slot.phon-note",
+      "stage": "slot",
+      "priority": 79,
+      "op": "map",
+      "match": {
+        "selector": ".o-top-text"
+      },
+      "emit": {
+        "classes": [
+          "odc-phon-note"
+        ],
+        "move": "children"
+      },
+      "rationale": "div.o-top-text"
+    },
+    {
+      "id": "slot.phon-note-body",
+      "stage": "slot",
+      "priority": 78,
+      "op": "map",
+      "match": {
+        "selector": ".o-top-text-content"
+      },
+      "emit": {
+        "classes": [
+          "odc-phon-note-body"
+        ],
+        "move": "children"
+      },
+      "rationale": "div.o-top-text-content"
+    },
+    {
+      "id": "slot.audio",
+      "stage": "slot",
+      "priority": 77,
+      "op": "attr",
+      "match": {
+        "selector": ".o-audio, .o-voice, .o-voice-br, .o-voice-n_am, .o-voice-BrE, .o-voice-NAmE, .o-voice-EAfrE, .o-voice-SAfrE, .o-voice-WAfrE, .o-voice-"
+      },
+      "emit": {
+        "classes": [
+          "odc-audio"
+        ],
+        "attributes": {
+          "-class": ""
+        }
+      },
+      "rationale": "a.o-audio / .o-voice-* (pronunciation button)"
+    },
+    {
+      "id": "structure.text-eng",
+      "stage": "structure",
+      "priority": 95,
+      "op": "map",
+      "match": {
+        "selector": ".o-eng"
+      },
+      "emit": {
+        "classes": [
+          "odc-text-eng"
+        ],
+        "move": "children"
+      },
+      "rationale": "odc-text-eng"
+    },
+    {
+      "id": "structure.text-trans",
+      "stage": "structure",
+      "priority": 93,
+      "op": "map",
+      "match": {
+        "selector": ".o-simp"
+      },
+      "emit": {
+        "classes": [
+          "odc-text-trans"
+        ],
+        "move": "children"
+      },
+      "rationale": "odc-text-trans"
+    },
+    {
+      "id": "structure.symbol",
+      "stage": "structure",
+      "priority": 75,
+      "op": "map",
+      "match": {
+        "selector": ".o-symbol-wrap, .o-symbol, .o-symbol-token, .o-symbol-tip, .o-symbol-exam, .o-symbol-cefr, .o-symbol-key, .o-symbol-ox3000, .o-symbol-size-s, .o-symbol-source-img, .o-symbol-token-ox3000-key-s, .o-symbol-netm, .o-symbol-token-netm, .o-symbol-cet6, .o-symbol-token-cet6, .o-symbol-syn, .o-symbol-token-syn, .o-symbol-cet4, .o-symbol-token-cet4, .o-symbol-size-l, .o-symbol-ox5000, .o-symbol-cefr-b2, .o-symbol-token-cefr-b2-s, .o-symbol-cefr-c1, .o-symbol-token-ox3000-key-l, .o-symbol-cefr-b1, .o-symbol-cefr-a2, .o-symbol-token-ox5000-key-s, .o-symbol-token-cefr-b1-s, .o-symbol-cefr-a1, .o-symbol-token-cefr-c1-s, .o-symbol-token-cefr-a2-s, .o-symbol-token-cefr-a1-s, .o-symbol-token-ox5000-key-l, .o-symbol-opp, .o-symbol-token-opp, .o-symbol-diomond, .o-symbol-token-diomond, .o-symbol-token-cefr-c1-m, .o-symbol-help, .o-symbol-token-help, .o-symbol-idm, .o-symbol-token-idm, .o-symbol-opal_w, .o-symbol-token-opal-w, .o-symbol-token-cefr-b2-m, .o-symbol-opal_o, .o-symbol-token-opal-o, .o-symbol-token-cefr-b1-l, .o-symbol-token-cefr-a2-l, .o-symbol-token-cefr-a1-l, .o-symbol-token-cefr-b2-l, .o-symbol-origin, .o-symbol-token-origin, .o-symbol-opal_s, .o-symbol-token-opal-s, .o-symbol-note, .o-symbol-token-note, .o-symbol-cefr-c2, .o-symbol-token-cefr-c2-s"
+      },
+      "emit": {
+        "classes": [
+          "odc-symbol"
+        ],
+        "move": "children"
+      },
+      "rationale": "span.o-symbol* (CEFR/Oxford badges)"
+    },
+    {
+      "id": "structure.sense",
+      "stage": "structure",
+      "priority": 74,
+      "op": "map",
+      "match": {
+        "selector": ".o-sense"
+      },
+      "emit": {
+        "classes": [
+          "odc-sense"
+        ],
+        "element": "section",
+        "move": "children"
+      },
+      "rationale": "section.o-sense"
+    },
+    {
+      "id": "structure.sense-def",
+      "stage": "structure",
+      "priority": 73,
+      "op": "map",
+      "match": {
+        "selector": ".o-sense-define"
+      },
+      "emit": {
+        "classes": [
+          "odc-sense-def"
+        ],
+        "move": "children"
+      },
+      "rationale": "div.o-sense-define"
+    },
+    {
+      "id": "structure.sense-number",
+      "stage": "structure",
+      "priority": 72,
+      "op": "map",
+      "match": {
+        "selector": ".o-sense-head"
+      },
+      "emit": {
+        "classes": [
+          "odc-sense-number"
+        ],
+        "move": "children"
+      },
+      "rationale": "span.o-sense-head"
+    },
+    {
+      "id": "structure.sense-num",
+      "stage": "structure",
+      "priority": 71,
+      "op": "map",
+      "match": {
+        "selector": ".o-sn-g"
+      },
+      "emit": {
+        "classes": [
+          "odc-sense-num"
+        ],
+        "move": "children"
+      },
+      "rationale": "span.o-sn-g (number token)"
+    },
+    {
+      "id": "structure.def",
+      "stage": "structure",
+      "priority": 70,
+      "op": "map",
+      "match": {
+        "selector": ".o-def-eng"
+      },
+      "emit": {
+        "classes": [
+          "odc-def"
+        ],
+        "move": "children"
+      },
+      "rationale": "span.o-def-eng"
+    },
+    {
+      "id": "structure.def-trans",
+      "stage": "structure",
+      "priority": 69,
+      "op": "map",
+      "match": {
+        "selector": ".o-def-simp"
+      },
+      "emit": {
+        "classes": [
+          "odc-def-trans"
+        ],
+        "move": "children"
+      },
+      "rationale": "span.o-def-simp"
+    },
+    {
+      "id": "structure.def-quote",
+      "stage": "structure",
+      "priority": 68,
+      "op": "map",
+      "match": {
+        "selector": ".o-def_qt"
+      },
+      "emit": {
+        "classes": [
+          "odc-def-quote"
+        ],
+        "move": "children"
+      },
+      "rationale": "span.o-def_qt"
+    },
+    {
+      "id": "structure.examples",
+      "stage": "structure",
+      "priority": 67,
+      "op": "map",
+      "match": {
+        "selector": ".o-example-list"
+      },
+      "emit": {
+        "classes": [
+          "odc-examples"
+        ],
+        "element": "ul",
+        "move": "children"
+      },
+      "rationale": "ul.o-example-list"
+    },
+    {
+      "id": "structure.example",
+      "stage": "structure",
+      "priority": 66,
+      "op": "map",
+      "match": {
+        "selector": ".o-example-row"
+      },
+      "emit": {
+        "classes": [
+          "odc-example"
+        ],
+        "move": "children"
+      },
+      "rationale": "div.o-example-row"
+    },
+    {
+      "id": "structure.example-main",
+      "stage": "structure",
+      "priority": 65,
+      "op": "map",
+      "match": {
+        "selector": ".o-example-main"
+      },
+      "emit": {
+        "classes": [
+          "odc-example-main"
+        ],
+        "move": "children"
+      },
+      "rationale": "div.o-example-main"
+    },
+    {
+      "id": "structure.ex-text",
+      "stage": "structure",
+      "priority": 64,
+      "op": "map",
+      "match": {
+        "selector": ".o-example-eng"
+      },
+      "emit": {
+        "classes": [
+          "odc-ex-text"
+        ],
+        "move": "children"
+      },
+      "rationale": "span.o-example-eng"
+    },
+    {
+      "id": "structure.ex-trans",
+      "stage": "structure",
+      "priority": 63,
+      "op": "map",
+      "match": {
+        "selector": ".o-example-simp"
+      },
+      "emit": {
+        "classes": [
+          "odc-ex-trans"
+        ],
+        "move": "children"
+      },
+      "rationale": "div.o-example-simp"
+    },
+    {
+      "id": "structure.example-icon",
+      "stage": "structure",
+      "priority": 62,
+      "op": "map",
+      "match": {
+        "selector": ".o-example-diamond"
+      },
+      "emit": {
+        "classes": [
+          "odc-example-icon"
+        ],
+        "move": "children"
+      },
+      "rationale": "svg.o-example-diamond"
+    },
+    {
+      "id": "structure.ex-source",
+      "stage": "structure",
+      "priority": 61,
+      "op": "map",
+      "match": {
+        "selector": ".o-cf, .o-example-cf"
+      },
+      "emit": {
+        "classes": [
+          "odc-ex-source"
+        ],
+        "move": "children"
+      },
+      "rationale": "div.o-example-cf / span.o-cf (corpus tag)"
+    },
+    {
+      "id": "structure.example-usage",
+      "stage": "structure",
+      "priority": 60,
+      "op": "map",
+      "match": {
+        "selector": ".o-example-usage"
+      },
+      "emit": {
+        "classes": [
+          "odc-example-usage"
+        ],
+        "move": "children"
+      },
+      "rationale": "div.o-example-usage"
+    },
+    {
+      "id": "structure.idiom",
+      "stage": "structure",
+      "priority": 59,
+      "op": "map",
+      "match": {
+        "selector": ".o-idiom"
+      },
+      "emit": {
+        "classes": [
+          "odc-idiom"
+        ],
+        "element": "section",
+        "move": "children"
+      },
+      "rationale": "section.o-idiom (idiom sub-entry)"
+    },
+    {
+      "id": "structure.idiom-group",
+      "stage": "structure",
+      "priority": 58,
+      "op": "map",
+      "match": {
+        "selector": ".o-idiom-block, .o-idiom-collection"
+      },
+      "emit": {
+        "classes": [
+          "odc-idiom-group"
+        ],
+        "element": "section",
+        "move": "children"
+      },
+      "rationale": "section.o-idiom-block / .o-idiom-collection"
+    },
+    {
+      "id": "structure.phrasal-verb",
+      "stage": "structure",
+      "priority": 57,
+      "op": "map",
+      "match": {
+        "selector": ".o-phrase-panel, .o-phrasal"
+      },
+      "emit": {
+        "classes": [
+          "odc-phrasal-verb"
+        ],
+        "element": "section",
+        "move": "children"
+      },
+      "rationale": "section.o-phrasal / section.o-phrase-panel"
+    },
+    {
+      "id": "structure.phrasal-verb-group",
+      "stage": "structure",
+      "priority": 56,
+      "op": "map",
+      "match": {
+        "selector": ".o-phrasal-block, .o-phrasal-collection"
+      },
+      "emit": {
+        "classes": [
+          "odc-phrasal-verb-group"
+        ],
+        "element": "section",
+        "move": "children"
+      },
+      "rationale": "section.o-phrasal-block / .o-phrasal-collection"
+    },
+    {
+      "id": "structure.phrase-index",
+      "stage": "structure",
+      "priority": 55,
+      "op": "map",
+      "match": {
+        "selector": ".o-phrase-collection"
+      },
+      "emit": {
+        "classes": [
+          "odc-phrase-index"
+        ],
+        "element": "section",
+        "move": "children"
+      },
+      "rationale": "section.o-phrase-collection"
+    },
+    {
+      "id": "structure.refbar",
+      "stage": "structure",
+      "priority": 54,
+      "op": "map",
+      "match": {
+        "selector": ".o-parent"
+      },
+      "emit": {
+        "classes": [
+          "odc-refbar"
+        ],
+        "move": "children"
+      },
+      "rationale": "div.o-parent (see-also bar in phrase entries)"
+    },
+    {
+      "id": "structure.ref",
+      "stage": "structure",
+      "priority": 53,
+      "op": "map",
+      "match": {
+        "selector": ".o-ref"
+      },
+      "emit": {
+        "classes": [
+          "odc-ref"
+        ],
+        "move": "children"
+      },
+      "rationale": "div/span.o-ref (reference container)"
+    },
+    {
+      "id": "structure.ref-links",
+      "stage": "structure",
+      "priority": 52,
+      "op": "map",
+      "match": {
+        "selector": ".o-ref-links"
+      },
+      "emit": {
+        "classes": [
+          "odc-ref-links"
+        ],
+        "move": "children"
+      },
+      "rationale": "span.o-ref-links"
+    },
+    {
+      "id": "structure.ref-label",
+      "stage": "structure",
+      "priority": 51,
+      "op": "map",
+      "match": {
+        "selector": ".o-ref-label, .o-ref-arrow-label"
+      },
+      "emit": {
+        "classes": [
+          "odc-ref-label"
+        ],
+        "move": "children"
+      },
+      "rationale": "span.o-ref-label"
+    },
+    {
+      "id": "structure.ref-symbol",
+      "stage": "structure",
+      "priority": 50,
+      "op": "map",
+      "match": {
+        "selector": ".o-ref-symbol, .o-ref-symbol-arrow"
+      },
+      "emit": {
+        "classes": [
+          "odc-ref-symbol"
+        ],
+        "move": "children"
+      },
+      "rationale": "span.o-ref-symbol / .o-ref-symbol-arrow"
+    },
+    {
+      "id": "structure.ref-word",
+      "stage": "structure",
+      "priority": 49,
+      "op": "attr",
+      "match": {
+        "selector": ".o-ref-word"
+      },
+      "emit": {
+        "classes": [
+          "odc-ref-word"
+        ],
+        "attributes": {
+          "-class": ""
+        }
+      },
+      "rationale": "a.o-ref-word (+xh/xpos/xhm/xs) - link refs"
+    },
+    {
+      "id": "structure.ref-word-map",
+      "stage": "structure",
+      "priority": 49,
+      "op": "map",
+      "match": {
+        "selector": ".o-ref-word-xh, .o-ref-word-xpos, .o-ref-word-xhm, .o-ref-word-xs"
+      },
+      "emit": {
+        "classes": [
+          "odc-ref-word"
+        ],
+        "move": "children"
+      },
+      "rationale": "a.o-ref-word (+xh/xpos/xhm/xs) - link refs"
+    },
+    {
+      "id": "structure.crossref",
+      "stage": "structure",
+      "priority": 48,
+      "op": "map",
+      "match": {
+        "selector": ".o-reference, .o-reference-inline"
+      },
+      "emit": {
+        "classes": [
+          "odc-crossref"
+        ],
+        "move": "children"
+      },
+      "rationale": "div/span.o-reference (+inline)"
+    },
+    {
+      "id": "structure.ref-see-also",
+      "stage": "structure",
+      "priority": 47,
+      "op": "map",
+      "match": {
+        "selector": ".o-ref-see-also"
+      },
+      "emit": {
+        "classes": [
+          "odc-ref-see-also"
+        ],
+        "move": "children"
+      },
+      "rationale": "div.o-ref-see-also"
+    },
+    {
+      "id": "structure.ref-syn",
+      "stage": "structure",
+      "priority": 46,
+      "op": "map",
+      "match": {
+        "selector": ".o-ref-syn"
+      },
+      "emit": {
+        "classes": [
+          "odc-ref-syn"
+        ],
+        "move": "children"
+      },
+      "rationale": "span.o-ref-syn"
+    },
+    {
+      "id": "structure.ref-opp",
+      "stage": "structure",
+      "priority": 45,
+      "op": "map",
+      "match": {
+        "selector": ".o-ref-opp"
+      },
+      "emit": {
+        "classes": [
+          "odc-ref-opp"
+        ],
+        "move": "children"
+      },
+      "rationale": "div.o-ref-opp"
+    },
+    {
+      "id": "structure.ref-text",
+      "stage": "structure",
+      "priority": 44,
+      "op": "map",
+      "match": {
+        "selector": ".o-ref-default, .o-ref-text"
+      },
+      "emit": {
+        "classes": [
+          "odc-ref-text"
+        ],
+        "move": "children"
+      },
+      "rationale": "span.o-ref-default / .o-ref-text"
+    },
+    {
+      "id": "structure.ref-idm",
+      "stage": "structure",
+      "priority": 43,
+      "op": "map",
+      "match": {
+        "selector": ".o-ref-idm"
+      },
+      "emit": {
+        "classes": [
+          "odc-ref-idm"
+        ],
+        "move": "children"
+      },
+      "rationale": "div.o-ref-idm"
+    },
+    {
+      "id": "structure.ref-suffix",
+      "stage": "structure",
+      "priority": 42,
+      "op": "map",
+      "match": {
+        "selector": ".o-ref-suffix"
+      },
+      "emit": {
+        "classes": [
+          "odc-ref-suffix"
+        ],
+        "move": "children"
+      },
+      "rationale": "span.o-ref-suffix"
+    },
+    {
+      "id": "structure.sense-group",
+      "stage": "structure",
+      "priority": 40,
+      "op": "map",
+      "match": {
+        "selector": ".o-multiple-sense"
+      },
+      "emit": {
+        "classes": [
+          "odc-sense-group"
+        ],
+        "move": "children"
+      },
+      "rationale": "section.o-multiple-sense"
+    },
+    {
+      "id": "structure.signpost",
+      "stage": "structure",
+      "priority": 39,
+      "op": "map",
+      "match": {
+        "selector": ".o-shortcut-title, .o-shortcut, .o-sense-usage"
+      },
+      "emit": {
+        "classes": [
+          "odc-signpost"
+        ],
+        "move": "children"
+      },
+      "rationale": "div.o-shortcut-title / section.o-shortcut / .o-sense-usage"
+    },
+    {
+      "id": "structure.signpost-icon",
+      "stage": "structure",
+      "priority": 38,
+      "op": "map",
+      "match": {
+        "selector": ".o-shortcut-circle, .o-shortcut-arrow"
+      },
+      "emit": {
+        "classes": [
+          "odc-signpost-icon"
+        ],
+        "move": "children"
+      },
+      "rationale": "svg.o-shortcut-circle / .o-shortcut-arrow"
+    },
+    {
+      "id": "structure.entry-note",
+      "stage": "structure",
+      "priority": 37,
+      "op": "map",
+      "match": {
+        "selector": ".o-text-below-title"
+      },
+      "emit": {
+        "classes": [
+          "odc-entry-note"
+        ],
+        "move": "children"
+      },
+      "rationale": "div.o-text-below-title"
+    },
+    {
+      "id": "structure.extend-block",
+      "stage": "structure",
+      "priority": 36,
+      "op": "map",
+      "match": {
+        "selector": ".o-extend-block"
+      },
+      "emit": {
+        "classes": [
+          "odc-extend-block"
+        ],
+        "move": "children"
+      },
+      "rationale": "section.o-extend-block"
+    },
+    {
+      "id": "structure.extend-intro",
+      "stage": "structure",
+      "priority": 35,
+      "op": "map",
+      "match": {
+        "selector": ".o-extend-intro"
+      },
+      "emit": {
+        "classes": [
+          "odc-extend-intro"
+        ],
+        "move": "children"
+      },
+      "rationale": "div.o-extend-intro"
+    },
+    {
+      "id": "structure.grammar",
+      "stage": "structure",
+      "priority": 34,
+      "op": "map",
+      "match": {
+        "selector": ".o-gram-g, .o-gram, .o-v-gs, .o-v, .o-if, .o-if-gs, .o-if-g, .o-v-g"
+      },
+      "emit": {
+        "classes": [
+          "odc-grammar"
+        ],
+        "move": "children"
+      },
+      "rationale": "span.o-gram / .o-if* / .o-v* (grammar patterns)"
+    },
+    {
+      "id": "structure.label",
+      "stage": "structure",
+      "priority": 33,
+      "op": "map",
+      "match": {
+        "selector": ".o-label-g, .o-reg, .o-cl, .o-ndv, .o-gl, .o-dtxt, .o-eb, .o-subj, .o-dr, .o-ptl, .o-alt, .o-use, .o-use_end, .o-dh, .o-ebi, .o-wx, .o-hm, .o-top-un, .o-group-un, .o-form"
+      },
+      "emit": {
+        "classes": [
+          "odc-label"
+        ],
+        "move": "children"
+      },
+      "rationale": "span.o-label-g / .o-reg / .o-cl / .o-gl / .o-dh / .o-hm / .o-eb / .o-ebi / .o-ptl / .o-wx / .o-use* / .o-ndv / .o-dtxt / .o-dr / .o-alt / .o-form"
+    },
+    {
+      "id": "structure.idiom-word",
+      "stage": "structure",
+      "priority": 32,
+      "op": "map",
+      "match": {
+        "selector": ".o-idm"
+      },
+      "emit": {
+        "classes": [
+          "odc-idiom-word"
+        ],
+        "move": "children"
+      },
+      "rationale": "span.o-tag.o-idm (idiom word inside text)"
+    },
+    {
+      "id": "structure.phrasal-verb-word",
+      "stage": "structure",
+      "priority": 31,
+      "op": "map",
+      "match": {
+        "selector": ".o-pv"
+      },
+      "emit": {
+        "classes": [
+          "odc-phrasal-verb-word"
+        ],
+        "move": "children"
+      },
+      "rationale": "span.o-tag.o-pv (phrasal verb inside text)"
+    },
+    {
+      "id": "structure.head-symbols",
+      "stage": "structure",
+      "priority": 30,
+      "op": "map",
+      "match": {
+        "selector": ".o-head-symbols"
+      },
+      "emit": {
+        "classes": [
+          "odc-head-symbols"
+        ],
+        "move": "children"
+      },
+      "rationale": "span.o-head-symbols (letter/word badges)"
+    },
+    {
+      "id": "structure.head-symbol",
+      "stage": "structure",
+      "priority": 29,
+      "op": "map",
+      "match": {
+        "selector": ".o-active, .o-head-symbol-set"
+      },
+      "emit": {
+        "classes": [
+          "odc-head-symbol"
+        ],
+        "move": "children"
+      },
+      "rationale": "span.o-head-symbol-set (one badge)"
+    },
+    {
+      "id": "structure.head-icon",
+      "stage": "structure",
+      "priority": 28,
+      "op": "map",
+      "match": {
+        "selector": ".o-head-icon-circle, .o-head-icon-arrow"
+      },
+      "emit": {
+        "classes": [
+          "odc-head-icon"
+        ],
+        "move": "children"
+      },
+      "rationale": "section.o-head-icon-circle / arrow"
+    },
+    {
+      "id": "structure.entry-variants",
+      "stage": "structure",
+      "priority": 27,
+      "op": "map",
+      "match": {
+        "selector": ".o-entry-variants"
+      },
+      "emit": {
+        "classes": [
+          "odc-entry-variants"
+        ],
+        "move": "children"
+      },
+      "rationale": "odc-entry-variants"
+    },
+    {
+      "id": "structure.ex-list-items",
+      "stage": "structure",
+      "priority": 10,
+      "op": "map",
+      "match": {
+        "selector": "ul.odc-examples > li"
+      },
+      "emit": {
+        "classes": [
+          "odc-example"
+        ],
+        "move": "children"
+      },
+      "rationale": "Row items inside the mapped example list are single examples."
+    },
+    {
+      "id": "structure.unmapped",
+      "stage": "structure",
+      "priority": 5,
+      "op": "attr",
+      "match": {
+        "selector": ".o-relation-item, .o-relation-head, .o-relation-arrow-svg, .o-relation-head-link, .o-relation-pos, .o-unbox-li, .o-relations, .o-unbox-example-row, .o-unbox-example-diamond, .o-unbox-example-main, .o-unbox-example-eng, .o-unbox-example-simp, .o-li_text, .o-unbox-panel, .o-unbox-tile, .o-unbox-tile-icon, .o-unbox-tile-title, .o-unbox-tile-simp, .o-unbox-tile-eng, .o-unbox-body, .o-unbox-body-header, .o-unbox-body-content, .o-unbox-list, .o-unbox-tile-illustration, .o-unbox-ill-icon, .o-visual-vocabulary, .o-unbox-ul, .o-ei, .o-or, .o-relation-top-text, .o-unbox-icon-svg, .o-unbox-trans, .o-unbox-h1, .o-unbox-p, .also, .o-h1_text, .o-word-family-row, .o-word-family-word, .o-word-family-pron, .o-word-family-opp, .o-unbox-h3, .o-unbox-h2, .o-unbox-icon-synonym, .o-h3_text, .o-delete, .o-unbox-reference, .o-unbox-icon-homophone, .o-unbox-pron-gs, .o-eph, .o-unbox-icon-whichword, .o-ve, .o-unbox-icon-wordfamily, .o-word-family, .o-last-reference, .o-sup, .o-x, .o-unbox-icon-collocation, .o-unbox-icon-express, .o-unbox-icon-grammarpoint, .o-unbox-icon-languagebank, .o-sub, .o-unbox-use, .o-unbox-icon-building, .o-unbox-icon-accent, .o-unbox-table, .o-unbox-icon-moreabout, .o-relation-top-un, .ndv, .Ref, .o-relation-usage, .sometimes, .o-st, .o-custom-br, .o-h2_text, .entry, .o-supplemental-body, .top-container, .top-g, .webtop, .headword, .st, .phonetics, .phons_br, .phons_n_am, .sense_single, .sense, .sensetop, .def, .dh"
+      },
+      "emit": {
+        "classes": [
+          "odc-unmapped"
+        ],
+        "attributes": {
+          "-class": ""
+        }
+      },
+      "rationale": "Explicitly declared unmapped blocks/leaves (89 source classes: unbox/collocation/word-family/relation/symbol leftovers etc.); class becomes odc-unmapped, tag/attrs/text stay."
+    },
+    {
+      "id": "structure.decoration",
+      "stage": "structure",
+      "priority": 1,
+      "op": "attr",
+      "match": {
+        "selector": ".o-small, .o-italic, .o-bold"
+      },
+      "emit": {
+        "attributes": {
+          "-class": ""
+        }
+      },
+      "rationale": "Pure inline decoration (italic/bold/small) carries no slot; class is cleared, element and text stay."
+    }
+  ]
+}

@@ -180,3 +180,5 @@ LDOCE6：56 个 kind 里有 **42 个都 ≥ 1%**（`span.def` 98.8%、`span.pos`
 边界说明：本机没有 LDOCE6 / OALD9 的原始 `.mdx`，上表「实测槽位种类」引用 2026-11-07
 全量实测（见上一节）；`estimated_ops` 需要原始语料才能数怪癖，本机未复测，因此 verdict
 只写规则数能支撑的部分，不猜算子数。
+
+> OALD10 已接入（`profiles/oald10.profile.json`）。
