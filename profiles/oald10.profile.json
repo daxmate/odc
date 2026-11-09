@@ -98,7 +98,10 @@
       "priority": 100,
       "op": "map",
       "match": {
-        "selector": "main.oald-entry"
+        "selector": "main.oald-entry",
+        "cardinality": {
+          "min": 1
+        }
       },
       "emit": {
         "element": "section",
@@ -112,7 +115,7 @@
           "odc-lang": "@lang"
         }
       },
-      "rationale": "One record = one main.oald-entry (plain, phrase or supplemental); its class triple becomes data-odc-dict/key/lang."
+      "rationale": "One record = one main.oald-entry (plain, phrase or supplemental); its class triple becomes data-odc-dict/key/lang. P0 measurement: the rule matches 51310/51310 records (100.000%), so every record must carry the slot; min 1."
     },
     {
       "id": "split.pos-switch",
@@ -140,7 +143,10 @@
       "priority": 100,
       "op": "map",
       "match": {
-        "selector": "section.o-pos.o-pos-panel"
+        "selector": "section.o-pos.o-pos-panel",
+        "cardinality": {
+          "min": 0
+        }
       },
       "emit": {
         "element": "section",
@@ -152,7 +158,7 @@
           "odc-pos": "pos"
         }
       },
-      "rationale": "Each section.o-pos panel is one POS block; data-odc-pos is fixed because the engine cannot copy the tab label into an attribute."
+      "rationale": "Each section.o-pos panel is one POS block; data-odc-pos is fixed because the engine cannot copy the tab label into an attribute. P0 measurement: the rule matches 51309/51310 records (99.998%), so the slot is optional on the rest; min 0."
     },
     {
       "id": "slot.head",
@@ -565,7 +571,10 @@
       "priority": 74,
       "op": "map",
       "match": {
-        "selector": ".o-sense"
+        "selector": ".o-sense",
+        "cardinality": {
+          "min": 0
+        }
       },
       "emit": {
         "classes": [
@@ -574,7 +583,7 @@
         "element": "section",
         "move": "children"
       },
-      "rationale": "section.o-sense"
+      "rationale": "section.o-sense P0 measurement: the rule matches 51265/51310 records (99.912%), so the slot is optional on the rest; min 0."
     },
     {
       "id": "structure.sense-def",
@@ -598,7 +607,10 @@
       "priority": 72,
       "op": "map",
       "match": {
-        "selector": ".o-sense-head"
+        "selector": ".o-sense-head",
+        "cardinality": {
+          "min": 0
+        }
       },
       "emit": {
         "classes": [
@@ -606,7 +618,7 @@
         ],
         "move": "children"
       },
-      "rationale": "span.o-sense-head"
+      "rationale": "span.o-sense-head P0 measurement: the rule matches 51265/51310 records (99.912%), so the slot is optional on the rest; min 0."
     },
     {
       "id": "structure.sense-num",
@@ -630,7 +642,10 @@
       "priority": 70,
       "op": "map",
       "match": {
-        "selector": ".o-def-eng"
+        "selector": ".o-def-eng",
+        "cardinality": {
+          "min": 0
+        }
       },
       "emit": {
         "classes": [
@@ -638,7 +653,7 @@
         ],
         "move": "children"
       },
-      "rationale": "span.o-def-eng"
+      "rationale": "span.o-def-eng P0 measurement: the rule matches 51265/51310 records (99.912%), so the slot is optional on the rest; min 0."
     },
     {
       "id": "structure.def-trans",
@@ -646,7 +661,10 @@
       "priority": 69,
       "op": "map",
       "match": {
-        "selector": ".o-def-simp"
+        "selector": ".o-def-simp",
+        "cardinality": {
+          "min": 0
+        }
       },
       "emit": {
         "classes": [
@@ -654,7 +672,7 @@
         ],
         "move": "children"
       },
-      "rationale": "span.o-def-simp"
+      "rationale": "span.o-def-simp P0 measurement: the rule matches 51265/51310 records (99.912%), so the slot is optional on the rest; min 0."
     },
     {
       "id": "structure.def-quote",
@@ -695,7 +713,10 @@
       "priority": 66,
       "op": "map",
       "match": {
-        "selector": ".o-example-row"
+        "selector": ".o-example-row",
+        "cardinality": {
+          "min": 0
+        }
       },
       "emit": {
         "classes": [
@@ -703,7 +724,7 @@
         ],
         "move": "children"
       },
-      "rationale": "div.o-example-row"
+      "rationale": "div.o-example-row P0 measurement: the rule matches 26668/51310 records (51.974%), so the slot is optional on the rest; min 0."
     },
     {
       "id": "structure.example-main",
@@ -841,7 +862,10 @@
       "priority": 57,
       "op": "map",
       "match": {
-        "selector": ".o-phrase-panel, .o-phrasal"
+        "selector": ".o-phrase-panel, .o-phrasal",
+        "cardinality": {
+          "min": 0
+        }
       },
       "emit": {
         "classes": [
@@ -850,7 +874,7 @@
         "element": "section",
         "move": "children"
       },
-      "rationale": "section.o-phrasal / section.o-phrase-panel"
+      "rationale": "section.o-phrasal / section.o-phrase-panel P0 measurement: the rule matches 4303/51310 records (8.386%), so the slot is optional on the rest; min 0."
     },
     {
       "id": "structure.phrasal-verb-group",
@@ -1342,7 +1366,10 @@
       "priority": 10,
       "op": "map",
       "match": {
-        "selector": "ul.odc-examples > li"
+        "selector": "ul.odc-examples > li",
+        "cardinality": {
+          "min": 0
+        }
       },
       "emit": {
         "classes": [
@@ -1350,7 +1377,7 @@
         ],
         "move": "children"
       },
-      "rationale": "Row items inside the mapped example list are single examples."
+      "rationale": "Row items inside the mapped example list are single examples. P0 measurement: the rule matches 26668/51310 records (51.974%), so the slot is optional on the rest; min 0."
     },
     {
       "id": "structure.unmapped",

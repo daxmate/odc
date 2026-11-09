@@ -122,18 +122,18 @@
       "stage": "segment",
       "priority": 100,
       "op": "map",
-      "match": { "selector": "div.sblocks", "scope": ["entry"] },
+      "match": { "selector": "div.sblocks", "scope": ["entry"], "cardinality": { "min": 0 } },
       "emit": { "element": "section", "classes": ["odc-pos-block"], "move": "children" },
-      "rationale": "div.sblocks already groups every sense of one part of speech, so it can be re-tagged instead of cut out of a flat sibling run."
+      "rationale": "div.sblocks already groups every sense of one part of speech, so it can be re-tagged instead of cut out of a flat sibling run. P0 cardinality declared as 0 explicitly; no full-corpus measurement yet."
     },
     {
       "id": "segment.dros",
       "stage": "segment",
       "priority": 90,
       "op": "map",
-      "match": { "selector": "div.dros", "scope": ["entry"] },
+      "match": { "selector": "div.dros", "scope": ["entry"], "cardinality": { "min": 0 } },
       "emit": { "element": "section", "classes": ["odc-pos-block"], "move": "children" },
-      "rationale": "Phrasal-verb homographs live in div.dros instead of div.sblocks and need their own block."
+      "rationale": "Phrasal-verb homographs live in div.dros instead of div.sblocks and need their own block. P0 cardinality declared as 0 explicitly; no full-corpus measurement yet."
     },
     {
       "id": "head.block",
@@ -210,31 +210,33 @@
       "stage": "slot",
       "priority": 70,
       "op": "map",
-      "match": { "selector": "strong.sn_block_num", "scope": ["pos-block"] },
+      "match": { "selector": "strong.sn_block_num", "scope": ["pos-block"], "cardinality": { "min": 0 } },
       "emit": { "element": "span", "classes": ["odc-sense-number"], "move": "children" },
       "confidence": 0.96,
       "status": "approved",
-      "rationale": "strong.sn_block_num is a sibling of div.scnt, so it becomes an odc-sense-number before its sense rather than inside it."
+      "rationale": "strong.sn_block_num is a sibling of div.scnt, so it becomes an odc-sense-number before its sense rather than inside it. P0 cardinality declared as 0 explicitly; no full-corpus measurement yet."
     },
     {
       "id": "def.text",
       "stage": "slot",
       "priority": 65,
       "op": "map",
-      "match": { "selector": "span.def_text", "scope": ["sense"] },
+      "match": { "selector": "span.def_text", "scope": ["sense"], "cardinality": { "min": 0 } },
       "emit": { "element": "div", "classes": ["odc-def"], "move": "children" },
       "confidence": 1.0,
-      "status": "approved"
+      "status": "approved",
+      "rationale": "P0 cardinality declared as 0 explicitly; no full-corpus measurement yet."
     },
     {
       "id": "example.item",
       "stage": "slot",
       "priority": 60,
       "op": "map",
-      "match": { "selector": "li.vi", "scope": ["sense"] },
+      "match": { "selector": "li.vi", "scope": ["sense"], "cardinality": { "min": 0 } },
       "emit": { "element": "li", "classes": ["odc-example"], "move": "children" },
       "confidence": 0.99,
-      "status": "approved"
+      "status": "approved",
+      "rationale": "P0 cardinality declared as 0 explicitly; no full-corpus measurement yet."
     },
     {
       "id": "example.list",
@@ -251,11 +253,11 @@
       "stage": "slot",
       "priority": 50,
       "op": "map",
-      "match": { "selector": "div.dro_line", "scope": ["pos-block"] },
+      "match": { "selector": "div.dro_line", "scope": ["pos-block"], "cardinality": { "min": 0 } },
       "emit": { "element": "div", "classes": ["odc-phrasal-verb"], "move": "children" },
       "confidence": 0.95,
       "status": "proposed",
-      "rationale": "Phrasal-verb heads are h2.dre inside div.dro_line; the line also carries the grammar label."
+      "rationale": "Phrasal-verb heads are h2.dre inside div.dro_line; the line also carries the grammar label. P0 cardinality declared as 0 explicitly; no full-corpus measurement yet."
     },
     {
       "id": "slot.grammar",

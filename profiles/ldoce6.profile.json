@@ -313,7 +313,10 @@
       "priority": 100,
       "op": "segment",
       "match": {
-        "selector": "section.odc-entry"
+        "selector": "section.odc-entry",
+        "cardinality": {
+          "min": 0
+        }
       },
       "boundary": {
         "start": "span.pos",
@@ -328,7 +331,7 @@
           "odc-pos-block"
         ]
       },
-      "rationale": "ldoce6.rs:899-945: span.pos closes the head and opens a section.odc-pos-block that owns the following senses; the source keeps them as flat siblings."
+      "rationale": "ldoce6.rs:899-945: span.pos closes the head and opens a section.odc-pos-block that owns the following senses; the source keeps them as flat siblings. P0 cardinality declared as 0 explicitly; no full-corpus measurement yet."
     },
     {
       "id": "head.hwd",
@@ -447,7 +450,10 @@
       "priority": 88,
       "op": "map",
       "match": {
-        "selector": "span.sensenum"
+        "selector": "span.sensenum",
+        "cardinality": {
+          "min": 0
+        }
       },
       "emit": {
         "element": "span",
@@ -456,7 +462,7 @@
         ],
         "move": "children"
       },
-      "rationale": "ldoce6.rs:1003-1009: sensenum becomes span.odc-sense-number (passthrough inside ref boxes)."
+      "rationale": "ldoce6.rs:1003-1009: sensenum becomes span.odc-sense-number (passthrough inside ref boxes). P0 cardinality declared as 0 explicitly; no full-corpus measurement yet."
     },
     {
       "id": "sense.item",
@@ -464,7 +470,10 @@
       "priority": 86,
       "op": "map",
       "match": {
-        "selector": "span.sense"
+        "selector": "span.sense",
+        "cardinality": {
+          "min": 0
+        }
       },
       "emit": {
         "element": "div",
@@ -473,7 +482,7 @@
         ],
         "move": "children"
       },
-      "rationale": "ldoce6.rs:1129-1162: span.sense opens div.odc-sense and closes the previous one."
+      "rationale": "ldoce6.rs:1129-1162: span.sense opens div.odc-sense and closes the previous one. P0 cardinality declared as 0 explicitly; no full-corpus measurement yet."
     },
     {
       "id": "sense.subsense",
@@ -498,7 +507,10 @@
       "priority": 82,
       "op": "map",
       "match": {
-        "selector": "span.def"
+        "selector": "span.def",
+        "cardinality": {
+          "min": 0
+        }
       },
       "emit": {
         "element": "span",
@@ -507,7 +519,7 @@
         ],
         "move": "children"
       },
-      "rationale": "ldoce6.rs:1031-1038: span.def becomes span.odc-def and raises def_depth for the translation span."
+      "rationale": "ldoce6.rs:1031-1038: span.def becomes span.odc-def and raises def_depth for the translation span. P0 cardinality declared as 0 explicitly; no full-corpus measurement yet."
     },
     {
       "id": "example.item",
@@ -515,7 +527,10 @@
       "priority": 80,
       "op": "map",
       "match": {
-        "selector": "span.example"
+        "selector": "span.example",
+        "cardinality": {
+          "min": 0
+        }
       },
       "emit": {
         "element": "li",
@@ -524,7 +539,7 @@
         ],
         "move": "children"
       },
-      "rationale": "ldoce6.rs:1053-1061: every span.example becomes an li.odc-example; the adapter lazily opens a ul.odc-examples around runs of them (segment cannot express that run)."
+      "rationale": "ldoce6.rs:1053-1061: every span.example becomes an li.odc-example; the adapter lazily opens a ul.odc-examples around runs of them (segment cannot express that run). P0 cardinality declared as 0 explicitly; no full-corpus measurement yet."
     },
     {
       "id": "label.register",
@@ -674,7 +689,10 @@
       "priority": 62,
       "op": "map",
       "match": {
-        "selector": "tran"
+        "selector": "tran",
+        "cardinality": {
+          "min": 0
+        }
       },
       "emit": {
         "element": "span",
@@ -686,7 +704,7 @@
         },
         "move": "children"
       },
-      "rationale": "ldoce6.rs:784-793: tran becomes the Chinese translation span when it sits inside a def."
+      "rationale": "ldoce6.rs:784-793: tran becomes the Chinese translation span when it sits inside a def. P0 cardinality declared as 0 explicitly; no full-corpus measurement yet."
     },
     {
       "id": "translation.example",

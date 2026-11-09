@@ -295,7 +295,10 @@
       "priority": 95,
       "op": "map",
       "match": {
-        "selector": ".sn-g"
+        "selector": ".sn-g",
+        "cardinality": {
+          "min": 0
+        }
       },
       "emit": {
         "element": "div",
@@ -304,7 +307,7 @@
         ],
         "move": "children"
       },
-      "rationale": "li.sn-g / span.sn-g is one numbered sense; OALD9 mixes both tags for the same role."
+      "rationale": "li.sn-g / span.sn-g is one numbered sense; OALD9 mixes both tags for the same role. P0 cardinality declared as 0 explicitly; no full-corpus measurement yet."
     },
     {
       "id": "structure.number",
@@ -312,7 +315,10 @@
       "priority": 92,
       "op": "map",
       "match": {
-        "selector": ".num"
+        "selector": ".num",
+        "cardinality": {
+          "min": 0
+        }
       },
       "emit": {
         "element": "span",
@@ -321,7 +327,7 @@
         ],
         "move": "children"
       },
-      "rationale": "The printed sense number stays as text next to the engine's own numbering."
+      "rationale": "The printed sense number stays as text next to the engine's own numbering. P0 cardinality declared as 0 explicitly; no full-corpus measurement yet."
     },
     {
       "id": "structure.def",
@@ -329,7 +335,10 @@
       "priority": 90,
       "op": "map",
       "match": {
-        "selector": ".def"
+        "selector": ".def",
+        "cardinality": {
+          "min": 0
+        }
       },
       "emit": {
         "element": "span",
@@ -338,7 +347,7 @@
         ],
         "move": "children"
       },
-      "rationale": "span.def is the definition."
+      "rationale": "span.def is the definition. P0 cardinality declared as 0 explicitly; no full-corpus measurement yet."
     },
     {
       "id": "structure.examples",
@@ -363,7 +372,10 @@
       "priority": 86,
       "op": "map",
       "match": {
-        "selector": "span.x"
+        "selector": "span.x",
+        "cardinality": {
+          "min": 0
+        }
       },
       "emit": {
         "element": "span",
@@ -372,7 +384,7 @@
         ],
         "move": "children"
       },
-      "rationale": "span.x is one example sentence."
+      "rationale": "span.x is one example sentence. P0 cardinality declared as 0 explicitly; no full-corpus measurement yet."
     },
     {
       "id": "structure.example-inner",
@@ -458,7 +470,10 @@
       "priority": 72,
       "op": "map",
       "match": {
-        "selector": ".pv-g"
+        "selector": ".pv-g",
+        "cardinality": {
+          "min": 0
+        }
       },
       "emit": {
         "element": "article",
@@ -467,7 +482,7 @@
         ],
         "move": "children"
       },
-      "rationale": "One phrasal verb; a pv-g may hold two headword variants (survey B5)."
+      "rationale": "One phrasal verb; a pv-g may hold two headword variants (survey B5). P0 cardinality declared as 0 explicitly; no full-corpus measurement yet."
     },
     {
       "id": "structure.pv-hw",
