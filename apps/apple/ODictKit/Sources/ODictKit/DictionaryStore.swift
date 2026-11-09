@@ -87,6 +87,13 @@ public final class DictionaryStore {
     public private(set) var importProgress: MDXImportProgress?
     /// Summary shown once an MDX conversion finished, until dismissed.
     public private(set) var importSummary: String?
+    /// Whether that summary reports a profile that covered too little.
+    public private(set) var importSummaryIsWarning = false
+    /// Profile picked for the next MDX import, shared by both entry points.
+    ///
+    /// Set before the MDX picker opens and cleared once the import starts, so
+    /// a profile never leaks into a later import the reader did not ask for.
+    public var pendingImportProfileURL: URL?
     /// First-use trust prompt for a signed import or update, if one is open.
     public private(set) var pendingTrustRequest: PendingTrustRequest?
     /// Unsigned patch the reader asked to apply; shown until acknowledged.
@@ -813,14 +820,15 @@ public final class DictionaryStore {
 
     /// Open `url`, converting an MDX dictionary into `.odc` first.
     public func openDocument(url: URL) {
+        let profile = pendingImportProfileURL
         if url.pathExtension.lowercased() == "mdx" {
-            importMDX(url: url)
+            importMDX(url: url, profileURL: profile)
         } else if isDirectory(url), !FileManager.default.fileExists(
             atPath: url.appending(path: "odc.db").path
         ), let mdx = MDXImporter.singleMDX(in: url) {
             // A picked folder that is not a repository but holds one MDX:
             // import that dictionary, so its sibling MDD volumes are readable.
-            importMDX(url: mdx)
+            importMDX(url: mdx, profileURL: profile)
         } else {
             open(url: url)
         }
@@ -836,13 +844,23 @@ public final class DictionaryStore {
     /// The conversion runs off the main actor. The store publishes the coarse
     /// stage only — never a fabricated percentage.
     public func importMDX(url: URL) {
+        importMDX(url: url, profileURL: nil)
+    }
+
+    /// Import `url`, applying `profileURL` when one is given.
+    ///
+    /// The pending picker value is consumed by the import that starts here, so
+    /// a later import never silently reuses a stale profile.
+    public func importMDX(url: URL, profileURL: URL?) {
         conversionTask?.cancel()
         errorMessage = nil
         clearImportSummary()
         importPhase = .preparing
         importProgress = .preparingSample
+        pendingImportProfileURL = nil
+        let profile = profileURL
         conversionTask = Task { [weak self] in
-            await self?.performImport(url: url)
+            await self?.performImport(url: url, profileURL: profile)
         }
     }
 
@@ -856,10 +874,14 @@ public final class DictionaryStore {
     /// A success note is transient: it clears itself after
     /// `importSummaryLifetime` unless the reader closes it first. Failures go
     /// through `errorMessage` and stay until dismissed.
-    func presentImportSummary(_ text: String) {
+    ///
+    /// `isWarning` switches the banner to the warning icon: a profile that
+    /// covered less than 95% of the entries, or left any unadapted.
+    func presentImportSummary(_ text: String, isWarning: Bool = false) {
         summaryGeneration += 1
         let generation = summaryGeneration
         importSummary = text
+        importSummaryIsWarning = isWarning
         summaryTask?.cancel()
         let lifetime = importSummaryLifetime
         summaryTask = Task { [weak self] in
@@ -875,9 +897,14 @@ public final class DictionaryStore {
         summaryTask?.cancel()
         summaryTask = nil
         importSummary = nil
+        importSummaryIsWarning = false
     }
 
-    private func performImport(url: URL, source: LibrarySourceDescriptor? = nil) async {
+    private func performImport(
+        url: URL,
+        source: LibrarySourceDescriptor? = nil,
+        profileURL: URL? = nil
+    ) async {
         do {
             let directory = try libraryDirectoryURL()
             let descriptor = try await sourceDescriptor(for: url, override: source)
@@ -902,6 +929,7 @@ public final class DictionaryStore {
             let result = try await MDXImporter.convertToRepo(
                 source: url,
                 documents: staging,
+                profileURL: profileURL,
                 onProgress: { [weak self] sample in
                     Task { @MainActor in
                         self?.importProgress = sample
@@ -912,7 +940,10 @@ public final class DictionaryStore {
             guard !Task.isCancelled else { return }
             importPhase = nil
             importProgress = nil
-            presentImportSummary(result.report.summary)
+            presentImportSummary(
+                result.report.summary,
+                isWarning: result.report.contract?.isWarning ?? false
+            )
             await performOpen(url: result.outputURL, source: descriptor)
             discardStagedConversion(result.outputURL, in: staging)
         } catch is CancellationError {

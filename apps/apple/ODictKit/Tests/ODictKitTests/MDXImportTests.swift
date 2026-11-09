@@ -358,4 +358,126 @@ final class MDXImportTests: XCTestCase {
         XCTAssertEqual(importing.phase, .importing)
         XCTAssertEqual(tally.finish().phase, .finished)
     }
+
+    // MARK: - Profile contract
+
+    private func reportJSON(contract: String?) -> Data {
+        let contractField = contract.map { ",\n          \"contract\": \($0),\n          \"p0_failed\": 1,\n          \"p0_failed_samples\": [\"plain\"]" } ?? ""
+        let json = """
+        {
+          "imported_entries": 2,
+          "written": 2,
+          "removed": 0,
+          "skipped_blocks": 0,
+          "skipped_entries": 0,
+          "corrupt_blocks": [],
+          "deduplicated": 0,
+          "skipped_empty": 0,
+          "skipped_oversized": 0,
+          "working_set": 2,
+          "scan_warning": null,
+          "header": {
+            "engine_version": "2.0",
+            "required_engine_version": "2.0",
+            "encoding": "UTF-8",
+            "encrypted": null,
+            "records": 2
+          },
+          "output_bytes": 1024\(contractField)
+        }
+        """
+        return Data(json.utf8)
+    }
+
+    func testReportDecodesTheProfileContract() throws {
+        let contract = """
+        {
+            "total": 2, "adapted": 1, "unadapted": 1, "coverage": 0.5,
+            "bag_ok": 1, "order_ok": 1, "structure_ok": 1, "clean_ok": 1,
+            "equal": 1, "line": "coverage 1/2 (50.000%) | mapped 1/1 four-dim | unadapted 1"
+          }
+        """
+        let report = try MDXImportReport.decode(from: reportJSON(contract: contract))
+        let summary = try XCTUnwrap(report.contract)
+        XCTAssertEqual(summary.total, 2)
+        XCTAssertEqual(summary.adapted, 1)
+        XCTAssertEqual(summary.unadapted, 1)
+        XCTAssertEqual(summary.coverage, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(summary.equal, 1)
+        XCTAssertEqual(summary.fourDimensionRate, 1, accuracy: 0.0001)
+        XCTAssertEqual(summary.bagOk, 1)
+        XCTAssertEqual(report.p0Failed, 1)
+        XCTAssertEqual(report.p0FailedSamples, ["plain"])
+        XCTAssertTrue(summary.isWarning, "half the entries unadapted is a warning")
+    }
+
+    func testReportWithoutAProfileHasNoContract() throws {
+        let report = try MDXImportReport.decode(from: reportJSON(contract: nil))
+        XCTAssertNil(report.contract)
+        XCTAssertEqual(report.p0Failed, 0)
+        XCTAssertEqual(report.p0FailedSamples, [])
+        XCTAssertEqual(report.summary, "已导入 2 条")
+    }
+
+    func testSummaryAppendsTheProfileSegmentOnlyWhenPresent() throws {
+        let contract = """
+        {
+            "total": 2, "adapted": 2, "unadapted": 0, "coverage": 1.0,
+            "bag_ok": 2, "order_ok": 2, "structure_ok": 2, "clean_ok": 2,
+            "equal": 2, "line": ""
+          }
+        """
+        let report = try MDXImportReport.decode(from: reportJSON(contract: contract))
+        XCTAssertEqual(report.summary, "已导入 2 条 · 适配 coverage 100.0% · 四维 100.0% · 未适配 0")
+        XCTAssertEqual(report.contract?.isWarning, false)
+    }
+
+    func testMalformedProfileFailsWithAReadableError() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "odc-profile-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appending(path: "dictionary.mdx")
+        try Data("x".utf8).write(to: source)
+        let profile = directory.appending(path: "broken.profile.json")
+        try Data("{ not json".utf8).write(to: profile)
+
+        do {
+            _ = try await MDXImporter.convert(
+                source: source,
+                documents: directory,
+                profileURL: profile
+            )
+            XCTFail("expected the malformed profile to be refused")
+        } catch let error as MDXImportError {
+            guard case .invalidProfile(let detail) = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+            XCTAssertTrue(detail.contains("broken.profile.json"), detail)
+        }
+    }
+
+    func testMissingProfileFailsWithAReadableError() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "odc-profile-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appending(path: "dictionary.mdx")
+        try Data("x".utf8).write(to: source)
+        let missing = directory.appending(path: "absent.profile.json")
+
+        do {
+            _ = try await MDXImporter.convert(
+                source: source,
+                documents: directory,
+                profileURL: missing
+            )
+            XCTFail("expected the missing profile to be refused")
+        } catch let error as MDXImportError {
+            guard case .invalidProfile(let detail) = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+            XCTAssertTrue(detail.contains("absent.profile.json"), detail)
+        }
+    }
 }

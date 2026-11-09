@@ -96,7 +96,10 @@ public struct DictionaryRootView: View {
                         .padding(.bottom, 24)
                         .transition(.opacity)
                 } else if let summary = store.importSummary {
-                    ImportSummaryView(summary: summary) {
+                    ImportSummaryView(
+                        summary: summary,
+                        isWarning: store.importSummaryIsWarning
+                    ) {
                         store.dismissImportSummary()
                     }
                     .padding(.bottom, 24)

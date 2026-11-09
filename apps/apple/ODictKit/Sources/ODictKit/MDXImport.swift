@@ -13,6 +13,8 @@ public enum MDXImportError: LocalizedError, Equatable {
     case missingReport
     /// The report payload could not be decoded.
     case invalidReport(String)
+    /// The picked profile file is unreadable or not a JSON object.
+    case invalidProfile(String)
 
     public var errorDescription: String? {
         switch self {
@@ -26,6 +28,8 @@ public enum MDXImportError: LocalizedError, Equatable {
             return "导入 MDX 失败：核心没有返回报告。"
         case .invalidReport(let detail):
             return "导入 MDX 失败：报告无法解析（\(detail)）。"
+        case .invalidProfile(let detail):
+            return "适配 profile 无法使用：\(detail)"
         }
     }
 }
@@ -300,6 +304,40 @@ public struct MDXImportResult: Equatable, Sendable {
     }
 }
 
+/// How well an import profile covered one dictionary.
+///
+/// Decoded from the report's `contract` object, which the core leaves `null`
+/// when the import ran without a profile.
+public struct ContractSummary: Decodable, Equatable, Sendable {
+    /// Records compared, adapted or not.
+    public let total: Int
+    /// Records the profile claimed and rewrote.
+    public let adapted: Int
+    /// Records the profile left to the built-in HTML pass.
+    public let unadapted: Int
+    /// Share of records the profile adapted, inside `0...1`.
+    public let coverage: Double
+    public let bagOk: Int
+    public let orderOk: Int
+    public let structureOk: Int
+    public let cleanOk: Int
+    /// Records that passed all four checks.
+    public let equal: Int
+    /// The core's one-line rendering of this summary.
+    public let line: String
+
+    /// Merged pass rate of the four checks, inside `0...1`.
+    public var fourDimensionRate: Double {
+        guard adapted > 0 else { return 0 }
+        return Double(equal) / Double(adapted)
+    }
+
+    /// Whether the coverage is low enough to warn the reader.
+    public var isWarning: Bool {
+        coverage < 0.95 || unadapted > 0
+    }
+}
+
 /// Decoded form of the JSON report returned by `odc_import_mdx_to_odc`.
 public struct MDXImportReport: Decodable, Equatable, Sendable {
     /// Header facts read from the source file.
@@ -356,6 +394,12 @@ public struct MDXImportReport: Decodable, Equatable, Sendable {
     public let commit: String?
     /// Whether the report describes a directory repository.
     public let isDirectory: Bool?
+    /// How well the import profile covered this dictionary; `nil` without one.
+    public let contract: ContractSummary?
+    /// Records the profile left unadapted but that still failed a P0 check.
+    public let p0Failed: Int
+    /// Headwords behind `p0Failed`, bounded by the core.
+    public let p0FailedSamples: [String]
 
     /// Keys the report uses; the MDD fields stay optional so a report from an
     /// older core still decodes.
@@ -365,6 +409,7 @@ public struct MDXImportReport: Decodable, Equatable, Sendable {
         case workingSet, scanWarning, header, outputBytes
         case mddFiles, resourceCount, resourceBytes, warnings
         case repoPath, commit, isDirectory
+        case contract, p0Failed, p0FailedSamples
     }
 
     public init(from decoder: any Decoder) throws {
@@ -389,6 +434,9 @@ public struct MDXImportReport: Decodable, Equatable, Sendable {
         repoPath = try container.decodeIfPresent(String.self, forKey: .repoPath)
         commit = try container.decodeIfPresent(String.self, forKey: .commit)
         isDirectory = try container.decodeIfPresent(Bool.self, forKey: .isDirectory)
+        contract = try container.decodeIfPresent(ContractSummary.self, forKey: .contract)
+        p0Failed = try container.decodeIfPresent(Int.self, forKey: .p0Failed) ?? 0
+        p0FailedSamples = try container.decodeIfPresent([String].self, forKey: .p0FailedSamples) ?? []
     }
 
     /// One-line, user-facing summary of the conversion.
@@ -408,7 +456,18 @@ public struct MDXImportReport: Decodable, Equatable, Sendable {
         for warning in warnings {
             parts.append("⚠︎ \(warning)")
         }
-        return parts.joined(separator: "，")
+        var text = parts.joined(separator: "，")
+        if let contract {
+            text += " · 适配 coverage \(Self.percent(contract.coverage))"
+                + " · 四维 \(Self.percent(contract.fourDimensionRate))"
+                + " · 未适配 \(contract.unadapted)"
+        }
+        return text
+    }
+
+    /// Human-readable share, e.g. "98.6%".
+    static func percent(_ value: Double) -> String {
+        String(format: "%.1f%%", value * 100)
     }
 
     /// Human-readable byte count, e.g. "12.4 MB".
@@ -484,9 +543,14 @@ public enum MDXImporter {
     public static func convert(
         source: URL,
         documents: URL? = nil,
+        profileURL: URL? = nil,
         progress: (@Sendable (MDXImportPhase) -> Void)? = nil
     ) async throws -> MDXImportResult {
-        try await convert(source: source, documents: documents) { sample in
+        try await convert(
+            source: source,
+            documents: documents,
+            profileURL: profileURL
+        ) { sample in
             progress?(sample.phase)
         }
     }
@@ -498,16 +562,23 @@ public enum MDXImporter {
     public static func convert(
         source: URL,
         documents: URL? = nil,
+        profileURL: URL? = nil,
         onProgress: (@Sendable (MDXImportProgress) -> Void)?
     ) async throws -> MDXImportResult {
         try await Task.detached(priority: .userInitiated) {
-            try convertSynchronously(source: source, documents: documents, onProgress: onProgress)
+            try convertSynchronously(
+                source: source,
+                documents: documents,
+                profileURL: profileURL,
+                onProgress: onProgress
+            )
         }.value
     }
 
     private static func convertSynchronously(
         source: URL,
         documents: URL?,
+        profileURL: URL?,
         onProgress: (@Sendable (MDXImportProgress) -> Void)?
     ) throws -> MDXImportResult {
         // The picker only grants the file the user chose. Sibling MDD volumes
@@ -523,6 +594,9 @@ public enum MDXImporter {
             }
         }
         _ = claim(source)
+        // A profile picked through the file importer needs its own scope too,
+        // and must fail loudly before any conversion work starts.
+        let profile = try profileURL.map { try claim(validate(profile: $0)) }
 
         guard source.pathExtension.lowercased() == "mdx" else {
             throw MDXImportError.unsupportedSource(source.lastPathComponent)
@@ -541,6 +615,7 @@ public enum MDXImporter {
             source: source,
             output: output,
             volumes: volumes,
+            profilePath: profile?.path,
             onProgress: onProgress
         )
         onProgress?(MDXImportProgress.finishedSample)
@@ -581,12 +656,14 @@ public enum MDXImporter {
     public static func convertToRepo(
         source: URL,
         documents: URL? = nil,
+        profileURL: URL? = nil,
         onProgress: (@Sendable (MDXImportProgress) -> Void)? = nil
     ) async throws -> MDXImportResult {
         try await Task.detached(priority: .userInitiated) {
             try convertToRepoSynchronously(
                 source: source,
                 documents: documents,
+                profileURL: profileURL,
                 onProgress: onProgress
             )
         }.value
@@ -595,6 +672,7 @@ public enum MDXImporter {
     private static func convertToRepoSynchronously(
         source: URL,
         documents: URL?,
+        profileURL: URL?,
         onProgress: (@Sendable (MDXImportProgress) -> Void)?
     ) throws -> MDXImportResult {
         var scopes: [(url: URL, active: Bool)] = []
@@ -608,6 +686,9 @@ public enum MDXImporter {
             }
         }
         _ = claim(source)
+        // A profile picked through the file importer needs its own scope too,
+        // and must fail loudly before any conversion work starts.
+        let profile = try profileURL.map { try claim(validate(profile: $0)) }
 
         guard source.pathExtension.lowercased() == "mdx" else {
             throw MDXImportError.unsupportedSource(source.lastPathComponent)
@@ -624,6 +705,7 @@ public enum MDXImporter {
             source: source,
             repoDirectory: output,
             volumes: volumes,
+            profilePath: profile?.path,
             onProgress: onProgress
         )
         onProgress?(MDXImportProgress.finishedSample)
@@ -643,6 +725,30 @@ public enum MDXImporter {
         }
     }
 
+    /// Reads `profile` and refuses it unless it is a JSON object.
+    ///
+    /// The core parses the profile again; this check exists so an unreadable
+    /// or malformed pick fails with a readable message before any conversion
+    /// work starts.
+    private static func validate(profile profileURL: URL) throws -> URL {
+        let data: Data
+        do {
+            data = try Data(contentsOf: profileURL)
+        } catch {
+            throw MDXImportError.invalidProfile(
+                "无法读取 \(profileURL.lastPathComponent)（\(error.localizedDescription)）"
+            )
+        }
+        guard let object = try? JSONSerialization.jsonObject(with: data),
+              object is [String: Any]
+        else {
+            throw MDXImportError.invalidProfile(
+                "\(profileURL.lastPathComponent) 不是有效的 profile JSON 对象"
+            )
+        }
+        return profileURL
+    }
+
     /// Runs `body` with a C string for `value`, or `nil` when it is absent.
     private static func withOptionalCString<Result>(
         _ value: String?,
@@ -656,19 +762,23 @@ public enum MDXImporter {
         source: URL,
         output: URL,
         volumes: [URL],
+        profilePath: String? = nil,
         onProgress: (@Sendable (MDXImportProgress) -> Void)? = nil
     ) throws -> MDXImportReport {
         try runCore(
             source: source,
             destination: output.path,
             volumes: volumes,
+            profilePath: profilePath,
             onProgress: onProgress
-        ) { sourceCString, destinationCString, jsonCString, callback, context,
-            reportPointer, errorPointer in
-            odc_import_mdx_to_odc_with_mdd_progress(
+        ) { sourceCString, destinationCString, jsonCString, profileCString, callback,
+            context, reportPointer, errorPointer in
+            // A NULL profile makes this the plain entry point, unchanged.
+            odc_import_mdx_to_odc_with_profile_progress(
                 sourceCString,
                 destinationCString,
                 jsonCString,
+                profileCString,
                 callback,
                 context,
                 reportPointer,
@@ -682,19 +792,23 @@ public enum MDXImporter {
         source: URL,
         repoDirectory: URL,
         volumes: [URL],
+        profilePath: String? = nil,
         onProgress: (@Sendable (MDXImportProgress) -> Void)? = nil
     ) throws -> MDXImportReport {
         try runCore(
             source: source,
             destination: repoDirectory.path,
             volumes: volumes,
+            profilePath: profilePath,
             onProgress: onProgress
-        ) { sourceCString, destinationCString, jsonCString, callback, context,
-            reportPointer, errorPointer in
-            odc_import_mdx_to_repo_with_mdd_progress(
+        ) { sourceCString, destinationCString, jsonCString, profileCString, callback,
+            context, reportPointer, errorPointer in
+            // A NULL profile makes this the plain entry point, unchanged.
+            odc_import_mdx_to_repo_with_profile_progress(
                 sourceCString,
                 destinationCString,
                 jsonCString,
+                profileCString,
                 callback,
                 context,
                 reportPointer,
@@ -708,10 +822,12 @@ public enum MDXImporter {
         source: URL,
         destination: String,
         volumes: [URL],
+        profilePath: String?,
         onProgress: (@Sendable (MDXImportProgress) -> Void)?,
         call: (
             UnsafePointer<CChar>,
             UnsafePointer<CChar>,
+            UnsafePointer<CChar>?,
             UnsafePointer<CChar>?,
             odc_import_progress_fn?,
             UnsafeMutableRawPointer?,
@@ -751,22 +867,24 @@ public enum MDXImporter {
                 box.handler(sample)
             }
         let code: Int32 = sourcePath.withCString { sourceCString in
-            outputPath.withCString { outputCString in
-                let json = volumeJSON.flatMap { String(data: $0, encoding: .utf8) }
-                return withOptionalCString(json) { jsonCString in
-                    call(
-                        sourceCString,
-                        outputCString,
-                        jsonCString,
-                        callback,
-                        context,
-                        &reportPointer,
-                        &errorPointer
-                    )
+            withOptionalCString(profilePath) { profileCString in
+                outputPath.withCString { outputCString in
+                    let json = volumeJSON.flatMap { String(data: $0, encoding: .utf8) }
+                    return withOptionalCString(json) { jsonCString in
+                        call(
+                            sourceCString,
+                            outputCString,
+                            jsonCString,
+                            profileCString,
+                            callback,
+                            context,
+                            &reportPointer,
+                            &errorPointer
+                        )
+                    }
                 }
             }
         }
-
 
         let failure = errorPointer.map { pointer -> String in
             defer { odc_string_free(pointer) }
