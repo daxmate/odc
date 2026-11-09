@@ -16,7 +16,7 @@ fn ctx() -> ParseContext {
 fn profile() -> Profile {
     let text = r#"{"schema_version":"odc.profile/v0","profile_id":"fixture.en",
         "dict":{"name":"fixture","lang":"en"},"engine":{"name":"human"},
-        "rules":[{"id":"root","stage":"root","op":"map","match":{"selector":"div.rec"},
+        "rules":[{"id":"root","stage":"root","op":"map","match":{"cardinality":{"min":0},"selector":"div.rec"},
                   "emit":{"element":"section","classes":["odc-entry"],"move":"children"}}]}"#;
     Profile::from_json(text).unwrap_or_else(|error| panic!("profile parses: {error}"))
 }

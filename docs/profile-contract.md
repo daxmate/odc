@@ -135,6 +135,29 @@ cargo run --release -q -p odc-core --example profile_compare -- \
 # coverage 0/500 (0.000%) | mapped 0/0 four-dim | unadapted 500
 ````
 
+### 4.1 P0 规则必须显式声明 `cardinality.min`
+
+- **规则**：`emit.classes` 与 `P0_SLOTS`（`odc-entry` / `odc-entry-head` / `odc-pos-block` /
+  `odc-sense` / `odc-sense-number` / `odc-def` / `odc-def-trans` / `odc-example` /
+  `odc-phrasal-verb`）有任何交集的规则，**必须**在 `match` 里写出 `cardinality`；
+  `min` 可以为 `0`，但不许省略。子规则（`children`）同样适用。
+- **为什么**：运行时「未声明」与「`min: 0`」完全等价，而 P0 判定只在
+  `hits < min` 时把记录判成 unadapted。全部 P0 规则都不声明 ⇒ 没有任何记录会因为
+  P0 缺失被判 unadapted ⇒ coverage 退化成一个常量函数，`--strict` 的失败分支永远不可达。
+  OALD10 实测就是这样：83 条规则里 `cardinality` 出现 0 次，51,310 条全量 coverage 100%。
+- **加载期校验**：`Profile::from_json` 在解析成功后立刻检查，缺声明直接报错，
+  不进入执行阶段。错误文案点名规则与槽位：
+
+```
+rule "root.entry" emits P0 slot(s) [odc-entry]; declare match.cardinality.min (use 0 for optional slots)
+```
+
+- **JSON Schema**：`docs/odc-profile.schema.json` 里 `$defs/rule` 的 `allOf` 条件分支
+  做同一件事（draft 2020-12：`emit.classes` 命中任一 P0 ⇒ `match` 必须含 `cardinality`），
+  第三方工具校验 profile 时能提前发现同样的遗漏。
+- **`min: 0` 的合法用途**：槽位确实可选时（这本词典某些词条没有该结构）写 `0`，
+  并在规则 `rationale` 里说明；显式写 0 表示「实测过、确实可能为 0」，与「忘了写」区分开。
+
 ## 5. 可复现性
 
 - 无随机、无外部依赖、无网络：同一输入两次运行输出逐字节相同（`serde_json::to_string_pretty`）。

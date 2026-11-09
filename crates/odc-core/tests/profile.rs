@@ -4,7 +4,7 @@
 
 use odc_core::adapters::ParseContext;
 use odc_core::profile::verify;
-use odc_core::profile::{alias_target, Outcome, Profile};
+use odc_core::profile::{alias_target, Outcome, Profile, ProfileError};
 
 fn ctx() -> ParseContext {
     ParseContext::new("fixture", "fixture", "en")
@@ -58,13 +58,13 @@ fn selector_adjacent_sibling() {
 #[test]
 fn scope_limits_matches_to_their_block() {
     let p = profile(
-        r#"{"id":"root","stage":"root","op":"map","match":{"selector":"div.rec"},
+        r#"{"id":"root","stage":"root","op":"map","match":{"cardinality":{"min":0},"selector":"div.rec"},
              "emit":{"element":"section","classes":["odc-entry"],"move":"children"}},
            {"id":"pos.one","stage":"slot","priority":90,"op":"map",
-             "match":{"selector":"div.p"},
+             "match":{"cardinality":{"min":0},"selector":"div.p"},
              "emit":{"element":"section","classes":["odc-pos-block"],"move":"children"}},
            {"id":"def.two","stage":"slot","priority":50,"op":"map",
-             "match":{"selector":"span.d","scope":["pos-block"]},
+             "match":{"cardinality":{"min":0},"selector":"span.d","scope":["pos-block"]},
              "emit":{"element":"div","classes":["odc-def"],"move":"children"}}"#,
     );
     let html = r#"<div class="rec"><div class="p"><span class="d">a</span></div><span class="d">b</span></div>"#;
@@ -152,7 +152,7 @@ fn move_transfers_children_to_a_target() {
 #[test]
 fn number_restarts_per_scope() {
     let p = profile(
-        r#"{"id":"s","stage":"slot","op":"map","match":{"selector":"div.blk"},
+        r#"{"id":"s","stage":"slot","op":"map","match":{"cardinality":{"min":0},"selector":"div.blk"},
              "emit":{"element":"section","classes":["odc-pos-block"],"move":"children"}},
            {"id":"n","stage":"numbering","op":"number","match":{"selector":"div.i","scope":["pos-block"]},
              "emit":{"attribute":"data-odc-n"},"reset_on":["pos-block"]}"#,
@@ -170,7 +170,7 @@ fn number_restarts_per_scope() {
 #[test]
 fn segment_cuts_sibling_runs() {
     let p = profile(
-        r#"{"id":"g","stage":"segment","op":"segment","match":{"selector":"div.body"},
+        r#"{"id":"g","stage":"segment","op":"segment","match":{"cardinality":{"min":0},"selector":"div.body"},
              "boundary":{"start":"h3.pos","until":["h3.pos"],"max_depth":1},
              "emit":{"element":"section","classes":["odc-pos-block"]}}"#,
     );
@@ -183,7 +183,7 @@ fn segment_cuts_sibling_runs() {
 #[test]
 fn split_separates_homographs() {
     let p = profile(
-        r#"{"id":"root","stage":"root","op":"map","match":{"selector":"div.rec"},
+        r#"{"id":"root","stage":"root","op":"map","match":{"cardinality":{"min":0},"selector":"div.rec"},
              "emit":{"element":"section","classes":["odc-entry"],"move":"children"}},
            {"id":"sp","stage":"split","op":"split","match":{"selector":"section.odc-entry","min_count":2},
              "split_by":{"selector":"div.hom","keep_selector":true},
@@ -259,7 +259,7 @@ fn fingerprint_is_stable_and_histogram_based() {
 #[test]
 fn policy_profile_is_a_fixed_point_on_its_own_output() {
     let p = profile(
-        r#"{"id":"root","stage":"root","op":"map","match":{"selector":"div.rec"},
+        r#"{"id":"root","stage":"root","op":"map","match":{"cardinality":{"min":0},"selector":"div.rec"},
              "emit":{"element":"section","classes":["odc-entry"],"move":"children"}},
            {"id":"head","stage":"slot","op":"map","match":{"selector":"span.hw","scope":["entry"]},
              "emit":{"element":"h1","classes":["odc-hw"],"move":"children"}}"#,
@@ -290,4 +290,88 @@ fn unsupported_selector_is_rejected() {
     let outcome = bad.apply("<div><span>x</span></div>", &ctx());
     let stats = outcome.stats().expect("stats");
     assert!(!stats.errors.is_empty(), "expected selector error");
+}
+
+/// Parse a synthetic profile, or return why it was rejected.
+fn parse(rules: &str) -> Result<Profile, ProfileError> {
+    let text = format!(
+        r#"{{"schema_version":"odc.profile/v0","profile_id":"test.case",
+            "dict":{{"name":"fixture","lang":"en"}},"engine":{{"name":"human"}},
+            "rules":[{rules}]}}"#
+    );
+    Profile::from_json(&text)
+}
+
+#[test]
+fn p0_rule_without_cardinality_is_rejected() {
+    let error = match parse(
+        r#"{"id":"root.entry","stage":"root","op":"map","match":{"selector":"div.rec"},
+            "emit":{"element":"section","classes":["odc-entry"],"move":"children"}}"#,
+    ) {
+        Ok(_) => panic!("a P0 rule without cardinality must not parse"),
+        Err(error) => error,
+    };
+    match error {
+        ProfileError::MissingCardinality { rule, slots } => {
+            assert_eq!(rule, "root.entry");
+            assert_eq!(slots, vec!["odc-entry".to_string()]);
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+}
+
+#[test]
+fn missing_cardinality_message_names_rule_and_slots() {
+    let error = match parse(
+        r#"{"id":"sense.one","stage":"slot","op":"map","match":{"selector":"li.sn"},
+            "emit":{"element":"div","classes":["odc-sense","odc-def"],"move":"children"}}"#,
+    ) {
+        Ok(_) => panic!("a P0 rule without cardinality must not parse"),
+        Err(error) => error,
+    };
+    let text = error.to_string();
+    assert!(
+        text.contains(r#"rule "sense.one" emits P0 slot(s) [odc-sense, odc-def]"#),
+        "{text}"
+    );
+    assert!(text.contains("declare match.cardinality.min"), "{text}");
+    assert!(text.contains("use 0 for optional slots"), "{text}");
+}
+
+#[test]
+fn p0_rule_with_explicit_min_zero_parses() {
+    let parsed = parse(
+        r#"{"id":"root.entry","stage":"root","op":"map",
+            "match":{"selector":"div.rec","cardinality":{"min":0}},
+            "emit":{"element":"section","classes":["odc-entry"],"move":"children"}}"#,
+    );
+    assert!(parsed.is_ok(), "{:?}", parsed.err().map(|e| e.to_string()));
+}
+
+#[test]
+fn non_p0_rule_may_omit_cardinality() {
+    let parsed = parse(
+        r#"{"id":"note.wrap","stage":"slot","op":"map","match":{"selector":"p.note"},
+            "emit":{"element":"div","classes":["odc-note"],"move":"children"}}"#,
+    );
+    assert!(parsed.is_ok(), "{:?}", parsed.err().map(|e| e.to_string()));
+}
+
+#[test]
+fn sub_rule_emitting_a_p0_slot_must_declare_cardinality() {
+    let error = match parse(
+        r#"{"id":"root.entry","stage":"root","op":"map",
+            "match":{"selector":"div.rec","cardinality":{"min":1}},
+            "emit":{"element":"section","classes":["odc-entry"],"move":"children"},
+            "children":[{"id":"root.entry.def","stage":"slot","op":"map",
+              "match":{"selector":"span.def"},
+              "emit":{"element":"span","classes":["odc-def"],"move":"children"}}]}"#,
+    ) {
+        Ok(_) => panic!("a sub-rule without cardinality must not parse"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        ProfileError::MissingCardinality { ref rule, .. } if rule == "root.entry.def"
+    ));
 }

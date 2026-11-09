@@ -178,10 +178,10 @@ const OALD9_FIXTURE: &str = r#"
    "match":{"selector":"span.pos"},
    "emit":{"element":"h2","classes":["odc-pos"],"move":"children"}},
   {"id":"sense","stage":"slot","priority":80,"op":"map",
-   "match":{"selector":"li.sn-g"},
+   "match":{"cardinality":{"min":0},"selector":"li.sn-g"},
    "emit":{"element":"div","classes":["odc-sense"],"move":"children"}},
   {"id":"def","stage":"slot","priority":70,"op":"map",
-   "match":{"selector":"span.def"},
+   "match":{"cardinality":{"min":0},"selector":"span.def"},
    "emit":{"element":"span","classes":["odc-def"],"move":"children"}}
  ]}
 "#;

@@ -92,7 +92,7 @@ pub fn apply(profile: &Profile, fragment: &str, ctx: &ParseContext) -> Outcome {
     }
 
     for rule in &profile.rules {
-        if !is_p0(rule) {
+        if !rule.is_p0() {
             continue;
         }
         let min = rule.matches.cardinality.as_ref().map_or(0, |c| c.min);
@@ -231,13 +231,6 @@ fn normalize_document(root: &Handle) {
 }
 
 /// Whether a rule emits a P0 slot class.
-fn is_p0(rule: &Rule) -> bool {
-    rule.emit
-        .classes
-        .iter()
-        .any(|c| crate::adapters::P0_SLOTS.contains(&c.as_str()))
-}
-
 fn apply_rule(
     root: &Handle,
     rule: &Rule,

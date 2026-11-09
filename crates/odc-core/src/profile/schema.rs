@@ -324,6 +324,52 @@ pub struct Rule {
     pub provenance: Option<RuleProvenance>,
 }
 
+impl Rule {
+    /// P0 slots the rule emits, in declaration order, duplicates removed.
+    #[must_use]
+    pub fn p0_slots(&self) -> Vec<&str> {
+        let mut slots: Vec<&str> = Vec::new();
+        for class in &self.emit.classes {
+            if !is_p0_class(class) {
+                continue;
+            }
+            if !slots.contains(&class.as_str()) {
+                slots.push(class.as_str());
+            }
+        }
+        slots
+    }
+
+    /// Whether the rule emits at least one P0 slot.
+    #[must_use]
+    pub fn is_p0(&self) -> bool {
+        self.emit.classes.iter().any(|class| is_p0_class(class))
+    }
+
+    /// Reject a P0 rule that does not declare 'match.cardinality.min'.
+    ///
+    /// An omitted declaration behaves exactly like 'min: 0' at run time, so a
+    /// P0 rule could never mark a record unadapted and coverage would degrade
+    /// into a constant. Sub-rules are checked as well.
+    fn check_p0_cardinality(&self) -> Result<(), super::ProfileError> {
+        if self.matches.cardinality.is_none() && self.is_p0() {
+            return Err(super::ProfileError::MissingCardinality {
+                rule: self.id.clone(),
+                slots: self.p0_slots().into_iter().map(str::to_owned).collect(),
+            });
+        }
+        for child in &self.children {
+            child.check_p0_cardinality()?;
+        }
+        Ok(())
+    }
+}
+
+/// Whether a class name is a P0 slot.
+fn is_p0_class(class: &str) -> bool {
+    crate::adapters::P0_SLOTS.contains(&class)
+}
+
 const fn default_priority() -> i32 {
     50
 }
@@ -468,6 +514,9 @@ impl Profile {
         }
         if profile.rules.is_empty() {
             return Err(super::ProfileError::Empty);
+        }
+        for rule in &profile.rules {
+            rule.check_p0_cardinality()?;
         }
         Ok(profile)
     }

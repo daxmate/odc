@@ -147,7 +147,44 @@
             "rationale": { "type": "string" }
           }
         }
-      }
+      },
+      "allOf": [
+        {
+          "description": "A rule that emits a P0 slot must declare match.cardinality.min explicitly; an omitted declaration behaves like min 0 and turns coverage into a constant. Use min 0 when the slot is genuinely optional.",
+          "if": {
+            "anyOf": [
+              {
+                "required": ["emit"],
+                "properties": {
+                  "emit": {
+                    "required": ["classes"],
+                    "properties": {
+                      "classes": { "contains": { "enum": ["odc-entry", "odc-entry-head", "odc-pos-block", "odc-sense", "odc-sense-number", "odc-def", "odc-def-trans", "odc-example", "odc-phrasal-verb"] } }
+                    }
+                  }
+                }
+              },
+              {
+                "required": ["emit"],
+                "properties": {
+                  "emit": {
+                    "required": ["class"],
+                    "properties": {
+                      "class": { "contains": { "enum": ["odc-entry", "odc-entry-head", "odc-pos-block", "odc-sense", "odc-sense-number", "odc-def", "odc-def-trans", "odc-example", "odc-phrasal-verb"] } }
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "then": {
+            "required": ["match"],
+            "properties": {
+              "match": { "required": ["cardinality"] }
+            }
+          }
+        }
+      ]
     },
     "scope": { "enum": ["entry", "pos-block", "sense", "subsense", "group"] },
     "match": {

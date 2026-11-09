@@ -51,6 +51,13 @@ pub enum ProfileError {
         /// What is missing.
         message: String,
     },
+    /// A rule emits a P0 slot but does not declare 'match.cardinality.min'.
+    MissingCardinality {
+        /// Rule identifier.
+        rule: String,
+        /// P0 slots the rule emits.
+        slots: Vec<String>,
+    },
 }
 
 impl fmt::Display for ProfileError {
@@ -61,6 +68,11 @@ impl fmt::Display for ProfileError {
             Self::Empty => write!(f, "profile contains no rules"),
             Self::Selector { rule, error } => write!(f, "rule {rule}: {error}"),
             Self::Rule { rule, message } => write!(f, "rule {rule}: {message}"),
+            Self::MissingCardinality { rule, slots } => write!(
+                f,
+                "rule \"{rule}\" emits P0 slot(s) [{}]; declare match.cardinality.min (use 0 for optional slots)",
+                slots.join(", ")
+            ),
         }
     }
 }
