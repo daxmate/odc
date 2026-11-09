@@ -305,6 +305,19 @@ int32_t odc_import_mdx_to_odc_with_mdd_progress(
     const char *mdx_path, const char *out_odc_path, const char *mdd_paths_json,
     odc_import_progress_fn callback, void *context, char **report_json_out,
     char **error_message);
+
+/*
+ * Import an MDX file with a profile, reporting progress while doing it.
+ *
+ * Same contract as odc_import_mdx_to_odc_with_profile, plus the progress
+ * callback documented on odc_import_mdx_to_odc_with_mdd_progress. callback
+ * may be NULL, in which case this behaves exactly like
+ * odc_import_mdx_to_odc_with_profile.
+ */
+int32_t odc_import_mdx_to_odc_with_profile_progress(
+    const char *mdx_path, const char *out_odc_path, const char *mdd_paths_json,
+    const char *profile_path, odc_import_progress_fn callback, void *context,
+    char **report_json_out, char **error_message);
 /*
  * Import an MDX file into a new directory repository (an editable library).
  *
@@ -336,6 +349,23 @@ int32_t odc_import_mdx_to_repo_with_mdd_progress(
 int32_t odc_import_mdx_to_repo_with_options(
     const char *mdx_path, const char *repo_dir, const char *mdd_paths_json,
     const char *options_json, odc_import_progress_fn callback, void *context,
+    char **report_json_out, char **error_message);
+
+/*
+ * Import an MDX file with a profile into a new directory repository,
+ * reporting progress while doing it.
+ *
+ * Same contract and report as odc_import_mdx_to_repo_with_mdd_progress, plus
+ * profile_path: NULL for an import without a profile, or a NUL-terminated path
+ * to a *.profile.json document. The profile decides the L1 body of every
+ * record it claims; unclaimed records keep the built-in HTML pass and count as
+ * unadapted. The report gains "contract" (null without a profile), "p0_failed"
+ * and "p0_failed_samples". The callback follows the same rules as
+ * odc_import_mdx_to_odc_with_mdd_progress and may be NULL.
+ */
+int32_t odc_import_mdx_to_repo_with_profile_progress(
+    const char *mdx_path, const char *repo_dir, const char *mdd_paths_json,
+    const char *profile_path, odc_import_progress_fn callback, void *context,
     char **report_json_out, char **error_message);
 
 /*

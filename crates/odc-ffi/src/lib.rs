@@ -44,7 +44,7 @@ mod mdx_dir;
 
 pub use mdx_dir::{
     odc_copy_pack_to_repo, odc_import_mdx_to_repo_with_mdd_progress,
-    odc_import_mdx_to_repo_with_options,
+    odc_import_mdx_to_repo_with_options, odc_import_mdx_to_repo_with_profile_progress,
 };
 
 /// Largest accepted `limit` for [`odc_repo_search_json`].
@@ -903,20 +903,21 @@ pub unsafe extern "C" fn odc_import_mdx_to_odc_with_profile(
     report_json_out: *mut *mut c_char,
     error_message: *mut *mut c_char,
 ) -> i32 {
-    // A stale report pointer must never survive a failed import.
-    clear_error(report_json_out);
-    guarded(error_message, -1, || {
-        // SAFETY: every pointer follows the contract documented above.
-        let mdx = unsafe { text_arg(mdx_path, "mdx_path") }?;
-        let out = unsafe { text_arg(out_odc_path, "out_odc_path") }?;
-        let volumes = unsafe { mdd_paths(mdd_paths_json) }?;
-        let profile = unsafe { profile_arg(profile_path) }?;
-        let converted =
-            import_mdx_to_odc(Path::new(&mdx), Path::new(&out), volumes, None, profile)?;
-        let payload = import_report_to_json(&converted.report, converted.output_bytes);
-        store_json(report_json_out, &payload)?;
-        Ok(0)
-    })
+    // Delegates to the progress form with a NULL callback, so the two can
+    // never drift apart.
+    // SAFETY: the pointers follow the contract documented above.
+    unsafe {
+        odc_import_mdx_to_odc_with_profile_progress(
+            mdx_path,
+            out_odc_path,
+            mdd_paths_json,
+            profile_path,
+            None,
+            ptr::null_mut(),
+            report_json_out,
+            error_message,
+        )
+    }
 }
 
 /// Import an MDX file plus MDD volumes into one `.odc`, reporting progress.
@@ -947,6 +948,48 @@ pub unsafe extern "C" fn odc_import_mdx_to_odc_with_mdd_progress(
     report_json_out: *mut *mut c_char,
     error_message: *mut *mut c_char,
 ) -> i32 {
+    // Delegates to the profile-aware form with a NULL profile, so the two can
+    // never drift apart.
+    // SAFETY: the pointers follow the contract documented above.
+    unsafe {
+        odc_import_mdx_to_odc_with_profile_progress(
+            mdx_path,
+            out_odc_path,
+            mdd_paths_json,
+            ptr::null(),
+            callback,
+            context,
+            report_json_out,
+            error_message,
+        )
+    }
+}
+
+/// Import an MDX file with a profile into one `.odc`, reporting progress.
+///
+/// Same contract as [`odc_import_mdx_to_odc_with_profile`], plus the progress
+/// callback documented on [`odc_import_mdx_to_odc_with_mdd_progress`]: one
+/// sample per stage, roughly ten times per second, and unconditionally on
+/// every stage change and on the final `done == total`. A `NULL` `callback`
+/// makes this call behave exactly like `_with_profile`.
+///
+/// # Safety
+///
+/// `mdx_path`, `out_odc_path`, `mdd_paths_json` and `profile_path` must be
+/// `NULL` or NUL-terminated UTF-8 strings; `callback` may be `NULL`; and
+/// `report_json_out` and `error_message` must be `NULL` or point to writable
+/// storage for one `char *`. `context` is forwarded to `callback` unchanged.
+#[no_mangle]
+pub unsafe extern "C" fn odc_import_mdx_to_odc_with_profile_progress(
+    mdx_path: *const c_char,
+    out_odc_path: *const c_char,
+    mdd_paths_json: *const c_char,
+    profile_path: *const c_char,
+    callback: Option<OdcImportProgressFn>,
+    context: *mut c_void,
+    report_json_out: *mut *mut c_char,
+    error_message: *mut *mut c_char,
+) -> i32 {
     // A stale report pointer must never survive a failed import.
     clear_error(report_json_out);
     guarded(error_message, -1, || {
@@ -954,12 +997,13 @@ pub unsafe extern "C" fn odc_import_mdx_to_odc_with_mdd_progress(
         let mdx = unsafe { text_arg(mdx_path, "mdx_path") }?;
         let out = unsafe { text_arg(out_odc_path, "out_odc_path") }?;
         let volumes = unsafe { mdd_paths(mdd_paths_json) }?;
+        let profile = unsafe { profile_arg(profile_path) }?;
         let progress: Option<Box<dyn FnMut(ImportProgress)>> = callback.map(|callback| {
             let mut sink = FfiProgress { callback, context };
             Box::new(move |sample| sink.send(sample)) as Box<dyn FnMut(ImportProgress)>
         });
         let converted =
-            import_mdx_to_odc(Path::new(&mdx), Path::new(&out), volumes, progress, None)?;
+            import_mdx_to_odc(Path::new(&mdx), Path::new(&out), volumes, progress, profile)?;
         let payload = import_report_to_json(&converted.report, converted.output_bytes);
         store_json(report_json_out, &payload)?;
         Ok(0)
@@ -1001,7 +1045,7 @@ unsafe fn mdd_paths(value: *const c_char) -> Result<Option<Vec<PathBuf>>, String
 /// # Safety
 ///
 /// `value` must be `NULL` or a NUL-terminated UTF-8 string holding a path.
-unsafe fn profile_arg(value: *const c_char) -> Result<Option<Profile>, String> {
+pub(crate) unsafe fn profile_arg(value: *const c_char) -> Result<Option<Profile>, String> {
     if value.is_null() {
         return Ok(None);
     }

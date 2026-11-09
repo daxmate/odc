@@ -13,8 +13,9 @@ use odc_core::{Def, Entry, Repo};
 use odc_ffi::{
     odc_copy_pack_to_repo, odc_html_process_json, odc_import_mdx_to_odc,
     odc_import_mdx_to_odc_with_mdd, odc_import_mdx_to_odc_with_mdd_progress,
-    odc_import_mdx_to_odc_with_profile, odc_import_mdx_to_repo_with_mdd_progress,
-    odc_import_mdx_to_repo_with_options, odc_repo_close, odc_repo_commit_json,
+    odc_import_mdx_to_odc_with_profile, odc_import_mdx_to_odc_with_profile_progress,
+    odc_import_mdx_to_repo_with_mdd_progress, odc_import_mdx_to_repo_with_options,
+    odc_import_mdx_to_repo_with_profile_progress, odc_repo_close, odc_repo_commit_json,
     odc_repo_discard_json, odc_repo_entries_page_json, odc_repo_entry_count,
     odc_repo_entry_delete_json, odc_repo_entry_diff_json, odc_repo_entry_json,
     odc_repo_entry_link_json, odc_repo_entry_link_working_json, odc_repo_entry_put_json,
@@ -397,6 +398,228 @@ fn import_with_a_profile_reports_the_contract() {
     assert_eq!(report["p0_failed"], 1);
     assert_eq!(report["p0_failed_samples"][0], "plain");
     assert!(report["contract"]["coverage"].as_f64().expect("coverage") > 0.0);
+}
+
+/// One progress sample recorded by the profile test's own sink, so the test
+/// never shares a global with `import_progress_reports_every_stage`.
+#[derive(Clone, Copy, Debug)]
+struct ProfileSample {
+    stage: i32,
+    done: u64,
+    total: u64,
+    context: usize,
+}
+
+static PROFILE_SAMPLES: Mutex<Vec<ProfileSample>> = Mutex::new(Vec::new());
+
+unsafe extern "C" fn record_profile_sample(
+    stage: i32,
+    done: u64,
+    total: u64,
+    _volume_index: u32,
+    _volume_count: u32,
+    context: *mut c_void,
+) {
+    PROFILE_SAMPLES
+        .lock()
+        .expect("profile samples")
+        .push(ProfileSample {
+            stage,
+            done,
+            total,
+            context: context as usize,
+        });
+}
+
+/// Writes the two-record fixture the profile tests share.
+fn write_profile_fixture(mdx: &Path) {
+    odc_testkit::write_v2_mdx(
+        mdx,
+        &[
+            (
+                "alpha",
+                "<div><span class=\"entry\">alpha</span><span class=\"def\">first meaning</span></div>",
+            ),
+            ("plain", "<p>no entry wrapper</p>"),
+        ],
+    )
+    .expect("write fixture");
+}
+
+fn profile_path() -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../profiles/ldoce6.profile.json")
+}
+
+/// One import through `_with_profile_progress`, returning the sample log.
+#[allow(clippy::too_many_arguments)]
+fn import_with_profile_progress(
+    mdx: &Path,
+    out: &Path,
+    profile: Option<&Path>,
+    callback: Option<odc_ffi::OdcImportProgressFn>,
+    context: *mut c_void,
+) -> (i32, Value, Option<String>) {
+    let mdx_c = CString::new(mdx.to_str().expect("utf8 mdx")).expect("mdx cstring");
+    let out_c = CString::new(out.to_str().expect("utf8 out")).expect("out cstring");
+    let profile_c =
+        profile.map(|path| CString::new(path.to_str().expect("utf8 profile")).expect("profile"));
+    let mut report: *mut c_char = ptr::null_mut();
+    let mut error: *mut c_char = ptr::null_mut();
+    // SAFETY: every pointer follows the documented contract.
+    let code = unsafe {
+        odc_import_mdx_to_odc_with_profile_progress(
+            mdx_c.as_ptr(),
+            out_c.as_ptr(),
+            ptr::null(),
+            profile_c
+                .as_ref()
+                .as_ref()
+                .map_or(ptr::null(), |value| value.as_ptr()),
+            callback,
+            context,
+            &mut report,
+            &mut error,
+        )
+    };
+    let payload = if report.is_null() {
+        Value::Null
+    } else {
+        serde_json::from_str(&take_string(report)).expect("report is json")
+    };
+    (code, payload, take_error_if_any(error))
+}
+
+#[test]
+fn profile_progress_reports_samples_and_contract() {
+    PROFILE_SAMPLES.lock().expect("profile samples").clear();
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mdx = dir.path().join("dictionary.mdx");
+    write_profile_fixture(&mdx);
+    let out = dir.path().join("dictionary.odc");
+    let profile = profile_path();
+
+    let marker = 0x5a5a_5a5a_u64;
+    let context = std::ptr::from_ref(&marker).cast_mut().cast::<c_void>();
+    let (code, report, error) = import_with_profile_progress(
+        &mdx,
+        &out,
+        Some(&profile),
+        Some(record_profile_sample),
+        context,
+    );
+    assert_eq!(code, 0, "unexpected error: {error:?}");
+
+    assert_eq!(report["contract"]["total"], 2);
+    assert_eq!(report["contract"]["adapted"], 1);
+    assert_eq!(report["contract"]["unadapted"], 1);
+    assert!(report["contract"]["coverage"].as_f64().expect("coverage") > 0.0);
+
+    let samples = PROFILE_SAMPLES.lock().expect("profile samples").clone();
+    assert!(!samples.is_empty(), "the callback fired");
+    assert_eq!(
+        samples.first().map(|sample| sample.stage),
+        Some(0),
+        "preparing first"
+    );
+    assert_eq!(
+        samples.last().map(|sample| sample.stage),
+        Some(3),
+        "committing last"
+    );
+    let last = samples.last().expect("final sample");
+    assert_eq!(last.done, last.total, "the final sample is complete");
+    let mut previous: Option<(i32, u64)> = None;
+    for sample in &samples {
+        assert_eq!(
+            sample.context, context as usize,
+            "context is passed through"
+        );
+        assert!(sample.done <= sample.total, "done stays within total");
+        if let Some((stage, done)) = previous {
+            assert!(sample.stage >= stage, "stages never go back");
+            if sample.stage == stage {
+                assert!(sample.done >= done, "done never rewinds inside a stage");
+            }
+        }
+        previous = Some((sample.stage, sample.done));
+    }
+}
+
+#[test]
+fn profile_progress_without_a_profile_matches_the_plain_entry_point() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mdx = dir.path().join("dictionary.mdx");
+    write_profile_fixture(&mdx);
+    let with_progress_out = dir.path().join("with-progress.odc");
+    let plain_out = dir.path().join("plain.odc");
+
+    let (code, with_progress, error) =
+        import_with_profile_progress(&mdx, &with_progress_out, None, None, ptr::null_mut());
+    assert_eq!(code, 0, "unexpected error: {error:?}");
+    assert!(
+        with_progress["contract"].is_null(),
+        "no profile, no contract"
+    );
+
+    let mdx_c = CString::new(mdx.to_str().expect("utf8 mdx")).expect("mdx cstring");
+    let out_c = CString::new(plain_out.to_str().expect("utf8 out")).expect("out cstring");
+    let mut report: *mut c_char = ptr::null_mut();
+    let mut error: *mut c_char = ptr::null_mut();
+    // SAFETY: every pointer follows the documented contract.
+    let plain_code = unsafe {
+        odc_import_mdx_to_odc_with_profile(
+            mdx_c.as_ptr(),
+            out_c.as_ptr(),
+            ptr::null(),
+            ptr::null(),
+            &mut report,
+            &mut error,
+        )
+    };
+    assert_eq!(
+        plain_code,
+        0,
+        "unexpected error: {:?}",
+        take_error_if_any(error)
+    );
+    let plain: Value = serde_json::from_str(&take_string(report)).expect("report is json");
+    assert_eq!(
+        with_progress, plain,
+        "the progress form must match the plain entry point without a profile"
+    );
+}
+
+#[test]
+fn repo_profile_progress_reports_the_contract() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mdx = dir.path().join("dictionary.mdx");
+    write_profile_fixture(&mdx);
+    let repo_dir = dir.path().join("library");
+    let profile = profile_path();
+    let mdx_c = CString::new(mdx.to_str().expect("utf8 mdx")).expect("mdx cstring");
+    let repo_c = CString::new(repo_dir.to_str().expect("utf8 repo")).expect("repo cstring");
+    let profile_c = CString::new(profile.to_str().expect("utf8 profile")).expect("profile cstring");
+    let mut report: *mut c_char = ptr::null_mut();
+    let mut error: *mut c_char = ptr::null_mut();
+    // SAFETY: every pointer follows the documented contract.
+    let code = unsafe {
+        odc_import_mdx_to_repo_with_profile_progress(
+            mdx_c.as_ptr(),
+            repo_c.as_ptr(),
+            ptr::null(),
+            profile_c.as_ptr(),
+            None,
+            ptr::null_mut(),
+            &mut report,
+            &mut error,
+        )
+    };
+    assert_eq!(code, 0, "unexpected error: {:?}", take_error_if_any(error));
+    let report: Value = serde_json::from_str(&take_string(report)).expect("report is json");
+    assert_eq!(report["is_directory"], true);
+    assert_eq!(report["contract"]["total"], 2);
+    assert_eq!(report["contract"]["unadapted"], 1);
+    assert!(repo_dir.join("odc.db").is_file(), "the library exists");
 }
 
 #[derive(Clone, Copy, Debug)]

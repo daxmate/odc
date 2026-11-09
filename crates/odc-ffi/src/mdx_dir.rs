@@ -15,8 +15,8 @@ use odc_core::{
 };
 
 use crate::{
-    clear_error, guarded, import_report_to_json, mdd_paths, store_json, text_arg, FfiProgress,
-    OdcImportProgressFn,
+    clear_error, guarded, import_report_to_json, mdd_paths, profile_arg, store_json, text_arg,
+    FfiProgress, OdcImportProgressFn,
 };
 
 /// Import an MDX file into a new directory repository.
@@ -54,6 +54,7 @@ pub unsafe extern "C" fn odc_import_mdx_to_repo_with_mdd_progress(
             mdx_path,
             repo_dir,
             mdd_paths_json,
+            std::ptr::null(),
             std::ptr::null(),
             callback,
             context,
@@ -95,6 +96,7 @@ pub unsafe extern "C" fn odc_import_mdx_to_repo_with_options(
             repo_dir,
             mdd_paths_json,
             options_json,
+            std::ptr::null(),
             callback,
             context,
             report_json_out,
@@ -103,7 +105,49 @@ pub unsafe extern "C" fn odc_import_mdx_to_repo_with_options(
     }
 }
 
-/// Shared body of the two directory-repository import entry points.
+/// Import an MDX file with a profile into a new directory repository,
+/// reporting progress.
+///
+/// Same contract and report as [`odc_import_mdx_to_repo_with_mdd_progress`],
+/// plus `profile_path`: `NULL` for an import without a profile, or a
+/// NUL-terminated path to a `*.profile.json` document. The profile decides the
+/// L1 body of every record it claims; unclaimed records keep the built-in HTML
+/// pass and count as unadapted. The report gains `"contract"` (null without a
+/// profile), `p0_failed` and `p0_failed_samples`.
+///
+/// # Safety
+///
+/// Every pointer follows the contract of
+/// [`odc_import_mdx_to_repo_with_mdd_progress`]; `profile_path` must
+/// additionally be `NULL` or a NUL-terminated UTF-8 path.
+#[no_mangle]
+pub unsafe extern "C" fn odc_import_mdx_to_repo_with_profile_progress(
+    mdx_path: *const c_char,
+    repo_dir: *const c_char,
+    mdd_paths_json: *const c_char,
+    profile_path: *const c_char,
+    callback: Option<OdcImportProgressFn>,
+    context: *mut c_void,
+    report_json_out: *mut *mut c_char,
+    error_message: *mut *mut c_char,
+) -> i32 {
+    // SAFETY: forwarded unchanged; the contract is the one documented above.
+    unsafe {
+        import_mdx_into_repo(
+            mdx_path,
+            repo_dir,
+            mdd_paths_json,
+            std::ptr::null(),
+            profile_path,
+            callback,
+            context,
+            report_json_out,
+            error_message,
+        )
+    }
+}
+
+/// Shared body of the directory-repository import entry points.
 ///
 /// # Safety
 ///
@@ -114,6 +158,7 @@ unsafe fn import_mdx_into_repo(
     repo_dir: *const c_char,
     mdd_paths_json: *const c_char,
     options_json: *const c_char,
+    profile_path: *const c_char,
     callback: Option<OdcImportProgressFn>,
     context: *mut c_void,
     report_json_out: *mut *mut c_char,
@@ -130,6 +175,8 @@ unsafe fn import_mdx_into_repo(
         let volumes = unsafe { mdd_paths(mdd_paths_json) }?;
         // SAFETY: as above.
         let max_record_bytes = unsafe { import_options(options_json) }?;
+        // SAFETY: as above.
+        let profile = unsafe { profile_arg(profile_path) }?;
         let progress = callback.map(|callback| {
             Box::new(move |progress: ImportProgress| {
                 let mut sink = FfiProgress { callback, context };
@@ -144,6 +191,7 @@ unsafe fn import_mdx_into_repo(
                 max_record_bytes,
                 mdd_volumes: volumes,
                 progress,
+                profile,
                 ..MdxImportOptions::default()
             },
         )
