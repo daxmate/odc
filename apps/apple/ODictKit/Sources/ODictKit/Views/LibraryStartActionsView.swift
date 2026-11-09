@@ -34,6 +34,9 @@ public struct LibraryStartActionsView: View {
 
             Menu {
                 Button {
+                    // A plain import must never inherit a profile picked for
+                    // an earlier attempt that the reader then abandoned.
+                    store.pendingImportProfileURL = nil
                     isImporterPresented = true
                 } label: {
                     Label("导入 MDX…", systemImage: "doc.badge.plus")

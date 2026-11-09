@@ -28,9 +28,17 @@ public struct DictionaryRootView: View {
             ) { result in
                 switch result {
                 case .success(let urls):
-                    guard let url = urls.first else { return }
+                    guard let url = urls.first else {
+                        // No file picked: drop a profile waiting for this
+                        // import so it cannot ride along with the next one.
+                        store.pendingImportProfileURL = nil
+                        return
+                    }
                     openDocument(url)
                 case .failure(let error):
+                    // Cancelling the picker is a failure result; a profile
+                    // staged for this attempt must not survive it.
+                    store.pendingImportProfileURL = nil
                     store.present(error: error)
                 }
             }

@@ -65,6 +65,30 @@ final class MDXDirectoryImportTests: XCTestCase {
         )
     }
 
+    func testPlainImportDropsAStalePendingProfile() async throws {
+        let container = try Fixture.temporaryDirectory()
+        let store = DictionaryStore(container: container)
+        defer { store.close() }
+
+        let source = container.appending(path: "sample.mdx", directoryHint: .notDirectory)
+        try FileManager.default.copyItem(at: Fixture.sampleMDX, to: source)
+        // A profile the reader picked for an earlier attempt, then abandoned:
+        // it is malformed, so applying it would fail the import loudly.
+        let stale = container.appending(path: "stale.profile.json", directoryHint: .notDirectory)
+        try Data("{ not json".utf8).write(to: stale)
+
+        store.pendingImportProfileURL = stale
+        store.importMDX(url: source)
+
+        XCTAssertNil(
+            store.pendingImportProfileURL,
+            "starting any import consumes the staged profile"
+        )
+        try await waitUntil { store.documentURL != nil || store.errorMessage != nil }
+        XCTAssertNil(store.errorMessage, "the stale profile must not reach the core")
+        XCTAssertNotNil(store.documentURL)
+    }
+
     /// Poll until `condition` holds; the store imports on a detached task.
     private func waitUntil(
         timeout: Duration = .seconds(20),
