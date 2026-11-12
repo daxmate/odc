@@ -17,10 +17,13 @@ env:
   CARGO_INCREMENTAL: 0
   RUST_BACKTRACE: 1
 
+# runner 选型（安全口径）：odc 是公开仓库，pull_request 一律走 GitHub 托管 runner；
+# 只有 push 到 main 才走自托管（xmini）。
 jobs:
   test:
     name: test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    # ubuntu 始终托管；macOS 只在 push 到 main 时走自托管（xmini）。
+    runs-on: ${{ matrix.os == 'macos-latest' && (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'odc-macos' || matrix.os }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -54,7 +57,7 @@ jobs:
 
   apple:
     name: apple
-    runs-on: macos-latest
+    runs-on: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'odc-macos' || 'macos-latest' }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
